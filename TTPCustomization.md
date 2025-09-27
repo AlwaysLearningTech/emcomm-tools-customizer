@@ -79,7 +79,8 @@ Model Context Protocol (MCP) servers allow AI models like Copilot to interact wi
 
 - Refine your script by prompting Copilot for improvements, logging, or troubleshooting. In the example shown, I've asked Copilot how to hide my Wi-Fi passwords.
 - **Tip:** Use the [ShellCheck](https://marketplace.visualstudio.com/items?itemName=timonwong.shellcheck) extension to lint your Bash scripts for errors and best practices.
-![Using chat to refine script, in this case by hiding Wi-Fi passwords](images/RefineChat.jpg)
+  
+![Using chat to refine script, in this case by hiding Wi-Fi passwords](images/RefineChat.jpeg)
 
 ### 7. Save Your Script to the Repository
 
@@ -101,6 +102,8 @@ A good README documents your project’s purpose, usage, and structure. You can 
    - Open a new file named `README.md`.
    - Prompt Copilot:  
      `Generate a README for this project that documents its functions, resources, and usage.`
+
+     ![Using chat to refine documentation](images/DocumentingChat.jpeg)
 
 - **Use VS Code Extensions:**  
    - [Markdown All in One](https://marketplace.visualstudio.com/items?itemName=yzhang.markdown-all-in-one) helps with formatting and table of contents.
@@ -125,8 +128,7 @@ A good README documents your project’s purpose, usage, and structure. You can 
   ![Description](images/screenshot.jpg){ width=400px }
   ```
 
-- In VS Code, use `Cmd+Shift+V` to preview your Markdown and check image scaling.
-![alt text](images/DocumentingChat.jpeg)
+- **In VS Code, use `Cmd+Shift+V` to preview your Markdown and check image scaling.**
 
 ---
 
