@@ -77,16 +77,13 @@ Model Context Protocol (MCP) servers allow AI models like Copilot to interact wi
 - Example:  
   `Write a bash script that disables the on-screen keyboard, enables dark mode, and configures Wi-Fi.`
 
-![Start with chat](images/StartChat.jpeg){ width=200px }
+![alt text](StartChat.jpeg)
 
-- Refine your script by prompting Copilot for improvements, logging, or troubleshooting.
+- Refine your script by prompting Copilot for improvements, logging, or troubleshooting. In the example shown, I've asked Copilot how to hide my Wi-Fi passwords.
 - **Tip:** Use the [ShellCheck](https://marketplace.visualstudio.com/items?itemName=timonwong.shellcheck) extension to lint your Bash scripts for errors and best practices.
-![Refine with chat](images/RefineChat.jpeg){ width=400px }
+![alt text](images/RefineChat.jpeg)
 
-
----
-
-## 7. Save Your Script to the Repository
+### 7. Save Your Script to the Repository
 
 Once you are happy with your new script:
 
