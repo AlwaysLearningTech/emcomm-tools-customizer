@@ -4,17 +4,6 @@
 
 ---
 
-## Why Use Markdown for Documentation?
-
-Markdown is a lightweight markup language that makes it easy to format text using simple symbols. It is highly regarded for documentation because:
-
-- **Readability:** Markdown files are easy to read in plain text and render beautifully on GitHub and other platforms.
-- **Portability:** Markdown is supported by many tools and platforms, making your documentation accessible anywhere.
-- **Version Control Friendly:** Markdown files work well with Git and other version control systems.
-- **Simplicity:** You don’t need to learn complex syntax—just a few symbols for headings, lists, links, and images.
-
----
-
 ## Step-by-Step Guide
 
 ### 1. Sign Up for GitHub and Create a Repository
@@ -97,6 +86,16 @@ Your script is now safely stored in your repository and can be accessed or share
 ### 8. Document the project
 
 A good README documents your project’s purpose, usage, and structure. You can generate one automatically using Copilot or other tools:
+
+- ## Why Use Markdown for Documentation?
+
+  Markdown is a lightweight markup language that makes it easy to format text using simple symbols. It is highly regarded for documentation because:
+
+  - **Readability:** Markdown files are easy to read in plain text and render beautifully on GitHub and other platforms.
+  - **Portability:** Markdown is supported by many tools and platforms, making your documentation accessible anywhere.
+  - **Version Control Friendly:** Markdown files work well with Git and other version control systems.
+  - **Simplicity:** You don’t need to learn complex syntax—just a few symbols for headings, lists, links, and images.
+
 
 - **Ask Copilot Chat:**  
    - Open a new file named `README.md`.
