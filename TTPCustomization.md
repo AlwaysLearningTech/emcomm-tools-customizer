@@ -1,9 +1,5 @@
 # Getting Started with Bash Scripting and GitHub Copilot in VS Code
 
-I spent the first half of my life in various forms of emergency services, but these days people only know the second half, which is rooted in tech consulting. With the history of both careers, I'd like to nominate you for some sort of award for your dedication to documentation. It sounds sarcastic as I read that back, but only people who've written good documentation understand how it's the hardest part of any task—and for me, it's much harder with personal projects.
-
-Fortunately, documentation is one of the few aspects of life that's gotten easier with time. Here’s my advice for people who want to do customizations and don’t know where to start.
-
 > **Disclaimer:** I know a lot about tech in general and I'm a specialist within my field, but I've never claimed to be a coder and I have beginner-level skills. If you know better than anything I'm saying, then you're not quite the audience I'm writing for, but I'm open to any suggestions for improvement.
 
 ---
@@ -77,11 +73,11 @@ Model Context Protocol (MCP) servers allow AI models like Copilot to interact wi
 - Example:  
   `Write a bash script that disables the on-screen keyboard, enables dark mode, and configures Wi-Fi.`
 
-![alt text](StartChat.jpeg)
+![Start chatting to write a bash script that disables the on-screen keyboard, enables dark mode, and configures Wi-Fi](images/StartChat.jpeg)
 
 - Refine your script by prompting Copilot for improvements, logging, or troubleshooting. In the example shown, I've asked Copilot how to hide my Wi-Fi passwords.
 - **Tip:** Use the [ShellCheck](https://marketplace.visualstudio.com/items?itemName=timonwong.shellcheck) extension to lint your Bash scripts for errors and best practices.
-![alt text](images/RefineChat.jpeg)
+![Using chat to refine script, in this case by hiding Wi-Fi passwords](images/RefineChat.jpg)
 
 ### 7. Save Your Script to the Repository
 
@@ -94,6 +90,41 @@ Once you are happy with your new script:
 5. Click the "..." menu or use the Source Control panel to **Push** your changes to GitHub.
 
 Your script is now safely stored in your repository and can be accessed or shared as needed.
+
+### 8. Document the project
+
+A good README documents your project’s purpose, usage, and structure. You can generate one automatically using Copilot or other tools:
+
+- **Ask Copilot Chat:**  
+   - Open a new file named `README.md`.
+   - Prompt Copilot:  
+     `Generate a README for this project that documents its functions, resources, and usage.`
+
+- **Use VS Code Extensions:**  
+   - [Markdown All in One](https://marketplace.visualstudio.com/items?itemName=yzhang.markdown-all-in-one) helps with formatting and table of contents.
+
+
+- **Manual Template:**  
+   - Include sections like:
+     - Project Title and Description
+     - Installation Instructions
+     - Usage Examples
+     - Configuration/Customization
+     - License and Credits
+
+- **Image Formatting Tips:**
+
+- Keep images in the same folder or a subfolder (e.g., `images/`).
+- Use consistent, simple filenames (avoid spaces and special characters).
+- Consider resizing an image as opposed to rescaling.
+- To scale images in Markdown, use HTML syntax or `{ width=400px }` after the image (works in some renderers but not GitHub):
+
+  ```markdown
+  ![Description](images/screenshot.jpg){ width=400px }
+  ```
+
+- In VS Code, use `Cmd+Shift+V` to preview your Markdown and check image scaling.
+![alt text](images/DocumentingChat.jpeg)
 
 ---
 
@@ -133,53 +164,6 @@ Your script is now safely stored in your repository and can be accessed or share
   - Always read and understand Copilot’s output before running or sharing code.
   - Don’t blindly copy-paste code—review for security, privacy, and correctness.
   - If you’re unsure, ask Copilot to explain what the code does.
-
----
-
-## Why Markdown is Great for Documentation
-
-- **Easy to Write:** Simple syntax for formatting text, code, and images.
-- **Widely Supported:** Works on GitHub, GitLab, Bitbucket, and many other platforms.
-- **Readable:** Looks good in plain text and when rendered.
-- **Flexible:** Supports tables, links, images, code blocks, and more.
-- **Version Control:** Changes are easy to track and merge.
-
----
-
-## Automatically Generating a README for Your Project
-
-A good README documents your project’s purpose, usage, and structure. You can generate one automatically using Copilot or other tools:
-
-1. **Ask Copilot Chat:**  
-   - Open a new file named `README.md`.
-   - Prompt Copilot:  
-     `Generate a README for this project that documents its functions, resources, and usage.`
-
-2. **Use VS Code Extensions:**  
-   - [Markdown All in One](https://marketplace.visualstudio.com/items?itemName=yzhang.markdown-all-in-one) helps with formatting and table of contents.
-
-
-3. **Manual Template:**  
-   - Include sections like:
-     - Project Title and Description
-     - Installation Instructions
-     - Usage Examples
-     - Configuration/Customization
-     - License and Credits
-
----
-
-## Image Formatting Tips
-
-- Keep images in the same folder or a subfolder (e.g., `images/`).
-- Use consistent, simple filenames (avoid spaces and special characters).
-- To scale images in Markdown, use HTML syntax or `{ width=400px }` after the image (works in some renderers):
-
-  ```markdown
-  ![Description](images/screenshot.jpg){ width=400px }
-  ```
-
-- In VS Code, use `Cmd+Shift+V` to preview your Markdown and check image scaling.
 
 ---
 
