@@ -1,4 +1,4 @@
-# Getting Started with Bash Scripting and GitHub Copilot in VS Code
+# Getting Started with Bash Scripting and GitHub Copilot
 
 > **Disclaimer:** I know a lot about tech in general and I'm a specialist within my field, but I've never claimed to be a coder and I have beginner-level skills. If you know better than anything I'm saying, then you're not quite the audience I'm writing for, but I'm open to any suggestions for improvement.
 
@@ -17,7 +17,7 @@
 ### 2. Download and Install VS Code
 
 - Download [VS Code](https://code.visualstudio.com/download) for your operating system (Windows, macOS, or Linux).
-- VS Code is a free, full-featured Integrated Development Environment (IDE) from Microsoft.
+- VS Code is a free, full-featured Integrated Development Environment (IDE) from Microsoft. Think of it as adding spell check and grammar check features to Notepad. 
 
 ### 3. Install Essential Extensions in VS Code
 
@@ -27,7 +27,7 @@ Open VS Code and install these extensions for a better scripting experience:
 - [GitHub Copilot](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot)
 - [GitHub Copilot Chat](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot-chat)
 - [IntelliCode](https://marketplace.visualstudio.com/items?itemName=VisualStudioExptTeam.vscodeintellicode)
-- [Intellicode API Usage Examples](https://marketplace.visualstudio.com/items?itemName=VisualStudioExptTeam.intellicode-api-usage-examples)
+- [Intellicode API Usage Examples](https://marketplace.visualstudio.com/items?itemName=VisualStudioExptTeam.intellicode-api-usage-examples) (Optional, might be helpful someday)
 - [ShellCheck](https://marketplace.visualstudio.com/items?itemName=timonwong.shellcheck)
 - [Python](https://marketplace.visualstudio.com/items?itemName=ms-python.python)
 - [YAML](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml)
@@ -37,7 +37,7 @@ Open VS Code and install these extensions for a better scripting experience:
 - [GitHub Markdown Preview](https://marketplace.visualstudio.com/items?itemName=bierner.github-markdown-preview)
 - [Markdown All in One](https://marketplace.visualstudio.com/items?itemName=yzhang.markdown-all-in-one)
 - [Paste Image](https://marketplace.visualstudio.com/items?itemName=mushan.vscode-paste-image)
-- [PowerShell](https://marketplace.visualstudio.com/items?itemName=ms-vscode.PowerShell)
+- [PowerShell](https://marketplace.visualstudio.com/items?itemName=ms-vscode.PowerShell) (Only needed if you're also scripting for Windows)
 
 ### 4. Connect VS Code to Your GitHub Repository
 
