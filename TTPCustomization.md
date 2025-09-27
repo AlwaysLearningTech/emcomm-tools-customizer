@@ -52,12 +52,14 @@ Open VS Code and install these extensions for a better scripting experience:
 
 ### 4. Connect VS Code to Your GitHub Repository
 
-- Open the **Command Palette** (`Cmd+Shift+P` on Mac).
-- Type `GitHub: Clone` and select your repository, or use the **GitHub Repositories** extension to browse and open your repo directly in VS Code.
+- Click the **GitHub Repositories** icon in the VS Code sidebar.
 - Sign in to GitHub when prompted.
-- You can now edit, commit, and push changes directly from VS Code.
+- Browse your repositories and click **Open** on the one you created.
+- VS Code will open your repo in a "virtual workspace"—you can now edit, commit, and push changes directly.
 
-### 5. Install MCP Servers for VS Code (Optional, Advanced)
+*Note: This method is recommended for beginners as it avoids the confusion of manual cloning and setup. All Git operations can be performed within VS Code's interface.*
+
+### 5. Install MCP Servers for VS Code
 
 Model Context Protocol (MCP) servers allow AI models like Copilot to interact with files, databases, and APIs directly in VS Code.
 
