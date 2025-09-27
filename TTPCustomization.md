@@ -83,6 +83,9 @@ Once you are happy with your new script:
 
 Your script is now safely stored in your repository and can be accessed or shared as needed.
 
+### 8. Do I run my script in Cubic or after I install ETC?
+I don't have a clue, but I'm sure Copilot knows the right answer. 
+
 ### 8. Document the project
 
 A good README documents your project’s purpose, usage, and structure. You can generate one automatically using Copilot or other tools:
