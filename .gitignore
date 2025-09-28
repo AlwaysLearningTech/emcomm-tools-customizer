@@ -1,0 +1,10 @@
+# Local secrets file - do not commit to git
+secrets.env
+
+# Temporary files
+*.tmp
+*.swp
+*~
+
+# Downloaded files
+*.whl
