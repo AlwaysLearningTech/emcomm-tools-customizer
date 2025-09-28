@@ -28,3 +28,30 @@ Before running the installation script, you need to configure your WiFi credenti
 ## Security Note
 
 The `secrets.env` file contains sensitive information and is excluded from git via `.gitignore`. Never commit actual WiFi passwords to the repository. The `secrets.env.template` file provides a template showing the required variable names.
+
+### ⚠️ IMPORTANT: Remove secrets.env from GitHub if already committed
+
+If `secrets.env` was accidentally committed to GitHub, you need to remove it:
+
+1. **Remove from git tracking** (run this in VS Code terminal):
+   ```bash
+   git rm --cached secrets.env
+   ```
+
+2. **Commit the removal**:
+   ```bash
+   git commit -m "Remove secrets.env from repository - contains sensitive data"
+   ```
+
+3. **Push the changes**:
+   ```bash
+   git push origin main
+   ```
+
+4. **Recreate your local secrets.env**:
+   ```bash
+   cp secrets.env.template secrets.env
+   # Then edit secrets.env with your actual credentials
+   ```
+
+The `.gitignore` file will prevent `secrets.env` from being committed in the future.
