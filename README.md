@@ -15,6 +15,11 @@ Before running the installation script, you need to configure your WiFi credenti
    nano secrets.env
    ```
 
+   **Auto-connect Configuration:**
+   - All WiFi networks have auto-connect enabled by default (`yes`)
+   - To disable auto-connect for a specific network, set its `*_AUTOCONNECT` variable to `no`
+   - Example: `IPHONE_WIFI_AUTOCONNECT="no"` to prevent automatic connection to iPhone hotspot
+
 3. Run the installation script:
    ```bash
    ./install-customizations.sh

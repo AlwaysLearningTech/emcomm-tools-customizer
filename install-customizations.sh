@@ -24,31 +24,51 @@ gsettings set org.gnome.desktop.interface scaling-factor 1
 gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
 gsettings set org.gnome.desktop.interface gtk-theme 'Yaru-dark'
 
-# Add default WiFi connection (auto-connect enabled)
-nmcli connection add type wifi ifname "*" con-name "$DEFAULT_WIFI_SSID" autoconnect yes ssid "$DEFAULT_WIFI_SSID"
-nmcli connection modify "$DEFAULT_WIFI_SSID" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$DEFAULT_WIFI_PASSWORD"
+# Helper function to determine auto-connect setting (defaults to yes if not specified)
+get_autoconnect() {
+    local autoconnect_var="$1"
+    if [[ "${autoconnect_var,,}" == "no" ]]; then
+        echo "no"
+    else
+        echo "yes"  # Default to yes if not specified or any other value
+    fi
+}
 
-# Add alternate WiFi connections (auto-connect disabled)
-nmcli connection add type wifi ifname "*" con-name "$IPHONE_WIFI_SSID" autoconnect no ssid "$IPHONE_WIFI_SSID"
-nmcli connection modify "$IPHONE_WIFI_SSID" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$IPHONE_WIFI_PASSWORD"
-
-nmcli connection add type wifi ifname "*" con-name "$VASSLEHEILM_WIFI_SSID" autoconnect no ssid "$VASSLEHEILM_WIFI_SSID"
-nmcli connection modify "$VASSLEHEILM_WIFI_SSID" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$VASSLEHEILM_WIFI_PASSWORD"
-
-nmcli connection add type wifi ifname "*" con-name "$KOZ_GUEST_WIFI_SSID" autoconnect no ssid "$KOZ_GUEST_WIFI_SSID"
-nmcli connection modify "$KOZ_GUEST_WIFI_SSID" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$KOZ_GUEST_WIFI_PASSWORD"
-
-nmcli connection add type wifi ifname "*" con-name "$MIETZNER_WIFI_SSID" autoconnect no ssid "$MIETZNER_WIFI_SSID"
-nmcli connection modify "$MIETZNER_WIFI_SSID" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$MIETZNER_WIFI_PASSWORD"
-
-nmcli connection add type wifi ifname "*" con-name "$MRBLUE5_WIFI_SSID" autoconnect no ssid "$MRBLUE5_WIFI_SSID"
-nmcli connection modify "$MRBLUE5_WIFI_SSID" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$MRBLUE5_WIFI_PASSWORD"
-
-nmcli connection add type wifi ifname "*" con-name "$FBI_AGENT_WIFI_SSID" autoconnect no ssid "$FBI_AGENT_WIFI_SSID"
-nmcli connection modify "$FBI_AGENT_WIFI_SSID" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$FBI_AGENT_WIFI_PASSWORD"
-
-nmcli connection add type wifi ifname "*" con-name "$ONE_MEDICAL_WIFI_SSID" autoconnect no ssid "$ONE_MEDICAL_WIFI_SSID"
-nmcli connection modify "$ONE_MEDICAL_WIFI_SSID" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$ONE_MEDICAL_WIFI_PASSWORD"
+# Configure WiFi networks using loop
+if [[ -n "$WIFI_COUNT" ]] && [[ "$WIFI_COUNT" -gt 0 ]]; then
+    echo "Configuring $WIFI_COUNT WiFi networks..."
+    
+    for i in $(seq 1 $WIFI_COUNT); do
+        # Get variables for this network
+        ssid_var="WIFI_${i}_SSID"
+        password_var="WIFI_${i}_PASSWORD"
+        autoconnect_var="WIFI_${i}_AUTOCONNECT"
+        
+        ssid="${!ssid_var}"
+        password="${!password_var}"
+        autoconnect=$(get_autoconnect "${!autoconnect_var}")
+        
+        # Skip if SSID is empty
+        if [[ -z "$ssid" ]]; then
+            echo "Warning: WIFI_${i}_SSID is empty, skipping network $i"
+            continue
+        fi
+        
+        # Skip if password is empty
+        if [[ -z "$password" ]]; then
+            echo "Warning: WIFI_${i}_PASSWORD is empty, skipping network $i"
+            continue
+        fi
+        
+        echo "Adding WiFi network $i: $ssid (autoconnect: $autoconnect)"
+        
+        # Add the WiFi connection
+        nmcli connection add type wifi ifname "*" con-name "$ssid" autoconnect "$autoconnect" ssid "$ssid"
+        nmcli connection modify "$ssid" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$password"
+    done
+else
+    echo "No WiFi networks configured (WIFI_COUNT not set or is 0)"
+fi
 
 # Install Chirp
 wget https://archive.chirpmyradio.com/chirp_next/next-20250822/chirp-20250822-py3-none-any.whl
