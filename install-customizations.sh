@@ -15,6 +15,7 @@
     # Download manuals for all devices in go-bag
     # Download ARES "go-drive" files
     # Determine other documentation, i.e. et-mirror commands included as placeholders
+    # Move to git clone structure to allow easier working with local files
 
 
 # Get the directory where this script is located
