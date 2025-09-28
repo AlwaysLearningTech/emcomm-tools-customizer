@@ -2,6 +2,9 @@
 
 ### To-do:
     # Add error handling and logging
+    # Analyze what parts of this script can be done in Cubic
+    # Add comments and documentation
+    # Write function to update grid square from GPS coordinates when GPS device is connected
     # Add restore user command for ETC
     # Customize ICS forms
     # Customize setttings files created by ETC
@@ -12,7 +15,7 @@
     # Download manuals for all devices in go-bag
     # Download ARES "go-drive" files
     # Determine other documentation, i.e. et-mirror commands included as placeholders
-      
+
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
