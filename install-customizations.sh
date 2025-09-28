@@ -1,5 +1,19 @@
 #!/bin/bash
 
+### To-do:
+    # Add error handling and logging
+    # Add restore user command for ETC
+    # Customize ICS forms
+    # Customize setttings files created by ETC
+        # Add APRS digipeater functionality?
+        # Add Emcomm to PAT
+    # QGIS?
+    # Download radio image files
+    # Download manuals for all devices in go-bag
+    # Download ARES "go-drive" files
+    # Determine other documentation, i.e. et-mirror commands included as placeholders
+      
+
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 
@@ -84,5 +98,3 @@ et-mirror.sh https://choisser.com/packet/
 et-mirror.sh https://www.cantab.net/users/john.wiseman/Documents/
 et-mirror.sh https://soundcardpacket.org/
 et-mirror.sh https://tldp.org/HOWTO/AX25-HOWTO/index.html
-
-et-users
