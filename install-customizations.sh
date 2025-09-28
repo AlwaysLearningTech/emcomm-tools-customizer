@@ -78,7 +78,7 @@ cp chirp.desktop /etc/skel/.local/share/applications/chirp.desktop
 
 # Install dmrconfig, LibreOffice
 sudo apt update
-sudo apt install -y dmrconfig, libreoffice
+sudo apt install -y dmrconfig libreoffice
 
 et-mirror.sh https://choisser.com/packet/
 et-mirror.sh https://www.cantab.net/users/john.wiseman/Documents/

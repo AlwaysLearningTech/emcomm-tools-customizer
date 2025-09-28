@@ -1,5 +1,14 @@
 # emcomm-tools-customizer
-Customizations for ETC
+Post-installation customizations for ETC (Emergency Tools Community)
+
+## What This Does
+
+The `install-customizations.sh` script configures a fresh ETC installation with:
+- **UI Settings**: Disables on-screen keyboard, enables dark mode, sets display scaling
+- **WiFi Networks**: Automatically configures multiple WiFi connections with customizable auto-connect settings
+- **Ham Radio Tools**: Installs CHIRP radio programming software and dmrconfig
+- **Documentation**: Downloads emergency communication resources and references
+- **Office Software**: Installs LibreOffice for document creation
 
 ## Setup
 
@@ -41,15 +50,12 @@ Before running the installation script, you need to configure your WiFi credenti
 ./install-customizations.sh
 ```
 
-## Security Note
-
-The `secrets.env` file contains sensitive information and is excluded from git via `.gitignore`. Never commit actual WiFi passwords to the repository. The `secrets.env.template` file provides a template showing the required variable names.
-
-## Important Security Notes
+## Security Notes
 
 - **Never commit `secrets.env` to GitHub** - it contains sensitive WiFi passwords
-- The `.gitignore` file prevents accidental commits of `secrets.env`
+- The `.gitignore` file prevents accidental commits of `secrets.env`  
 - Keep your `secrets.env` file **local only** - transfer it directly to target systems
+- The `secrets.env.template` file provides a safe template showing the required variable format
 
 ### Using GitHub Repositories Extension
 
