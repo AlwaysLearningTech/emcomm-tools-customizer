@@ -1,6 +1,49 @@
-# Getting Started with Bash Scripting and GitHub Copilot
+# Creating Your Custom EmComm Tools ISO with AI Assistance
 
-> **Disclaimer:** I know a lot about tech in general and I'm a specialist within my field, but I've never claimed to be a coder and I have beginner-## Important Warnings for Beginners
+> **For Absolute Beginners:** This guide walks you through using GitHub Copilot and prompt engineering to customize the EmComm Tools Community (ETC) operating system for your own needs. No coding experience required—just follow along!
+
+---
+
+## What Is This Project?
+
+This project helps you create a **custom Ubuntu-based ISO** for emergency communications (EmComm) by amateur radio operators. The ISO is built using **Cubic** (a GUI tool for customizing Ubuntu) and contains:
+
+- **Pre-configured WiFi networks** (your home network, mobile hotspot, etc.)
+- **Ham radio software** (CHIRP, dmrconfig, flrig, etc.)
+- **APRS/digital mode apps** (direwolf, YAAC, Pat/Winlink)
+- **Automatic settings** (dark mode, accessibility, desktop shortcuts)
+- **Your callsign and preferences** baked into the ISO
+
+**Key Concept:** This is a **single-user ISO build**—you can safely include your personal WiFi credentials, callsign, and preferences directly in the ISO because it's built for YOUR use, not mass distribution.
+
+---
+
+## How This Project Works
+
+### Cubic vs. Post-Install Scripts
+
+**IMPORTANT:** Most customizations should happen **during the ISO build** (Cubic), not after installation.
+
+| **Cubic Scripts** (`cubic/` folder) | **Post-Install Scripts** (`post-install/` folder) |
+|--------------------------------------|---------------------------------------------------|
+| Run DURING ISO creation in Cubic chroot | Run AFTER ETC is installed on target system |
+| Can include user-specific data (WiFi, callsign) | Only for hardware-specific detection |
+| Install packages, configure apps, set defaults | Interactive wizards, runtime detection |
+| **PREFERRED for almost everything** | **RARELY USED** (only edge cases) |
+
+**Example Cubic Scripts:**
+- `install-ham-tools.sh` - Installs CHIRP, dmrconfig, flrig
+- `configure-wifi.sh` - Configures WiFi from `secrets.env`
+- `configure-aprs-apps.sh` - Sets up direwolf, YAAC, Pat
+- `setup-desktop-defaults.sh` - Dark mode, accessibility, themes
+
+**Example Post-Install Scripts:**
+- GPS auto-detection (hardware varies)
+- Radio model detection (runtime only)
+
+**Rule of Thumb:** If it CAN be done in Cubic, it SHOULD be done in Cubic!
+
+---
 
 - **Copilot Free Tier Limits:**  
   - 50 agent/chat requests per month  
@@ -160,51 +203,99 @@ Your script is now safely stored in your repository and can be accessed or share
 3. Make the script executable: `chmod +x install-customizations.sh`
 4. Run the script: `./install-customizations.sh`
 
-### 9. Document the project
+### 9. Documenting Your Customizations
 
-A good README documents your project’s purpose, usage, and structure. You can generate one automatically using Copilot or other tools:
+Good documentation helps you remember your choices and helps others learn from your work. You can generate professional documentation using Copilot:
 
-- ## Why Use Markdown for Documentation?
+#### Why Use Markdown for Documentation?
 
-  Markdown is a lightweight markup language that makes it easy to format text using simple symbols. It is highly regarded for documentation because:
+Markdown is a lightweight markup language that makes it easy to format text using simple symbols. It's the standard for GitHub and technical documentation because:
 
-  - **Readability:** Markdown files are easy to read in plain text and render beautifully on GitHub and other platforms.
-  - **Portability:** Markdown is supported by many tools and platforms, making your documentation accessible anywhere.
-  - **Version Control Friendly:** Markdown files work well with Git and other version control systems.
-  - **Simplicity:** You don’t need to learn complex syntax—just a few symbols for headings, lists, links, and images.
+- **Readability:** Easy to read in plain text, renders beautifully on GitHub
+- **Portability:** Supported everywhere (GitHub, VS Code, documentation sites)
+- **Version Control Friendly:** Works perfectly with Git—track changes easily
+- **Simplicity:** Just a few symbols for headings, lists, links, and images
 
+#### Creating Documentation with Copilot
 
-- **Ask Copilot Chat:**  
-   - Open a new file named `README.md`.
+1. **Ask Copilot Chat:**  
+   - Open a new file named `README.md`
    - Prompt Copilot:  
-     `Generate a README for this project that documents its functions, resources, and usage.`
+     ```
+     Generate a README for this EmComm Tools customization project.
+     Include:
+     - Project overview
+     - Prerequisites (Cubic, Ubuntu, secrets.env)
+     - Installation/build instructions
+     - Usage examples
+     - Troubleshooting tips
+     - Radio compatibility notes
+     ```
 
-     ![Using chat to refine documentation](images/DocumentingChat.jpeg)
+2. **Use VS Code Extensions for Markdown:**  
+   - [Markdown All in One](https://marketplace.visualstudio.com/items?itemName=yzhang.markdown-all-in-one) - Auto-formatting, table of contents
+   - [GitHub Markdown Preview](https://marketplace.visualstudio.com/items?itemName=bierner.github-markdown-preview) - Preview as GitHub renders it
+   - [Paste Image](https://marketplace.visualstudio.com/items?itemName=mushan.vscode-paste-image) - Easy screenshot insertion
 
-- **Use VS Code Extensions:**  
-   - [Markdown All in One](https://marketplace.visualstudio.com/items?itemName=yzhang.markdown-all-in-one) helps with formatting and table of contents.
+3. **Document Your Customizations:**
+   - Explain WHY you made each change (not just WHAT)
+   - Include hardware notes (which radios you're using)
+   - Add troubleshooting tips from your experience
+   - Link to upstream projects and resources
 
+#### Example Documentation Structure
 
-- **Manual Template:**  
-   - Include sections like:
-     - Project Title and Description
-     - Installation Instructions
-     - Usage Examples
-     - Configuration/Customization
-     - License and Credits
+```markdown
+# My Custom EmComm Tools ISO
 
-- **Image Formatting Tips:**
+## Overview
+Custom ISO based on EmComm Tools Community for [Your Location] EmComm operations.
 
-- Keep images in the same folder or a subfolder (e.g., `images/`).
-- Use consistent, simple filenames (avoid spaces and special characters).
-- Consider resizing an image as opposed to rescaling.
-- To scale images in Markdown, use HTML syntax or `{ width=400px }` after the image (works in some renderers but not GitHub):
+## Hardware Configuration
+- Radio: Anytone D878UV
+- Interface: Digirig Mobile
+- Computer: [Your laptop model]
 
-  ```markdown
-  ![Description](images/screenshot.jpg){ width=400px }
-  ```
+## Customizations
+- WiFi: Home network, mobile hotspot, EOC network
+- APRS: iGate mode with direwolf
+- Callsign: KD7DGF
+- Apps: CHIRP, flrig, Pat (Winlink)
 
-- **In VS Code, use `Cmd+Shift+V` to preview your Markdown and check image scaling.**
+## Build Instructions
+1. Install Cubic on Ubuntu system
+2. Clone this repository
+3. Copy secrets.env from secure location
+4. Run: ./build-etc-iso.sh
+5. Result: Custom ISO in Cubic output folder
+
+## Radio Setup Notes
+Digirig Mobile provides full CAT control (not just VOX):
+- /dev/ttyUSB0 = Audio codec
+- /dev/ttyUSB1 = CAT serial
+- Use flrig for frequency control
+- Configure apps to use flrig XML-RPC on port 12345
+
+## Troubleshooting
+[Your specific issues and solutions]
+
+## Credits
+- Upstream: EmComm Tools Community (https://community.emcommtools.com/)
+- Digirig: https://digirig.net/
+- Built with AI assistance: GitHub Copilot
+```
+
+#### Image Best Practices
+
+- **Storage:** Keep images in `images/` folder
+- **Naming:** Use descriptive names: `digirig-connection.jpg`, not `IMG_1234.jpg`
+- **Sizing:** Resize before adding (don't just scale in Markdown)
+- **Formats:** Use JPG for photos, PNG for screenshots
+- **Privacy:** Blur sensitive info (callsigns, passwords, locations) if sharing publicly
+
+**Preview Markdown:** Press `Cmd+Shift+V` (Mac) or `Ctrl+Shift+V` (Windows/Linux) in VS Code
+
+---
 
 ---
 

@@ -1,6 +1,19 @@
 # Local secrets file - do not commit to git
 secrets.env
 
+# Backup files
+*.bak
+*.backup
+install-customizations.sh.bak
+
+# Build directories
+builds/
+~/etc-builds/
+
+# Private files (never commit these)
+private-files/
+backups/
+
 # Temporary files
 *.tmp
 *.swp
@@ -8,3 +21,10 @@ secrets.env
 
 # Downloaded files
 *.whl
+*.iso
+*.tar.gz
+
+# Logs
+*.log
+logs/
+.local/share/emcomm-tools-customizer/logs/
