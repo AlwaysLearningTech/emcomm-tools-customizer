@@ -16,6 +16,42 @@ This project helps you create a **custom Ubuntu-based ISO** for emergency commun
 
 **Key Concept:** This is a **single-user ISO build**—you can safely include your personal WiFi credentials, callsign, and preferences directly in the ISO because it's built for YOUR use, not mass distribution.
 
+### About EmComm Tools Community (ETC)
+
+This customizer is built upon the outstanding work of **TheTechPrepper** and the **EmComm Tools Community** project:
+
+- **Project Homepage:** [EmComm Tools Community](https://community.emcommtools.com/)
+- **GitHub Repository:** [emcomm-tools-os-community](https://github.com/thetechprepper/emcomm-tools-os-community)
+- **Creator:** TheTechPrepper (YouTube: [@TheTechPrepper](https://www.youtube.com/@TheTechPrepper))
+
+**EmComm Tools Community** is a turnkey, Ubuntu-based operating system specifically designed for amateur radio emergency communications. It comes pre-configured with:
+
+- **Digital Mode Software:** Pat (Winlink), direwolf (packet/APRS), JS8Call, WSJT-X
+- **Radio Control:** flrig, Hamlib, rigctld
+- **APRS Tools:** YAAC, Xastir
+- **Logging:** CQRLOG, PyQSO
+- **Offline Documentation:** Mirrored websites and manuals for field use
+- **User-Friendly Setup:** `et-user`, `et-radio`, `et-mode` configuration tools
+- **Single-User Focus:** Designed for individual operators, not multi-user systems
+
+**All credit goes to TheTechPrepper** for creating this incredible foundation. This customizer project simply adds personal automation scripts to further customize the ETC base system for individual deployments. If you use this project, **please support the upstream ETC project** through:
+
+- Their [community forums](https://community.emcommtools.com/)
+- TheTechPrepper's [YouTube channel](https://www.youtube.com/@TheTechPrepper)
+- Contributing to the [GitHub repository](https://github.com/thetechprepper/emcomm-tools-os-community)
+- Spreading the word in the amateur radio community
+
+**Why Customize ETC?**
+
+While ETC provides an excellent out-of-the-box experience, you may want to:
+- Add your own WiFi credentials during the build (avoid manual setup)
+- Pre-configure specific radio models and interfaces (Digirig, SignaLink, etc.)
+- Install additional tools not in the base image
+- Set desktop preferences (dark mode, scaling, keyboard shortcuts)
+- Include callsign and grid square in the ISO
+
+This project shows you how to use **AI assistance (GitHub Copilot)** to create those customizations **during the ISO build** (using Cubic), resulting in a truly personalized emergency communications system ready to deploy.
+
 ---
 
 ## How This Project Works
@@ -110,7 +146,7 @@ Open VS Code and install these extensions for a better scripting experience:
 - Browse your repositories and click **Open** on the one you created.
 - VS Code will open your repo in a "virtual workspace"—you can now edit, commit, and push changes directly.
 
-*Note: This method is recommended for beginners as it avoids the confusion of manual cloning and setup. All Git operations can be performed within VS Code's interface.*
+*Note: This method is recommended for beginners as it avoids the confusion of manual cloning and setup. All Git operations can be performed within VS Code's interface. However, use of a local secrets file requires using cloning the repo instead.*
 
 ### 5. Install MCP Servers for VS Code
 
