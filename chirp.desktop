@@ -1,8 +1,0 @@
-[Desktop Entry]
-Name=CHIRP-next
-Comment=Open-source radio programming software
-Exec=chirp
-Icon=chirp
-Terminal=false
-Type=Application
-Categories=Utility;HamRadio;
