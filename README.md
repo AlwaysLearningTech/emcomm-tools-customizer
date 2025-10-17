@@ -4,6 +4,34 @@
 
 This project creates a customized Ubuntu-based ISO for emergency communications by amateur radio operators, built using Cubic with all your personal preferences baked in.
 
+> **⚠️ IMPORTANT: x64 Architecture Only**  
+> This project **only supports x64/AMD64 systems**. ARM architectures are **NOT supported**, including:
+> - Apple Silicon Macs (M1, M2, M3, M4)
+> - Raspberry Pi
+> - ARM-based servers
+> 
+> You must build and deploy on **Intel/AMD 64-bit systems** only. For building on Apple Silicon, use a VM with x64 emulation (slow) or build on a separate Intel system.
+
+---
+
+## About EmComm Tools Community (ETC)
+
+This customizer is built upon the outstanding work of **TheTechPrepper** and the **EmComm Tools Community** project:
+
+- **Project Homepage:** [EmComm Tools Community](https://community.emcommtools.com/)
+- **GitHub Repository:** [emcomm-tools-os-community](https://github.com/thetechprepper/emcomm-tools-os-community)
+- **Creator:** TheTechPrepper (YouTube: [@TheTechPrepper](https://www.youtube.com/@TheTechPrepper))
+
+**EmComm Tools Community** is a turnkey, Ubuntu-based operating system specifically designed for amateur radio emergency communications. It comes pre-configured with digital mode software, radio control tools, APRS applications, and offline documentation for field use.
+
+**All credit goes to TheTechPrepper** for creating this incredible foundation. This customizer project simply adds personal automation scripts to further customize the ETC base system for individual deployments.
+
+**Please support the upstream ETC project:**
+- Visit the [community forums](https://community.emcommtools.com/)
+- Subscribe to [TheTechPrepper's YouTube channel](https://www.youtube.com/@TheTechPrepper)
+- Contribute to the [GitHub repository](https://github.com/thetechprepper/emcomm-tools-os-community)
+- Share ETC with your local EmComm group
+
 ---
 
 ## What This Project Does
@@ -23,6 +51,7 @@ Creates a **single-user custom ETC ISO** containing:
 ## Quick Start
 
 ### Prerequisites
+- **x64/AMD64 system** (Intel or AMD processor) - NO ARM/Apple Silicon support
 - Ubuntu system (VM, live USB, or installed) for running Cubic
 - GitHub account (fork this repository)
 - Your WiFi credentials and amateur radio callsign
@@ -93,17 +122,11 @@ emcomm-tools-customizer/
 
 ## Radio Hardware Support
 
-### IMPORTANT: Digirig Mobile CAT Capabilities (VERIFIED)
-
-**CAT support depends on your RADIO, not the cable!**
-
+### IMPORTANT: Digirig Mobile CAT Capabilities
 The Digirig Mobile hardware provides:
 - **CM108 audio codec** (creates `/dev/ttyUSB0` - use for audio)
 - **CP2102 serial interface** (creates `/dev/ttyUSB1` - use for CAT if supported)
 - **PTT switch** (hardware PTT control)
-
-However, per **official Digirig documentation**:
-> "Serial CAT control can be commonly found in HF transceivers, but **rare in VHF/UHF radios, practically non-existent in HTs**."
 
 ### Supported Radios with CAT:
 - ✅ **Anytone D578UV** (mobile radio): **FULL CAT** via `/dev/ttyUSB1`
@@ -139,9 +162,7 @@ However, per **official Digirig documentation**:
 
 ## Security & Secrets Management
 
-## Security & Secrets Management
-
-**CRITICAL:** Never commit WiFi passwords, callsigns, or other secrets to public repositories!
+**CRITICAL:** Never commit WiFi passwords or other secrets to public repositories!
 
 ### The `secrets.env` Pattern
 
@@ -220,13 +241,11 @@ APRS_COMMENT="EmComm iGate"
 DIGIPEATER_PATH="WIDE1-1"
 ```
 
-**Note:** WiFi passwords are baked into ISO at build time, not included in the ISO file itself (configured in NetworkManager).
-
 ---
 
 ## For Beginners: Using AI to Customize
 
-See **[TTPCustomization.md](TTPCustomization.md)** for a complete guide on:
+See **[TTPCustomization.md](TTPCustomization.md)** for a complete beginner's guide covering:
 - Using GitHub Copilot for bash scripting
 - Understanding Cubic vs. post-install scripts
 - Prompt engineering for customizations
@@ -237,8 +256,13 @@ See **[TTPCustomization.md](TTPCustomization.md)** for a complete guide on:
 
 ## Resources
 
-- **Upstream Project:** [EmComm Tools Community](https://community.emcommtools.com/)
-- **Cubic Documentation:** [Cubic GitHub](https://github.com/PJ-Singh-001/Cubic)
+### Upstream Projects
+- **EmComm Tools Community:** [community.emcommtools.com](https://community.emcommtools.com/)
+- **TheTechPrepper YouTube:** [@TheTechPrepper](https://www.youtube.com/@TheTechPrepper)
+- **ETC GitHub:** [emcomm-tools-os-community](https://github.com/thetechprepper/emcomm-tools-os-community)
+
+### Tools & Documentation
+- **Cubic:** [Cubic GitHub](https://github.com/PJ-Singh-001/Cubic)
 - **Digirig Mobile:** [digirig.net](https://digirig.net/product/digirig-mobile/)
 - **flrig:** [w1hkj.com](http://www.w1hkj.com/)
 
@@ -246,11 +270,11 @@ See **[TTPCustomization.md](TTPCustomization.md)** for a complete guide on:
 
 ## To-Do List
 
-- [ ] Write function to update grid square from GPS coordinates when GPS device is connected
-- [ ] Customize ICS forms
-- [ ] Download radio codeplug image files
-- [ ] Download manuals for all devices in go-bag
 - [ ] Automate et-user-backup and wine backup at build start
+- [ ] GPS auto-detection and grid square updates
+- [ ] Customize ICS forms for local jurisdiction
+- [ ] Download radio codeplug image files during build
+- [ ] Download device manuals for offline access
 - [ ] Test flrig integration with et-radio system
 - [ ] Document GPS auto-detection workflow
 
@@ -258,17 +282,6 @@ See **[TTPCustomization.md](TTPCustomization.md)** for a complete guide on:
 
 ## License
 
-This project is provided as-is for amateur radio and emergency communications use. See upstream ETC license for base system licensing.
+This project is provided as-is for amateur radio and emergency communications use. See upstream ETC project for base system licensing.
 
 **73 de KD7DGF** 📻
-
-   git rm --cached secrets.env
-   git commit -m "Remove secrets.env - contains sensitive data"
-   git push origin main
-   ```
-
-2. Recreate locally:
-   ```bash
-   cp secrets.env.template secrets.env
-   # Edit with your actual credentials
-   ```
