@@ -233,11 +233,21 @@ Your script is now safely stored in your repository and can be accessed or share
 - The script configures user settings, WiFi, and installs additional tools
 - **Do NOT run during ISO creation** (Cubic) - this is for post-installation customization
 
-**Deployment process:**
-1. Install ETC on your target Ubuntu system
-2. Copy your local `secrets.env` to the same directory as `install-customizations.sh`
-3. Make the script executable: `chmod +x install-customizations.sh`
-4. Run the script: `./install-customizations.sh`
+**Deployment process (Ventoy-first workflow):**
+1. Install Ventoy on a USB drive (one-time) using the official installer ([ventoy.net](https://www.ventoy.net/en/doc_start.html)).
+2. After generating your custom ISO, mount the Ventoy data partition (typically `/media/$USER/Ventoy`) and copy the ISO onto it. Use the helper script to auto-detect Ventoy or copy manually:
+  ```bash
+  # Helper script (auto-detects Ventoy mount)
+  ./copy-iso-to-ventoy.sh ~/etc-builds/<release-tag>/<release-tag>.iso
+
+  # Manual copy (if you prefer specifying the mount path)
+  cp ~/etc-builds/<release-tag>/<release-tag>.iso /media/$USER/Ventoy/
+  sync
+  ```
+3. Safely eject the Ventoy drive, boot your target system from it, and select the new ISO from Ventoy's menu to install ETC.
+4. Copy your local `secrets.env` to the installed system alongside `install-customizations.sh`.
+5. Make the script executable: `chmod +x install-customizations.sh`
+6. Run the script: `./install-customizations.sh`
 
 ### 9. Documenting Your Customizations
 

@@ -31,7 +31,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_BASE_DIR="${HOME}/etc-builds"
 DOWNLOADS_DIR="${BUILD_BASE_DIR}/downloads"
 DRY_RUN=0
-VERBOSE=0
 CLEANUP_EMBEDDED_ISO=0
 RELEASE_MODE="latest"  # stable, latest, or tag
 SPECIFIED_TAG=""
@@ -159,8 +158,8 @@ while getopts ":r:t:u:b:e:p:cdvh" opt; do
             log "INFO" "Dry-run mode enabled"
             ;;
         v)
-            VERBOSE=1
             set -x
+            log "INFO" "Verbose mode enabled"
             ;;
         h)
             usage
@@ -241,7 +240,8 @@ auto_detect_backups() {
     # Auto-detect .wine backup
     if [ -z "$WINE_BACKUP_PATH" ]; then
         local wine_backup
-        wine_backup=$(ls -t ~/etc-wine-backup-*.tar.gz 2>/dev/null | head -1)
+        # Use find instead of ls for better handling
+        wine_backup=$(find ~ -maxdepth 1 -name "etc-wine-backup-*.tar.gz" -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2)
         if [ -n "$wine_backup" ]; then
             WINE_BACKUP_PATH="$wine_backup"
             log "SUCCESS" "Auto-detected .wine backup: $wine_backup"
@@ -251,7 +251,7 @@ auto_detect_backups() {
             echo "To create .wine backup on your ETC system:"
             echo "  ~/add-ons/wine/05-backup-wine-install.sh"
             echo ""
-            read -p "Do you want to continue without .wine backup? (y/N): " response
+            read -r -p "Do you want to continue without .wine backup? (y/N): " response
             if [[ ! "$response" =~ ^[Yy]$ ]]; then
                 log "INFO" "Please create .wine backup and re-run this script"
                 exit 0
@@ -262,7 +262,8 @@ auto_detect_backups() {
     # Auto-detect et-user backup
     if [ -z "$ET_USER_BACKUP_PATH" ]; then
         local etuser_backup
-        etuser_backup=$(ls -t ~/etc-user-backup-*.tar.gz 2>/dev/null | head -1)
+        # Use find instead of ls for better handling
+        etuser_backup=$(find ~ -maxdepth 1 -name "etc-user-backup-*.tar.gz" -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2)
         if [ -n "$etuser_backup" ]; then
             ET_USER_BACKUP_PATH="$etuser_backup"
             log "SUCCESS" "Auto-detected et-user backup: $etuser_backup"
@@ -272,7 +273,7 @@ auto_detect_backups() {
             echo "To create et-user backup on your ETC system:"
             echo "  et-user-backup"
             echo ""
-            read -p "Do you want to continue without et-user backup? (y/N): " response
+            read -r -p "Do you want to continue without et-user backup? (y/N): " response
             if [[ ! "$response" =~ ^[Yy]$ ]]; then
                 log "INFO" "Please create et-user backup and re-run this script"
                 exit 0
@@ -357,6 +358,39 @@ get_release_info() {
     return 0
 }
 
+# Check if ISO exists on Ventoy drive
+find_iso_on_ventoy() {
+    local iso_filename="$1"
+    local ventoy_path
+    
+    # Try to auto-detect Ventoy mount
+    if ventoy_path=$(findmnt -rn -S LABEL=Ventoy -o TARGET 2>/dev/null || true); then
+        if [ -n "$ventoy_path" ] && [ -f "$ventoy_path/$iso_filename" ]; then
+            log "SUCCESS" "Found Ubuntu ISO on Ventoy: $ventoy_path/$iso_filename"
+            printf '%s' "$ventoy_path/$iso_filename"
+            return 0
+        fi
+    fi
+    
+    # Check common Ventoy mount locations
+    local candidates=(
+        "/media/$USER/Ventoy"
+        "/run/media/$USER/Ventoy"
+        "/mnt/Ventoy"
+        "/Volumes/Ventoy"
+    )
+    
+    for candidate in "${candidates[@]}"; do
+        if [ -f "$candidate/$iso_filename" ]; then
+            log "SUCCESS" "Found Ubuntu ISO on Ventoy: $candidate/$iso_filename"
+            printf '%s' "$candidate/$iso_filename"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
 # Download or verify Ubuntu ISO
 download_ubuntu_iso() {
     mkdir -p "$DOWNLOADS_DIR"
@@ -382,6 +416,23 @@ download_ubuntu_iso() {
     if [ -f "$iso_path" ]; then
         log "INFO" "Ubuntu ISO already downloaded: $iso_path"
         return 0
+    fi
+    
+    # Check Ventoy before downloading
+    local ventoy_iso
+    if ventoy_iso=$(find_iso_on_ventoy "$UBUNTU_ISO_FILE"); then
+        log "INFO" "Copying Ubuntu ISO from Ventoy to downloads..."
+        if [ $DRY_RUN -eq 0 ]; then
+            if cp "$ventoy_iso" "$iso_path"; then
+                log "SUCCESS" "Ubuntu ISO copied from Ventoy"
+                return 0
+            else
+                log "WARN" "Failed to copy from Ventoy, will attempt download"
+            fi
+        else
+            log "DRY-RUN" "Would copy from Ventoy: $ventoy_iso to $iso_path"
+            return 0
+        fi
     fi
     
     log "INFO" "Downloading Ubuntu 22.10 ISO..."
@@ -586,7 +637,7 @@ prepare_backups() {
 create_project_directory() {
     if [ -d "$PROJECT_DIR" ]; then
         log "WARN" "Project directory already exists: $PROJECT_DIR"
-        read -p "Delete and recreate? (y/N): " response
+        read -r -p "Delete and recreate? (y/N): " response
         if [[ "$response" =~ ^[Yy]$ ]]; then
             run_command rm -rf "$PROJECT_DIR"
         else
@@ -610,6 +661,21 @@ generate_cubic_instructions() {
     if [ $DRY_RUN -eq 1 ]; then
         log "DRY-RUN" "Would create: $instructions_file"
         return 0
+    fi
+    
+    # Add cleanup mode instructions if flag is set
+    local cleanup_instructions=""
+    if [ $CLEANUP_EMBEDDED_ISO -eq 1 ]; then
+        cleanup_instructions="
+### 5.8 Remove Embedded Ubuntu ISO (Cleanup Mode)
+
+**Note**: Cleanup mode was specified with -c flag.
+
+\`\`\`bash
+# Remove embedded ISO to save space (~3.6 GB)
+rm -f /opt/emcomm-resources/ubuntu-*.iso
+\`\`\`
+"
     fi
     
     cat > "$instructions_file" <<EOF
@@ -697,26 +763,16 @@ cd /root  # Or wherever you copied the scripts
 # Run Cubic customization scripts in order:
 chmod +x cubic/*.sh
 
-7. In the Terminal window, run the Cubic scripts in order:
-   
-   cd /path/to/cubic-scripts
-   chmod +x *.sh
-   
-   ./install-ham-tools.sh
-   ./configure-aprs-apps.sh
-   ./setup-desktop-defaults.sh
-   ./setup-user-and-hostname.sh
-   ./configure-wifi.sh
-   ./configure-radio-defaults.sh
-   ./restore-backups.sh  # Only if backups were provided
-   ./install-private-files.sh  # Only if private files were provided
-   ./embed-ubuntu-iso.sh
-   ./finalize-build.sh
-   
-   # OPTIONAL: If cleanup mode (-c) was specified, remove embedded ISO before generating:
-   rm -f /opt/emcomm-resources/ubuntu-*.iso
-
-8. Click "Next" through the remaining Cubic screens to generate the ISO
+./install-ham-tools.sh
+./configure-aprs-apps.sh
+./setup-desktop-defaults.sh
+./setup-user-and-hostname.sh
+./configure-wifi.sh
+./configure-radio-defaults.sh
+./restore-backups.sh  # Only if backups were provided
+./install-private-files.sh  # Only if private files were provided
+./embed-ubuntu-iso.sh
+./finalize-build.sh
 \`\`\`
 
 ### 5.6 Run Validation Tests
@@ -727,7 +783,7 @@ cd ../tests
 \`\`\`
 
 Review test results and resolve any failures before continuing.
-
+${cleanup_instructions}
 ### 5.7 Exit Virtual Terminal
 
 Click **Next** to continue.
@@ -761,9 +817,19 @@ When finished, your ISO will be at:
 
 Click **Close** to finish.
 
-## Step 10: Flash to USB
+## Step 10: Copy ISO to Ventoy Drive
 
-Use balenaEtcher or your preferred tool to flash the ISO to a USB drive.
+1. Prepare a Ventoy USB drive once using the official installer (https://www.ventoy.net/en/index.html).
+2. Mount the Ventoy data partition on your build system (usually `/media/$USER/Ventoy`).
+3. Copy the generated ISO onto the Ventoy partition:
+
+```bash
+cp "${PROJECT_DIR}/${RELEASE_TAG}.iso" /media/$USER/Ventoy/
+sync
+```
+
+4. Alternatively, run `${SCRIPT_DIR}/copy-iso-to-ventoy.sh "${PROJECT_DIR}/${RELEASE_TAG}.iso"` to auto-detect the Ventoy mount point and copy the ISO for you.
+5. Safely eject the Ventoy drive. Ventoy will list the new ISO on next boot.
 
 ---
 
@@ -773,6 +839,7 @@ Use balenaEtcher or your preferred tool to flash the ISO to a USB drive.
 - Tag: ${RELEASE_TAG}
 - Published: ${RELEASE_DATE}
 - Build Date: $(date +'%Y-%m-%d %H:%M:%S')
+$(if [ $CLEANUP_EMBEDDED_ISO -eq 1 ]; then echo "- Cleanup Mode: ENABLED (embedded ISO will be removed)"; fi)
 EOF
 
     log "SUCCESS" "Cubic instructions generated"
@@ -811,7 +878,7 @@ Output ISO:         ${PROJECT_DIR}/${RELEASE_TAG}.iso
 1. Review Cubic instructions: ${PROJECT_DIR}/CUBIC_INSTRUCTIONS.md
 2. Launch Cubic: cubic
 3. Follow the step-by-step instructions
-4. Flash resulting ISO to USB drive with balenaEtcher
+4. Copy resulting ISO to Ventoy USB (`${SCRIPT_DIR}/copy-iso-to-ventoy.sh ${PROJECT_DIR}/${RELEASE_TAG}.iso` or `cp ${PROJECT_DIR}/${RELEASE_TAG}.iso /media/$USER/Ventoy/ && sync`)
 
 === CUSTOMIZATION SCRIPTS ===
 Located in: ${SCRIPT_DIR}/cubic/

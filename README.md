@@ -71,16 +71,70 @@ Creates a **single-user custom ETC ISO** containing:
    
    # Copy secrets.env to this folder (transfer securely from dev system)
    
-   # Run build
-   ./build-etc-iso.sh
+   # Run build with latest stable release
+   ./build-etc-iso.sh -r stable
+   
+   # Or with cleanup mode to save space (~3.6GB)
+   ./build-etc-iso.sh -r stable -c
    ```
-4. **Result:** Custom ISO ready to burn to USB
+4. **Follow Cubic instructions** generated in `~/etc-builds/<release-name>/CUBIC_INSTRUCTIONS.md`
+5. **Result:** Custom ISO ready to copy onto your Ventoy USB drive
 
-### Deployment
-1. Burn ISO to USB (Balena Etcher, Rufus, or `dd`)
-2. Boot target system from USB
-3. Install ETC
-4. First boot: WiFi connects automatically, everything pre-configured!
+### Build Script Options
+
+The `build-etc-iso.sh` script supports several options:
+
+```bash
+./build-etc-iso.sh [OPTIONS]
+
+OPTIONS:
+    -r MODE   Release mode (default: latest)
+              - stable: Use latest stable release
+              - latest: Use latest tag (including pre-releases)
+              - tag:    Use specific tag (requires -t)
+    -t TAG    Specify release tag (required when -r tag)
+    -u PATH   Path to existing Ubuntu ISO (skips download)
+    -b PATH   Path to .wine backup (auto-detected if not specified)
+    -e PATH   Path to et-user backup (auto-detected if not specified)
+    -p PATH   Path to private files (local dir or GitHub repo)
+    -c        Cleanup mode: Remove embedded ISO to save space
+    -d        Dry-run mode (show what would be done)
+    -v        Verbose mode (enable bash debugging)
+    -h        Show help message
+```
+
+### Examples
+
+```bash
+# Build latest stable release with auto-detected backups
+./build-etc-iso.sh -r stable
+
+# Build specific release with cleanup mode
+./build-etc-iso.sh -r tag -t emcomm-tools-os-community-20250401-r4-final-4.0.0 -c
+
+# Build with private files from GitHub
+./build-etc-iso.sh -r stable -p https://github.com/username/private-configs
+
+# Dry run to see what would happen
+./build-etc-iso.sh -r stable -d
+```
+
+### Deploying with Ventoy (Default Workflow)
+
+1. Install Ventoy on a USB drive (one-time) using the official installer: [ventoy.net](https://www.ventoy.net/en/doc_start.html)
+2. After building the ISO, mount the Ventoy data partition on your build system (typically `/media/$USER/Ventoy`).
+3. Copy the ISO onto the Ventoy drive and flush writes. You can let the helper script auto-detect the mount or run the copy manually:
+
+   ```bash
+   # Preferred: auto-detect Ventoy and copy
+   ./copy-iso-to-ventoy.sh ~/etc-builds/<release-tag>/<release-tag>.iso
+
+   # Manual copy (if you prefer to specify the mount point)
+   cp ~/etc-builds/<release-tag>/<release-tag>.iso /media/$USER/Ventoy/
+   sync
+   ```
+
+4. Safely eject the Ventoy drive and boot it on target hardware. Ventoy will list the new ISO alongside any others on the disk.
 
 ---
 
@@ -100,6 +154,7 @@ emcomm-tools-customizer/
 ├── secrets.env.template            # Template for configuration (safe to commit)
 ├── secrets.env                     # YOUR credentials (NEVER commit - gitignored)
 ├── build-etc-iso.sh               # Main build orchestration script
+├── copy-iso-to-ventoy.sh          # Helper to detect Ventoy and copy finished ISO
 ├── README.md                       # This file
 └── TTPCustomization.md            # Beginner's guide to customization
 
@@ -283,5 +338,3 @@ See **[TTPCustomization.md](TTPCustomization.md)** for a complete beginner's gui
 ## License
 
 This project is provided as-is for amateur radio and emergency communications use. See upstream ETC project for base system licensing.
-
-**73 de KD7DGF** 📻

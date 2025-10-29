@@ -106,6 +106,7 @@ Note: post-install/ directory is ONLY for edge cases that truly cannot be done i
 ## Bash Scripting Best Practices
 
 ### Shebang and Script Header
+
 ```bash
 #!/bin/bash
 #
@@ -474,7 +475,7 @@ Type=Application
 Categories=HamRadio;Utility;
 EOF
 
-# Set default GNOME preferences (applies to all new users)
+# Set default GNOME preferences (applies to all new users created from the ISO)
 mkdir -p /etc/skel/.config/dconf
 cat > /etc/skel/.config/dconf/user.d/01-emcomm-defaults <<'EOF'
 [org/gnome/desktop/interface]
