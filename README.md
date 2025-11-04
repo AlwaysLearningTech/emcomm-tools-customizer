@@ -265,11 +265,17 @@ Two files work together:
 Your `secrets.env` should contain:
 
 ```bash
+### Configuration Variables
+
+Your `secrets.env` should contain:
+
+```bash
 # User Configuration
 USER_FULLNAME="Your Name"
 USER_USERNAME="yourname"
 USER_PASSWORD="YourPassword"  # For auto-login
 CALLSIGN="N0CALL"  # Your amateur radio callsign
+MACHINE_NAME="ETC-N0CALL"  # Hostname (defaults to ETC-{CALLSIGN} if left as template)
 
 # WiFi Networks (indexed for multiple networks)
 WIFI_COUNT=3  # How many networks to configure
@@ -278,6 +284,7 @@ WIFI_COUNT=3  # How many networks to configure
 WIFI_1_SSID="Home-Network-5G"
 WIFI_1_PASSWORD="HomePassword123"
 WIFI_1_AUTOCONNECT="yes"
+```
 
 # WiFi Network 2 - Mobile Hotspot  
 WIFI_2_SSID="iPhone-Hotspot"
@@ -294,6 +301,172 @@ APRS_SSID="10"  # SSID for APRS (typically 10 for iGate)
 APRS_PASSCODE="-1"  # Get from apps.magicbug.co.uk/passcode
 APRS_COMMENT="EmComm iGate"
 DIGIPEATER_PATH="WIDE1-1"
+```
+
+---
+
+## APRS & Winlink Configuration
+
+This customizer provides **secrets-based configuration** for APRS applications (direwolf, YAAC) and optional enhancements to Pat/Winlink. All settings are read at ISO build time from `secrets.env` and baked into `/etc/skel` for the user environment.
+
+### APRS Operation Modes
+
+#### **iGate Mode** (Internet-to-RF Gateway)
+Used for **home stations** and **EOC (Emergency Operations Centers)** with internet connectivity.
+
+- **Purpose**: Relay APRS packets between internet (APRS-IS) and local RF
+- **Enable**: Set `ENABLE_APRS_IGATE="yes"` in secrets.env
+- **Configuration**:
+  - `APRS_SERVER`: APRS-IS server (default: `noam.aprs2.net` for North America)
+    - Options: `noam.aprs2.net` (North America), `soam.aprs2.net` (South America), `euro.aprs2.net` (Europe)
+  - `APRS_IGTXVIA`: How to relay packets (default: `"0"` for direct, or `"WIDE2-2"` for wider coverage)
+  - `APRS_IGFILTER_RADIUS`: Only relay packets within this distance (default: `"500"` km)
+
+**Example - Home iGate (default settings):**
+```bash
+ENABLE_APRS_IGATE="yes"
+APRS_IGTXVIA="0"
+APRS_IGFILTER_RADIUS="500"
+APRS_SERVER="noam.aprs2.net"
+```
+
+#### **Beacon Mode** (Position Broadcasting)
+Used for **mobile stations** and **field deployments** with GPS.
+
+- **Purpose**: Periodically broadcast your position to APRS network via RF
+- **Enable**: Set `ENABLE_APRS_BEACON="yes"` in secrets.env
+- **Requires**: GPS device connected to system
+- **Configuration**:
+  - `APRS_BEACON_INTERVAL`: Seconds between beacons (default: `"30"`, typical: 30-600)
+    - Fast (30-60s): High-speed mobile, very mobile operations
+    - Slow (300-600s): Stationary or slow-moving stations
+  - `APRS_BEACON_POWER`: Transmit power code 0-9 (default: `"10"`)
+  - `APRS_BEACON_HEIGHT`: Antenna height above ground in feet (default: `"20"`)
+  - `APRS_BEACON_GAIN`: Antenna gain code 0-9 (default: `"3"`)
+
+**Example - Field Mobile (every 2 minutes, lower power):**
+```bash
+ENABLE_APRS_BEACON="yes"
+APRS_BEACON_INTERVAL="120"
+APRS_BEACON_POWER="5"
+APRS_BEACON_HEIGHT="10"
+APRS_BEACON_GAIN="2"
+```
+
+**⚠️ CRITICAL**: Never enable beacon without GPS connected. Your position will be wrong and mislead the APRS network!
+
+#### **Both iGate + Beacon**
+Advanced operators can enable both simultaneously:
+```bash
+ENABLE_APRS_IGATE="yes"
+ENABLE_APRS_BEACON="yes"
+# direwolf becomes full two-way APRS station
+```
+
+### Audio Interface Configuration
+
+The system defaults to **Digirig Mobile USB interface** (`plughw:1,0`). If you're using different audio hardware, uncomment and modify in `secrets.env`:
+
+```bash
+# Digirig Mobile (default - keep commented)
+# DIREWOLF_ADEVICE="plughw:1,0"
+
+# Built-in audio (laptop/desktop)
+# DIREWOLF_ADEVICE="default:0"
+
+# Specific ALSA device (use `aplay -l` to find)
+# DIREWOLF_ADEVICE="hw:2,0"
+```
+
+**PTT Methods**:
+```bash
+DIREWOLF_PTT="CM108"      # USB Digirig/SignaLink (default)
+# DIREWOLF_PTT="RTS"      # Serial port RTS pin
+# DIREWOLF_PTT="DTR"      # Serial port DTR pin
+# DIREWOLF_PTT="GPIO"     # GPIO pins (Raspberry Pi)
+# DIREWOLF_PTT="VOX"      # Voice-activated (hands-free)
+```
+
+### Pat/Winlink Configuration
+
+Pat Winlink is pre-installed by ETC upstream with default aliases for Winlink RMS Relay networks. This customizer adds an optional **EmComm connect alias** for emergency communications at specific ARDOP frequencies.
+
+**Default Pat Aliases** (unchanged):
+- `pat connect ardop:///<CALLSIGN>` - Default ARDOP connection
+- Other standard Winlink RMS aliases available from ETC
+
+**Optional EmComm Alias** (add with customizer):
+```bash
+PAT_EMCOMM_ALIAS="yes"           # Enable EmComm alias
+PAT_EMCOMM_FREQ="3.573.0"        # HF ARDOP frequency
+```
+
+**Common ARDOP Frequencies by Band**:
+- **80m**: `3.573.0` - Primary emergency frequency
+- **40m**: `5.348.0` - Secondary emergency frequency
+- **20m**: `7.106.0` - Emergency frequency
+- **17m**: `10.149.0` - Emergency frequency
+- **15m**: `14.107.0` - Emergency frequency (often busy)
+
+**Usage**:
+```bash
+# With EmComm alias enabled:
+pat connect emcomm    # Connects to ARDOP at configured frequency
+
+# Default Pat connection:
+pat connect ardop     # Uses standard ARDOP connection
+```
+
+### Setup Scenarios
+
+#### **Scenario 1: Home iGate + EOC Station**
+```bash
+ENABLE_APRS_IGATE="yes"
+ENABLE_APRS_BEACON="no"
+APRS_IGFILTER_RADIUS="500"
+PAT_EMCOMM_ALIAS="no"
+DIREWOLF_ADEVICE="plughw:1,0"
+DIREWOLF_PTT="CM108"
+```
+*Relays APRS packets to/from internet, no local position broadcasting*
+
+#### **Scenario 2: Field Mobile with GPS**
+```bash
+ENABLE_APRS_IGATE="no"
+ENABLE_APRS_BEACON="yes"
+APRS_BEACON_INTERVAL="60"
+APRS_BEACON_POWER="5"
+PAT_EMCOMM_ALIAS="yes"
+PAT_EMCOMM_FREQ="3.573.0"
+DIREWOLF_ADEVICE="plughw:1,0"
+DIREWOLF_PTT="CM108"
+```
+*Broadcasts position every 60 seconds, EmComm alias for emergency Winlink*
+
+#### **Scenario 3: EmComm Event (Both iGate + Beacon)**
+```bash
+ENABLE_APRS_IGATE="yes"
+ENABLE_APRS_BEACON="yes"
+APRS_BEACON_INTERVAL="120"
+APRS_IGFILTER_RADIUS="1000"
+PAT_EMCOMM_ALIAS="yes"
+DIREWOLF_PTT="VOX"  # Hands-free for field work
+```
+*Full two-way APRS station with emergency Winlink capability*
+
+### Modifying After ISO Install
+
+All configurations are stored in user config files and can be modified post-installation:
+
+```bash
+# Modify direwolf beacon parameters:
+nano ~/.config/direwolf/direwolf.conf
+
+# Modify YAAC iGate server:
+nano ~/.config/YAAC/YAAC.properties
+
+# Add Pat EmComm alias after first boot (if not done automatically):
+~/.local/bin/configure-pat-emcomm
 ```
 
 ---

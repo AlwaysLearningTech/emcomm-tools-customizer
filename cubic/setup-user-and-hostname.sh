@@ -41,18 +41,20 @@ USER_FULLNAME="${USER_FULLNAME:-EmComm User}"
 USER_USERNAME="${USER_USERNAME:-emcomm}"
 USER_PASSWORD="${USER_PASSWORD:-emcomm123}"
 CALLSIGN="${CALLSIGN:-N0CALL}"
+MACHINE_NAME="${MACHINE_NAME:-ETC-${CALLSIGN}}"
 
 log "INFO" "User configuration:"
 log "INFO" "  Full Name: $USER_FULLNAME"
 log "INFO" "  Username: $USER_USERNAME"
 log "INFO" "  Callsign: $CALLSIGN"
+log "INFO" "  Machine Name: $MACHINE_NAME"
 
 # ============================================================================
 # Configure Hostname
 # ============================================================================
 
-# Set hostname to ETC-{CALLSIGN}
-HOSTNAME="ETC-${CALLSIGN}"
+# Set hostname to MACHINE_NAME (defaults to ETC-{CALLSIGN} if not specified)
+HOSTNAME="$MACHINE_NAME"
 log "INFO" "Setting hostname to: $HOSTNAME"
 
 # Update /etc/hostname
