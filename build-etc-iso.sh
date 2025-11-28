@@ -283,6 +283,8 @@ auto_detect_backups() {
 }
 
 # Fetch release info based on mode
+# Note: The ETC project publishes source code archives via GitHub's API (tarball_url)
+# These contain the install.sh scripts needed to build the ISO via Cubic
 get_release_info() {
     log "INFO" "Fetching release information from GitHub..."
     log "INFO" "Release mode: $RELEASE_MODE"
@@ -296,25 +298,13 @@ get_release_info() {
             fi
             ;;
         latest)
-            log "INFO" "Fetching latest tag (including pre-releases)..."
-            # Get all tags and use the first one
-            if ! ALL_TAGS=$(curl -s -f "https://api.github.com/repos/${GITHUB_REPO}/tags"); then
-                log "ERROR" "Failed to fetch tags"
+            log "INFO" "Fetching latest release (most recent tag)..."
+            # Fetch all releases and use the first one (most recent)
+            if ! ALL_RELEASES=$(curl -s -f "${GITHUB_API_URL}?per_page=1"); then
+                log "ERROR" "Failed to fetch latest release"
                 return 1
             fi
-            LATEST_TAG=$(echo "$ALL_TAGS" | jq -r '.[0].name')
-            if [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG" = "null" ]; then
-                log "ERROR" "No tags found"
-                return 1
-            fi
-            log "INFO" "Latest tag: $LATEST_TAG"
-            # Fetch release info for this tag (may not exist if it's not a release)
-            if ! RELEASE_JSON=$(curl -s -f "${GITHUB_API_URL}/tags/${LATEST_TAG}"); then
-                # If no release exists, construct minimal JSON
-                log "WARN" "No release found for tag, using tag info only"
-                RELEASE_JSON=$(echo "$ALL_TAGS" | jq ".[0]")
-                SPECIFIED_TAG="$LATEST_TAG"
-            fi
+            RELEASE_JSON=$(echo "$ALL_RELEASES" | jq '.[0]')
             ;;
         tag)
             log "INFO" "Using specified tag: $SPECIFIED_TAG"
@@ -325,19 +315,23 @@ get_release_info() {
             ;;
     esac
     
-    # Extract release details
-    RELEASE_TAG=$(echo "$RELEASE_JSON" | jq -r '.tag_name')
-    RELEASE_NAME=$(echo "$RELEASE_JSON" | jq -r '.name')
-    RELEASE_DATE=$(echo "$RELEASE_JSON" | jq -r '.published_at' | cut -d'T' -f1)
+    # Extract release details from GitHub API response
+    RELEASE_TAG=$(echo "$RELEASE_JSON" | jq -r '.tag_name // "unknown"')
+    RELEASE_NAME=$(echo "$RELEASE_JSON" | jq -r '.name // .tag_name // "unknown"')
+    RELEASE_DATE=$(echo "$RELEASE_JSON" | jq -r '.published_at // .created_at // "unknown"' | cut -d'T' -f1)
     
-    # Extract tarball URL
-    TARBALL_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | endswith(".tar.gz")) | .browser_download_url' | head -1)
-    TARBALL_FILE=$(basename "$TARBALL_URL")
+    # GitHub automatically provides tarball_url for every release
+    # This is the source code archive containing the install.sh scripts
+    TARBALL_URL=$(echo "$RELEASE_JSON" | jq -r '.tarball_url // "null"')
     
     if [ -z "$TARBALL_URL" ] || [ "$TARBALL_URL" = "null" ]; then
-        log "ERROR" "No tarball found in release assets"
+        log "ERROR" "Failed to get tarball URL from GitHub API for release: $RELEASE_TAG"
         return 1
     fi
+    
+    # GitHub tarball URL format: https://api.github.com/repos/.../tarball/TAG
+    # Convert to a more descriptive filename
+    TARBALL_FILE="${RELEASE_TAG}.tar.gz"
     
     # Parse version info from tag
     # Tag format: emcomm-tools-os-community-YYYYMMDD-rX-final-X.X.X

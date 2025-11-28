@@ -61,10 +61,7 @@ Creates a **single-user custom ETC ISO** containing:
 2. **Create `secrets.env`** from template (see Security section below)
 3. **On Ubuntu system:**
    ```bash
-   # Install Cubic
-   sudo add-apt-repository ppa:cubic-wizard/release
-   sudo apt update && sudo apt install cubic
-   
+
    # Clone your fork
    git clone https://github.com/YourUsername/emcomm-tools-customizer.git
    cd emcomm-tools-customizer
@@ -82,32 +79,43 @@ Creates a **single-user custom ETC ISO** containing:
 
 ### Build Script Options
 
-The `build-etc-iso.sh` script supports several options:
+The `build-etc-iso.sh` script handles downloading the ETC release (source code archive from GitHub) and preparing all files for Cubic customization. It supports several options:
 
 ```bash
 ./build-etc-iso.sh [OPTIONS]
 
 OPTIONS:
     -r MODE   Release mode (default: latest)
-              - stable: Use latest stable release
-              - latest: Use latest tag (including pre-releases)
+              - stable: Use latest stable GitHub release
+              - latest: Use most recent release (any tag)
               - tag:    Use specific tag (requires -t)
     -t TAG    Specify release tag (required when -r tag)
-    -u PATH   Path to existing Ubuntu ISO (skips download)
+              Example: emcomm-tools-os-community-20250401-r4-final-4.0.0
+    -u PATH   Path to existing Ubuntu 22.10 ISO (skips download)
     -b PATH   Path to .wine backup (auto-detected if not specified)
     -e PATH   Path to et-user backup (auto-detected if not specified)
     -p PATH   Path to private files (local dir or GitHub repo)
-    -c        Cleanup mode: Remove embedded ISO to save space
+    -c        Cleanup mode: Remove embedded Ubuntu ISO to save space
     -d        Dry-run mode (show what would be done)
     -v        Verbose mode (enable bash debugging)
     -h        Show help message
+
+WORKFLOW:
+    1. Fetches ETC release from GitHub (source code archive)
+    2. Downloads Ubuntu 22.10 ISO (if not provided)
+    3. Prepares all files in ~/etc-builds/<release-tag>/
+    4. Generates Cubic instructions for manual ISO building
+    5. You then launch Cubic and import the project directory
 ```
 
 ### Examples
 
 ```bash
-# Build latest stable release with auto-detected backups
+# Build latest stable release (recommended)
 ./build-etc-iso.sh -r stable
+
+# Build most recent release tag
+./build-etc-iso.sh -r latest
 
 # Build specific release with cleanup mode
 ./build-etc-iso.sh -r tag -t emcomm-tools-os-community-20250401-r4-final-4.0.0 -c
@@ -117,6 +125,9 @@ OPTIONS:
 
 # Dry run to see what would happen
 ./build-etc-iso.sh -r stable -d
+
+# Build with existing Ubuntu ISO to skip re-downloading
+./build-etc-iso.sh -r stable -u ~/Downloads/ubuntu-22.10-desktop-amd64.iso
 ```
 
 ### Deploying with Ventoy (Default Workflow)
