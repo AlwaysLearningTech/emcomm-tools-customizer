@@ -212,7 +212,7 @@ WIFI_PASSWORD_MOBILE="MobilePassword"
 WIFI_AUTOCONNECT_MOBILE="no"        # Don't auto-connect to phone hotspot
 
 # APRS Beacon (RF position broadcasting)
-APRS_BEACON_ENABLED="yes"           # Enable beacon (requires GPS)
+ENABLE_APRS_BEACON="no"             # Enable beacon (requires GPS)
 APRS_BEACON_INTERVAL="300"          # Seconds between beacons (default: 5 min)
 APRS_SSID="10"                      # Secondary station ID
 APRS_PASSCODE="-1"                  # Get from https://apps.magicbug.co.uk/passcode/
@@ -294,7 +294,7 @@ The customizer configures **direwolf** to broadcast your position via APRS RF at
 In `secrets.env`:
 
 ```bash
-APRS_BEACON_ENABLED="yes"           # Enable (requires GPS)
+ENABLE_APRS_BEACON="no"             # Enable (requires GPS)
 APRS_BEACON_INTERVAL="300"          # 300 seconds = 5 minutes between beacons
 APRS_SSID="10"                      # Secondary station ID
 APRS_PASSCODE="-1"                  # Get from https://apps.magicbug.co.uk/passcode/
