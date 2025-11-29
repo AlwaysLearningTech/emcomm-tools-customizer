@@ -352,13 +352,17 @@ Post-Boot (Optional):
 
 ### Creating Backups
 
-**VARA FM baseline** (one-time setup):
+**VARA FM baseline** (one-time setup - CRITICAL):
+
+⚠️ **IMPORTANT**: Create this backup **BEFORE opening VARA FM for the first time** on a fresh deployment. VARA FM should only be backed up in its initial state.
 
 ```bash
-# After deploying and configuring VARA FM:
+# On a fresh system (before opening VARA FM):
 tar -czf ~/wine.tar.gz ~/.wine/
 cp ~/wine.tar.gz ~/etc-customizer-backups/wine.tar.gz
 ```
+
+Do NOT update this backup after using VARA FM (upstream documents prohibit this).
 
 **User settings baseline** (optional):
 
