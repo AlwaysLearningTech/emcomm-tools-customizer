@@ -1,7 +1,7 @@
 # Copilot Instructions for EmComm Tools Customizer
 
 ## CRITICAL RULES
-1. **NO SUMMARY FILES** - Never create SUMMARY.md, IMPLEMENTATION_SUMMARY.md, or similar files. Report findings in chat only.
+1. **NO SUMMARY FILES - EVER** - Never create SUMMARY.md, IMPLEMENTATION_SUMMARY.md, PHASE-X-SUMMARY.md, or ANY summary/completion report files. Period. Report all findings, changes, and summaries ONLY in the chat dialog. When committing, put summaries in commit messages, not in files.
 2. **UPDATE DOCUMENTATION IN-PLACE** - Modify existing README.md and other docs directly.
 3. **LOOK AT ACTUAL FILES FIRST** - Always read source files to verify method names, parameters, and return types before making changes.
 4. **CUBIC VS POST-INSTALL** - Clearly distinguish between scripts that run in Cubic (ISO build time) and scripts that run post-installation.
@@ -958,11 +958,12 @@ emcomm-tools-customizer/
 │   └── restore-backups.sh      # Extracts and restores backups during build
 └── build-etc-iso.sh            # Orchestrates entire build process
 
-External backup location (user home directory):
-~/etc-customizer-backups/
+External backup location (absolute path - portable across systems):
+/home/david/etc-customizer-backups/
 ├── wine.tar.gz                 # VARA FM application state (Windows Prefix)
 ├── et-user.tar.gz              # ETC user profile baseline (callsign, grid square)
-└── et-user-current.tar.gz      # Auto-captured at build start (if upgrading)
+├── et-user-current.tar.gz      # Auto-captured at build start (if upgrading)
+└── ubuntu-22.10-desktop-amd64.iso  # Downloaded Ubuntu ISO (for reproducible builds)
 ```
 
 #### restore-backups.sh (Cubic Stage)
@@ -977,8 +978,8 @@ This script runs **DURING** the Cubic ISO build and restores the backup files:
 # Stage: Cubic (runs during ISO creation, not post-install)
 #
 
-# Detect backup files from ~/etc-customizer-backups/ directory
-BACKUP_DIR="$HOME/etc-customizer-backups"
+# Detect backup files from /home/david/etc-customizer-backups/ directory
+BACKUP_DIR="/home/david/etc-customizer-backups"
 
 if [ -f "$BACKUP_DIR/wine.tar.gz" ]; then
     tar -xzf "$BACKUP_DIR/wine.tar.gz" -C /etc/skel/
@@ -994,10 +995,10 @@ fi
 **Key Points:**
 - ✅ Runs **DURING** ISO build (in Cubic chroot), not post-install
 - ✅ Captures current et-user state at build start (if upgrading)
-- ✅ Restores wine.tar.gz (static baseline) to `/etc/skel/.wine/` from `~/etc-customizer-backups/`
-- ✅ Restores et-user config to `/etc/skel/.config/emcomm-tools/` from `~/etc-customizer-backups/`
+- ✅ Restores wine.tar.gz (static baseline) to `/etc/skel/.wine/` from `/home/david/etc-customizer-backups/`
+- ✅ Restores et-user config to `/etc/skel/.config/emcomm-tools/` from `/home/david/etc-customizer-backups/`
 - ✅ All new users created from ISO get both configurations automatically
-- ✅ Backups stored externally (`~/etc-customizer-backups/`) separate from repository
+- ✅ Backups stored externally (`/home/david/etc-customizer-backups/`) separate from repository
 
 #### Backup Strategy - Three-Step Workflow
 
@@ -1009,17 +1010,17 @@ The `restore-backups.sh` script preserves user customizations while maintaining 
   - Radio hardware preferences
   - Pat mailbox and forms
   - Digital mode configurations
-- Saves to `~/etc-customizer-backups/et-user-current.tar.gz` (only created during upgrade builds)
+- Saves to `/home/david/etc-customizer-backups/et-user-current.tar.gz` (only created during upgrade builds)
 - Ensures no user info is lost when upgrading ISO versions
 
 **STEP 2: Restore VARA FM Baseline**
-- Extracts static `~/etc-customizer-backups/wine.tar.gz` to `/etc/skel/.wine/`
+- Extracts static `/home/david/etc-customizer-backups/wine.tar.gz` to `/etc/skel/.wine/`
 - This is your golden master VARA FM configuration
 - Never changes automatically
 - To update baseline intentionally:
   ```bash
   tar -czf ~/wine.tar.gz ~/.wine/
-  cp ~/wine.tar.gz /backups/wine.tar.gz
+  cp ~/wine.tar.gz /home/david/etc-customizer-backups/wine.tar.gz
   git add /backups/wine.tar.gz
   git commit -m "Update VARA FM baseline"
   ```

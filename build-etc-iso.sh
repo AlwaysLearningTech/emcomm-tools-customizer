@@ -22,14 +22,34 @@
 
 set -euo pipefail
 
+# Source secrets.env to get USER_USERNAME for backup paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SECRETS_FILE="${SCRIPT_DIR}/secrets.env"
+
+# Load USER_USERNAME from secrets.env (required for backup paths)
+if [ -f "$SECRETS_FILE" ]; then
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    USER_USERNAME="${USER_USERNAME:-}"
+else
+    echo "ERROR: secrets.env file not found at $SECRETS_FILE"
+    echo "Please copy secrets.env.template to secrets.env and configure it"
+    exit 2
+fi
+
+if [ -z "$USER_USERNAME" ]; then
+    echo "ERROR: USER_USERNAME not set in secrets.env"
+    exit 2
+fi
+
 # Configuration
 UBUNTU_ISO_URL="https://old-releases.ubuntu.com/releases/kinetic/ubuntu-22.10-desktop-amd64.iso"
 UBUNTU_ISO_FILE="ubuntu-22.10-desktop-amd64.iso"
 GITHUB_REPO="thetechprepper/emcomm-tools-os-community"
 GITHUB_API_URL="https://api.github.com/repos/${GITHUB_REPO}/releases"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_BASE_DIR="${HOME}/etc-builds"
-DOWNLOADS_DIR="${BUILD_BASE_DIR}/downloads"
+BACKUPS_AND_ISO_DIR="/home/${USER_USERNAME}/etc-customizer-backups"
+BUILD_BASE_DIR="/home/${USER_USERNAME}/etc-builds"
+DOWNLOADS_DIR="${BACKUPS_AND_ISO_DIR}"
 DRY_RUN=0
 CLEANUP_EMBEDDED_ISO=0
 RELEASE_MODE="latest"  # stable, latest, or tag
@@ -240,16 +260,23 @@ auto_detect_backups() {
     # Auto-detect .wine backup
     if [ -z "$WINE_BACKUP_PATH" ]; then
         local wine_backup
-        # Use find instead of ls for better handling
-        wine_backup=$(find ~ -maxdepth 1 -name "etc-wine-backup-*.tar.gz" -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2)
-        if [ -n "$wine_backup" ]; then
+        # Check backup location first
+        wine_backup="/home/${USER_USERNAME}/etc-customizer-backups/wine.tar.gz"
+        if [ ! -f "$wine_backup" ]; then
+            # Fall back to old pattern for backward compatibility
+            wine_backup=$(find ~ -maxdepth 1 -name "etc-wine-backup-*.tar.gz" -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2)
+        fi
+        
+        if [ -n "$wine_backup" ] && [ -f "$wine_backup" ]; then
             WINE_BACKUP_PATH="$wine_backup"
             log "SUCCESS" "Auto-detected .wine backup: $wine_backup"
         else
-            log "WARN" "No .wine backup found in home directory"
+            log "WARN" "No .wine backup found in /home/${USER_USERNAME}/etc-customizer-backups/ or home directory"
             echo ""
             echo "To create .wine backup on your ETC system:"
-            echo "  ~/add-ons/wine/05-backup-wine-install.sh"
+            echo "  1. Deploy and configure VARA FM on your ETC system"
+            echo "  2. Run: tar -czf ~/wine.tar.gz ~/.wine/"
+            echo "  3. Copy to: /home/${USER_USERNAME}/etc-customizer-backups/wine.tar.gz"
             echo ""
             read -r -p "Do you want to continue without .wine backup? (y/N): " response
             if [[ ! "$response" =~ ^[Yy]$ ]]; then

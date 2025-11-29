@@ -28,13 +28,39 @@ log() {
 log "INFO" "=== Starting Backup Restore ==="
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BACKUPS_DIR="$HOME/etc-customizer-backups"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-# Ensure backup directory exists (create if needed)
-if [ ! -d "$BACKUPS_DIR" ]; then
-    log "WARN" "Backup directory not found: $BACKUPS_DIR"
-    log "WARN" "Creating directory... (Note: You may need to populate it with wine.tar.gz and et-user.tar.gz)"
-    mkdir -p "$BACKUPS_DIR"
+# During Cubic build, check for backups in project directory first
+# (they should be copied into the Cubic project when running build-etc-iso.sh)
+# Then fall back to home directory for local user
+if [ -d "$PROJECT_DIR/backups" ] && [ "$(ls -A "$PROJECT_DIR/backups" 2>/dev/null)" ]; then
+    BACKUPS_DIR="$PROJECT_DIR/backups"
+    log "INFO" "Using backups from project directory: $BACKUPS_DIR"
+else
+    # Fallback: Try to read USER_USERNAME from project if available
+    # If running in Cubic chroot, /home may not be accessible, but try anyway
+    USER_USERNAME="${USER_USERNAME:-}"
+    if [ -z "$USER_USERNAME" ] && [ -f "$PROJECT_DIR/secrets.env" ]; then
+        # shellcheck source=/dev/null
+        source "$PROJECT_DIR/secrets.env"
+        USER_USERNAME="${USER_USERNAME:-}"
+    fi
+    
+    if [ -n "$USER_USERNAME" ]; then
+        BACKUPS_DIR="/home/${USER_USERNAME}/etc-customizer-backups"
+    else
+        # Last resort: use /etc/skel for persistence
+        BACKUPS_DIR="/etc/skel/.etc-customizer-backups"
+        log "WARN" "USER_USERNAME not available, using /etc/skel for persistence"
+    fi
+    
+    if [ ! -d "$BACKUPS_DIR" ]; then
+        log "WARN" "Backup directory not found: $BACKUPS_DIR"
+        log "WARN" "Note: Backups must be copied into the project backups/ directory or /home/\${USER_USERNAME}/etc-customizer-backups/"
+        mkdir -p "$BACKUPS_DIR"
+    else
+        log "INFO" "Using backups from: $BACKUPS_DIR"
+    fi
 fi
 
 # STEP 1: Capture current et-user state (if this is an upgrade build)
@@ -188,6 +214,30 @@ done
 # If no backup files were found
 if [ ! -f "$CURRENT_BACKUP" ] && [ ! -f "$LAST_BACKUP" ]; then
     log "INFO" "No et-user backups found (looking for et-user-current.tar.gz or et-user.tar.gz), skipping"
+fi
+
+# ARCHIVE BACKUPS TO /etc/skel FOR NEXT BUILD
+# This ensures backups persist across system deployments via /etc/skel template
+log "INFO" "=== Archiving Backups for Next Build ==="
+
+mkdir -p /etc/skel/.etc-customizer-backups
+
+# Archive wine.tar.gz if present in BACKUPS_DIR
+if [ -f "$BACKUPS_DIR/wine.tar.gz" ]; then
+    cp -v "$BACKUPS_DIR/wine.tar.gz" /etc/skel/.etc-customizer-backups/wine.tar.gz 2>&1 | tee -a "$LOG_FILE"
+    log "SUCCESS" "Archived wine.tar.gz to /etc/skel for next build"
+fi
+
+# Archive et-user-current.tar.gz if present
+if [ -f "$BACKUPS_DIR/et-user-current.tar.gz" ]; then
+    cp -v "$BACKUPS_DIR/et-user-current.tar.gz" /etc/skel/.etc-customizer-backups/et-user-current.tar.gz 2>&1 | tee -a "$LOG_FILE"
+    log "SUCCESS" "Archived et-user-current.tar.gz to /etc/skel for next build"
+fi
+
+# Archive et-user.tar.gz if present
+if [ -f "$BACKUPS_DIR/et-user.tar.gz" ]; then
+    cp -v "$BACKUPS_DIR/et-user.tar.gz" /etc/skel/.etc-customizer-backups/et-user.tar.gz 2>&1 | tee -a "$LOG_FILE"
+    log "SUCCESS" "Archived et-user.tar.gz to /etc/skel for next build"
 fi
 
 log "SUCCESS" "=== Backup Restore Complete ==="

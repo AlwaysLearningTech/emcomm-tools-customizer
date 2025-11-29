@@ -50,6 +50,74 @@ Creates a **single-user custom ETC ISO** containing:
 
 ---
 
+## Build Workflow Overview
+
+**IMPORTANT**: This project uses **Cubic** (Custom Ubuntu ISO Creator) as the customization engine. Understanding when scripts run in the **terminal vs. inside Cubic** is critical.
+
+### Execution Stages
+
+Your build process happens in **three distinct stages**:
+
+| Stage | Where | What Happens | Who Runs It |
+|-------|-------|--------------|------------|
+| **Stage 1: Preparation** | 🖥️ Your terminal | Download files, prepare project, validate backups | You (fully automated) |
+| **Stage 2: Cubic Build** | 🔨 Cubic GUI/chroot | Extract ISO, run customization scripts, create custom ISO | Cubic (semi-automated) |
+| **Stage 3: Post-Install** | 💻 Deployed system | Restore backups, configure system after first boot | You (optional script) |
+
+### Current Workflow
+
+The project uses a **semi-automated** approach:
+
+1. **Terminal**: Run `./build-etc-iso.sh` — handles all file preparation
+2. **Manual**: Open Cubic GUI manually and follow generated instructions
+3. **Cubic Chroot**: Scripts in `cubic/` run automatically inside Cubic (hands-off)
+4. **Terminal**: Cubic completes and returns to your terminal with ISO ready
+
+### Key Distinction
+
+- **`cubic/` scripts**: Run INSIDE the Cubic chroot environment during ISO build (**no user interaction needed**)
+- **Terminal scripts**: Run on your build system before/after Cubic (**you initiate them**)
+- **`post-install/` scripts**: Run on DEPLOYED systems after first boot (**optional, user-initiated**)
+
+### Automation vs. Manual Boundary
+
+```
+FULLY AUTOMATED (no user interaction):
+├── Stage 1: ./build-etc-iso.sh runs in terminal
+│   ├── Downloads ETC release
+│   ├── Validates Ubuntu ISO
+│   ├── Detects backups from /home/{USER_USERNAME}/etc-customizer-backups/
+│   ├── Prepares project directory
+│   └── Generates Cubic instructions
+│
+└── Stage 2: Cubic build process
+    ├── Extracts Ubuntu ISO
+    ├── Cubic/ scripts execute automatically:
+    │   ├── install-dev-tools.sh ✅ AUTOMATED
+    │   ├── install-ham-tools.sh ✅ AUTOMATED
+    │   ├── configure-wifi.sh ✅ AUTOMATED (reads secrets.env)
+    │   ├── restore-backups.sh ✅ AUTOMATED (finds backups automatically)
+    │   ├── setup-desktop-defaults.sh ✅ AUTOMATED
+    │   ├── configure-aprs-apps.sh ✅ AUTOMATED
+    │   ├── configure-radio-defaults.sh ✅ AUTOMATED
+    │   └── finalize-build.sh ✅ AUTOMATED
+    └── ISO creation
+
+MANUAL STEPS (minimal):
+├── Open Cubic GUI (user launches application)
+├── Select project directory
+├── Select Ubuntu ISO source
+└── Wait for completion (automated after this point)
+
+OPTIONAL POST-INSTALL (on deployed system):
+└── Run: post-install/restore-backups-from-skel.sh (one-time after first boot)
+    └── Makes backups available for next build
+```
+
+**Philosophy**: Maximize automation in `cubic/` scripts, minimize manual Cubic GUI steps.
+
+---
+
 ## Quick Start
 
 ### Prerequisites
@@ -76,12 +144,25 @@ Creates a **single-user custom ETC ISO** containing:
    # Or with cleanup mode to save space (~3.6GB)
    ./build-etc-iso.sh -r stable -c
    ```
-4. **Follow Cubic instructions** generated in `~/etc-builds/<release-name>/CUBIC_INSTRUCTIONS.md`
-5. **Result:** Custom ISO ready to copy onto your Ventoy USB drive
+4. **Terminal**: Run Cubic commands OR open Cubic GUI (instructions generated automatically)
+5. **Cubic Chroot**: Customization scripts run automatically (hands-off) 
+6. **Terminal**: ISO ready to use
+
+**IMPORTANT DISTINCTION**: 
+- `cubic/` scripts are **fully automated** — Cubic executes them with no user intervention needed
+- Only Cubic GUI steps or specific manual operations appear in generated instructions
+- The goal is to **minimize manual steps** — all automation happens in `cubic/` scripts
 
 ### Build Script Options
 
-The `build-etc-iso.sh` script handles downloading the ETC release (source code archive from GitHub) and preparing all files for Cubic customization. It supports several options:
+The `build-etc-iso.sh` script orchestrates the entire build process, handling:
+- ✅ Download and validation of ETC release files
+- ✅ Preparation of backup files and ISO locations
+- ✅ Generation of Cubic instructions
+- ✅ Invocation of Cubic (automated)
+- ✅ Backup archival for next build
+
+All file paths are **automatically derived** from `USER_USERNAME` in `secrets.env` — no hardcoded paths.
 
 ```bash
 ./build-etc-iso.sh [OPTIONS]
@@ -496,14 +577,37 @@ nano ~/.config/YAAC/YAAC.properties
 
 ---
 
-## Backup Files
+## Backup Files and Downloaded ISOs
 
-Persistent backup files are stored in `~/etc-customizer-backups/` (external to the repository) and are automatically restored during every Cubic ISO build. This separation keeps your backups private and independent of the git repository.
+All persistent files are stored in `/home/{USER_USERNAME}/etc-customizer-backups/` where `{USER_USERNAME}` comes from your `secrets.env`:
+- **Backup files** (VARA FM, et-user configuration)
+- **Downloaded Ubuntu ISO** files
+- Any other files needed for consistent builds across systems
+
+For example, if `USER_USERNAME="david"`, the path is `/home/david/etc-customizer-backups/`
+
+This path is automatically derived from `secrets.env` making it portable across systems.
 
 **Setup** (one-time):
 ```bash
 mkdir -p ~/etc-customizer-backups/
 ```
+
+**Automatic Backup Integration**: 
+
+The build process handles backup detection **automatically**:
+
+- ✅ **Stage 1** (Terminal): `build-etc-iso.sh` detects backups in `/home/{USER_USERNAME}/etc-customizer-backups/` (auto-derived from `USER_USERNAME` in `secrets.env`)
+- ✅ **Stage 2** (Cubic Chroot): `cubic/restore-backups.sh` runs automatically — finds and restores backups without user intervention
+- ✅ **Stage 3** (Deployed System): `post-install/restore-backups-from-skel.sh` restores archived backups from `/etc/skel` to user's home
+
+**You do NOT need to manually copy files into Cubic via GUI.** All backup detection is automatic.
+
+**System Migration & Persistence**: 
+- Backups are stored in `/etc/skel/.etc-customizer-backups/` for persistence across deployments
+- After first boot on a new system, run: `post-install/restore-backups-from-skel.sh`
+- This restores backups from the system template to `~/etc-customizer-backups/`
+- All contents automatically available for next ISO build
 
 For detailed information about backup management, see [`backups/README.md`](backups/README.md).
 
@@ -513,30 +617,89 @@ For detailed information about backup management, see [`backups/README.md`](back
 
 - Static golden master restored to all new users
 - Update only when you want to establish a new baseline
-- Location: `~/etc-customizer-backups/wine.tar.gz`
+- Location: `/home/{USER_USERNAME}/etc-customizer-backups/wine.tar.gz`
 
 **et-user-current.tar.gz** - Captured automatically at build start
 
 - Preserves your callsign, grid square, radio settings during upgrades
 - No manual action needed
 - Created automatically during Cubic build if upgrading
-- Location: `~/etc-customizer-backups/et-user-current.tar.gz`
+- Persistent via `/etc/skel/.etc-customizer-backups/et-user-current.tar.gz`
+- Location: `/home/{USER_USERNAME}/etc-customizer-backups/et-user-current.tar.gz`
 
 **et-user.tar.gz** - Last known backup (fallback)
 
 - Used if et-user-current.tar.gz not available
 - Can be manually updated to establish a new baseline
-- Location: `~/etc-customizer-backups/et-user.tar.gz`
+- Persistent via `/etc/skel/.etc-customizer-backups/et-user.tar.gz`
+- Location: `/home/{USER_USERNAME}/etc-customizer-backups/et-user.tar.gz`
+
+**ubuntu-22.10-desktop-amd64.iso** - Ubuntu base ISO
+
+- Downloaded once and reused for all builds
+- Stored alongside backups for system migration
+- Location: `/home/{USER_USERNAME}/etc-customizer-backups/ubuntu-22.10-desktop-amd64.iso`
 
 ### How Backup Restoration Works
 
-During every Cubic ISO build, `cubic/restore-backups.sh` executes a three-step process:
+Backup restoration happens in **three phases**: during build, in the ISO, and after deployment.
 
-1. **Capture**: If upgrading, captures current ~/.config/emcomm-tools to ~/etc-customizer-backups/et-user-current.tar.gz
-2. **Restore VARA FM**: Extracts ~/etc-customizer-backups/wine.tar.gz to /etc/skel/.wine/ (all new users get it)
-3. **Restore et-user**: Applies et-user-current.tar.gz or et-user.tar.gz (preserves customizations)
+#### Phase 1: ISO Build (Cubic)
 
-**Result**: Fresh ISO includes your VARA FM baseline + all user customizations from previous deployment.
+`cubic/restore-backups.sh` executes during the Cubic ISO build:
+
+1. **Detect**: Finds backups in `/home/{USER_USERNAME}/etc-customizer-backups/` (from build system)
+2. **Capture**: If upgrading, captures current `~/.config/emcomm-tools/` to `et-user-current.tar.gz`
+3. **Restore to /etc/skel**: 
+   - Extracts `wine.tar.gz` to `/etc/skel/.wine/` (for new users)
+   - Extracts et-user backups to `/etc/skel/.config/emcomm-tools/`
+4. **Archive for persistence**: Copies all backups to `/etc/skel/.etc-customizer-backups/` for cross-deployment reuse
+
+**Result**: Fresh ISO includes your VARA FM baseline + customizations in system template
+
+#### Phase 2: System Deployment
+
+When custom ISO boots on new hardware:
+
+1. User account automatically created with files from `/etc/skel/`
+2. Gets `~/.wine/` with VARA FM pre-configured
+3. Gets `~/.config/emcomm-tools/` with settings pre-configured
+4. Has `/etc/skel/.etc-customizer-backups/` for post-install restoration
+
+**Result**: New system already has all configurations applied
+
+#### Phase 3: Post-Installation (First Boot)
+
+Run on deployed system to restore backups for next ISO build:
+
+```bash
+~/post-install/restore-backups-from-skel.sh
+```
+
+This script:
+- ✅ Detects archived backups in `/etc/skel/.etc-customizer-backups/`
+- ✅ Creates `~/etc-customizer-backups/` on user's system
+- ✅ Restores `wine.tar.gz`, `et-user-current.tar.gz`, `et-user.tar.gz`
+- ✅ Makes backups available for next ISO build
+- ✅ Logs to `~/.local/share/emcomm-tools-customizer/logs/`
+
+**Result**: Backups now available on deployed system for building next ISO with cached files
+
+#### Backup Lifecycle Summary
+
+```
+1. Build ISO (Phase 1):
+   - Read from: /home/{USER_USERNAME}/etc-customizer-backups/
+   - Archive to: /etc/skel/.etc-customizer-backups/
+
+2. Deploy ISO (Phase 2):
+   - New user gets: /etc/skel files including backups
+
+3. Post-Boot (Phase 3):
+   - Run: ~/post-install/restore-backups-from-skel.sh
+   - Restore to: ~/etc-customizer-backups/
+   - Ready for: Next ISO build
+```
 
 ### Creating/Updating Backups
 
