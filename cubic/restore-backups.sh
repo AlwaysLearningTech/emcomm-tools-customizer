@@ -1,13 +1,17 @@
 #!/bin/bash
 #
 # Script Name: restore-backups.sh
-# Description: Restores .wine and et-user configuration backups during Cubic ISO build
+# Description: Captures current et-user state and restores backups during Cubic ISO build
 # Usage: Run in Cubic chroot environment
 # Author: KD7DGF
-# Date: 2025-10-15
+# Date: 2025-11-28
 # Cubic Stage: Yes (runs during ISO build)
 # Post-Install: No
 #
+# Strategy:
+# 1. Capture current et-user config (if upgrading from previous deployment)
+# 2. Restore wine.tar.gz baseline (VARA FM - static golden master)
+# 3. Restore et-user config from previous run (preserves callsign, grid square, etc.)
 
 set -euo pipefail
 
@@ -26,8 +30,54 @@ log "INFO" "=== Starting Backup Restore ==="
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKUPS_DIR="$SCRIPT_DIR/../backups"
 
-# Restore .wine backup (VARA, Winlink configurations)
-# Note: Backups are tar.gz files from et-user-backup command
+# STEP 1: Capture current et-user state (if this is an upgrade build)
+# This ensures we preserve user customizations (callsign, grid square, etc.)
+log "INFO" "=== Step 1: Capture Current et-user State ==="
+
+if [ -d "$HOME/.config/emcomm-tools" ] || [ -d "$HOME/.local/share/pat" ]; then
+    log "INFO" "Detected previous et-user configuration, capturing for preservation..."
+    
+    TEMP_CAPTURE="/tmp/et-user-capture-$(date +%s)"
+    mkdir -p "$TEMP_CAPTURE/.config/emcomm-tools"
+    mkdir -p "$TEMP_CAPTURE/.local/share"
+    
+    # Define backup path for current capture
+    CURRENT_BACKUP="$BACKUPS_DIR/et-user-current.tar.gz"
+    
+    # Capture et-user config directory
+    if [ -d "$HOME/.config/emcomm-tools" ]; then
+        if cp -r "$HOME/.config/emcomm-tools" "$TEMP_CAPTURE/.config/" 2>&1 | tee -a "$LOG_FILE"; then
+            log "SUCCESS" "Captured et-user config directory"
+        else
+            log "ERROR" "Failed to capture et-user config directory"
+        fi
+    fi
+    
+    # Capture Pat mailbox and forms
+    if [ -d "$HOME/.local/share/pat" ]; then
+        if cp -r "$HOME/.local/share/pat" "$TEMP_CAPTURE/.local/share/" 2>&1 | tee -a "$LOG_FILE"; then
+            log "SUCCESS" "Captured Pat mailbox and forms"
+        else
+            log "ERROR" "Failed to capture Pat mailbox and forms"
+        fi
+    fi
+    
+    # Create backup from captured state
+    if tar -czf "$CURRENT_BACKUP" -C "$TEMP_CAPTURE" . 2>&1 | tee -a "$LOG_FILE"; then
+        log "SUCCESS" "Created et-user backup from current state: $CURRENT_BACKUP"
+    else
+        log "WARN" "Failed to create et-user backup, will use last known backup if available"
+    fi
+    
+    rm -rf "$TEMP_CAPTURE"
+else
+    log "INFO" "No previous et-user configuration found, starting fresh"
+fi
+
+# STEP 2: Restore wine.tar.gz (VARA FM - static baseline)
+# The wine backup is a golden master that never changes unless intentionally updated
+log "INFO" "=== Step 2: Restore VARA FM Configuration ==="
+
 if [ -f "$BACKUPS_DIR/wine.tar.gz" ]; then
     log "INFO" "Restoring .wine backup from tar.gz..."
     
@@ -48,11 +98,8 @@ if [ -f "$BACKUPS_DIR/wine.tar.gz" ]; then
         
         # List what was restored
         log "INFO" "Restored WINE applications:"
-        if [ -d "$WINE_DEST/drive_c/VARA" ]; then
-            log "INFO" "  - VARA HF"
-        fi
         if [ -d "$WINE_DEST/drive_c/VARA FM" ]; then
-            log "INFO" "  - VARA FM"
+            log "INFO" "  - VARA FM (VHF/UHF high-speed digital)"
         fi
         find "$WINE_DEST/drive_c" -maxdepth 2 -name "*.exe" 2>/dev/null | head -10 | while read -r exe; do
             log "INFO" "  - $(basename "$exe" .exe)"
@@ -78,84 +125,62 @@ else
     log "INFO" "No .wine backup found (looking for wine.tar.gz or wine/ directory), skipping"
 fi
 
-# Restore et-user configuration (callsign, grid square, etc.)
-# Note: Backups are tar.gz files from et-user-backup command
-if [ -f "$BACKUPS_DIR/et-user.tar.gz" ]; then
-    log "INFO" "Restoring et-user configuration from tar.gz..."
-    
-    # Extract to temporary location
-    TEMP_EXTRACT="/tmp/et-user-restore"
-    mkdir -p "$TEMP_EXTRACT"
-    
-    if tar -xzf "$BACKUPS_DIR/et-user.tar.gz" -C "$TEMP_EXTRACT" 2>&1 | tee -a "$LOG_FILE"; then
-        # Create et-user configuration directory in /etc/skel
-        ET_CONFIG_DIR="/etc/skel/.config/emcomm-tools"
-        mkdir -p "$ET_CONFIG_DIR"
+# STEP 3: Restore et-user configuration (callsign, grid square, etc.)
+# Try current backup first (from this session), then fall back to last known backup
+log "INFO" "=== Step 3: Restore et-user Configuration ==="
+
+ET_CONFIG_DIR="/etc/skel/.config/emcomm-tools"
+LAST_BACKUP="$BACKUPS_DIR/et-user.tar.gz"
+
+for backup_file in "$CURRENT_BACKUP" "$LAST_BACKUP"; do
+    if [ -f "$backup_file" ]; then
+        log "INFO" "Restoring et-user configuration from: $(basename "$backup_file")..."
         
-        # Copy user.json from extracted backup
-        if [ -f "$TEMP_EXTRACT/.config/emcomm-tools/user.json" ]; then
-            cp "$TEMP_EXTRACT/.config/emcomm-tools/user.json" "$ET_CONFIG_DIR/user.json"
-            log "SUCCESS" "et-user configuration restored"
+        # Extract to temporary location
+        TEMP_EXTRACT="/tmp/et-user-restore"
+        mkdir -p "$TEMP_EXTRACT"
+        
+        if tar -xzf "$backup_file" -C "$TEMP_EXTRACT" 2>&1 | tee -a "$LOG_FILE"; then
+            # Create et-user configuration directory in /etc/skel
+            mkdir -p "$ET_CONFIG_DIR"
             
-            # Extract and log key values
-            log "INFO" "Configuration values:"
-            if command -v jq &>/dev/null; then
-                jq -r 'to_entries[] | "  \(.key): \(.value)"' "$ET_CONFIG_DIR/user.json" 2>/dev/null | tee -a "$LOG_FILE"
-            else
-                cat "$ET_CONFIG_DIR/user.json" | tee -a "$LOG_FILE"
+            # Copy et-user config directory
+            if [ -d "$TEMP_EXTRACT/.config/emcomm-tools" ]; then
+                cp -r "$TEMP_EXTRACT/.config/emcomm-tools"/* "$ET_CONFIG_DIR/" 2>&1 | tee -a "$LOG_FILE"
+                log "SUCCESS" "et-user configuration restored"
+                
+                # Extract and log key values
+                log "INFO" "Configuration values:"
+                if [ -f "$ET_CONFIG_DIR/user.json" ] && command -v jq &>/dev/null; then
+                    jq -r 'to_entries[] | "  \(.key): \(.value)"' "$ET_CONFIG_DIR/user.json" 2>/dev/null | tee -a "$LOG_FILE" || true
+                elif [ -f "$ET_CONFIG_DIR/user.json" ]; then
+                    cat "$ET_CONFIG_DIR/user.json" | tee -a "$LOG_FILE"
+                fi
             fi
+            
+            # Copy Pat mailbox and forms if present
+            if [ -d "$TEMP_EXTRACT/.local/share/pat" ]; then
+                mkdir -p /etc/skel/.local/share/pat
+                cp -r "$TEMP_EXTRACT/.local/share/pat"/* /etc/skel/.local/share/pat/ 2>&1 | tee -a "$LOG_FILE"
+                log "SUCCESS" "Pat mailbox and forms restored"
+            fi
+            
+            # Cleanup temp extraction
+            rm -rf "$TEMP_EXTRACT"
+            
+            # Successfully restored, exit loop
+            break
         else
-            log "WARN" "user.json not found in backup, checking for legacy et-user.conf"
-            if [ -f "$BACKUPS_DIR/et-user.conf" ]; then
-                cp "$BACKUPS_DIR/et-user.conf" "$ET_CONFIG_DIR/user.conf"
-                log "SUCCESS" "Legacy et-user.conf restored"
-            fi
+            log "WARN" "Failed to extract from $backup_file, trying next backup..."
+            rm -rf "$TEMP_EXTRACT"
+            continue
         fi
-        
-        # Copy et-mode if present
-        if [ -f "$TEMP_EXTRACT/.config/emcomm-tools/et-mode" ]; then
-            cp "$TEMP_EXTRACT/.config/emcomm-tools/et-mode" "$ET_CONFIG_DIR/et-mode"
-            log "INFO" "et-mode preference restored: $(cat "$ET_CONFIG_DIR/et-mode")"
-        fi
-        
-        # Copy Pat mailbox and forms if present
-        if [ -d "$TEMP_EXTRACT/.local/share/pat" ]; then
-            mkdir -p /etc/skel/.local/share/pat
-            cp -r "$TEMP_EXTRACT/.local/share/pat"/* /etc/skel/.local/share/pat/
-            log "SUCCESS" "Pat mailbox and forms restored"
-        fi
-        
-        # Cleanup temp extraction
-        rm -rf "$TEMP_EXTRACT"
-    else
-        log "ERROR" "Failed to extract et-user backup"
-        exit 1
     fi
-elif [ -f "$BACKUPS_DIR/et-user.conf" ]; then
-    # Fallback: Handle legacy .conf file format
-    log "INFO" "Restoring et-user configuration from legacy .conf file..."
-    
-    ET_CONFIG_DIR="/etc/skel/.config/emcomm-tools"
-    mkdir -p "$ET_CONFIG_DIR"
-    
-    if cp "$BACKUPS_DIR/et-user.conf" "$ET_CONFIG_DIR/user.conf" 2>&1 | tee -a "$LOG_FILE"; then
-        log "SUCCESS" "et-user configuration restored"
-        
-        # Extract and log key values
-        log "INFO" "Configuration values:"
-        grep -E "^(CALLSIGN|GRID|NAME)" "$ET_CONFIG_DIR/user.conf" 2>/dev/null | while read -r line; do
-            log "INFO" "  $line"
-        done
-    else
-        log "ERROR" "Failed to restore et-user configuration"
-        exit 1
-    fi
-else
-    log "INFO" "No et-user backup found (looking for et-user.tar.gz or et-user.conf), skipping"
+done
+
+# If no backup files were found
+if [ ! -f "$CURRENT_BACKUP" ] && [ ! -f "$LAST_BACKUP" ]; then
+    log "INFO" "No et-user backups found (looking for et-user-current.tar.gz or et-user.tar.gz), skipping"
 fi
 
 log "SUCCESS" "=== Backup Restore Complete ==="
-
-if [ ! -d "$BACKUPS_DIR/wine" ] && [ ! -f "$BACKUPS_DIR/et-user.conf" ]; then
-    log "INFO" "No backups were provided - users will need to configure manually"
-fi

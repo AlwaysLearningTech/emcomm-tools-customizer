@@ -39,8 +39,10 @@ This customizer is built upon the outstanding work of **TheTechPrepper** and the
 Creates a **single-user custom ETC ISO** containing:
 
 - **Pre-configured WiFi networks** (home, mobile hotspot, EOC) - auto-connect on first boot
-- **Ham radio software** (CHIRP, dmrconfig, flrig) - installed and ready
+- **Ham radio software** (CHIRP, dmrconfig, hamlib, flrig) - installed and ready
 - **APRS/digital mode apps** (direwolf, YAAC, Pat/Winlink) - configured with your callsign
+- **Development tools** (VS Code, git, build tools, uv, Python) - ready for customization
+- **Git configuration** (user name/email, best practices, aliases) - pre-configured for your workflows
 - **Desktop customizations** (dark mode, accessibility, desktop shortcuts)
 - **Your preferences** (callsign, APRS settings, WiFi credentials) - all from `secrets.env`
 
@@ -195,21 +197,22 @@ The Digirig Mobile hardware provides:
 - **PTT switch** (hardware PTT control)
 
 ### Supported Radios with CAT:
-- ✅ **Anytone D578UV** (mobile radio): **FULL CAT** via `/dev/ttyUSB1`
-- ✅ Most HF transceivers with appropriate Digirig cables
+
+- ✅ **Anytone D578UV** (mobile, 2m/1.25cm/70cm): **FULL CAT** via `/dev/ttyUSB1`
 
 ### Supported Radios WITHOUT CAT (Audio + PTT only):
+
 - ❌ **Anytone D878UV** (handheld): **NO CAT** - Audio and PTT only
 - ❌ **BTech UV-Pro** (handheld): **NO CAT** - Uses upstream KISS TNC via et-radio
 
-### How flrig Integration Works (for CAT-capable radios):
+### How CAT Control Works (for Anytone D578UV):
 
 1. **Digirig Mobile connected** → Creates two serial ports:
    - `/dev/ttyUSB0` = Audio device (use in direwolf, fldigi for audio)
-   - `/dev/ttyUSB1` = CAT control (use in flrig if radio supports CAT)
+   - `/dev/ttyUSB1` = CAT control (hamlib/rigctld for frequency management)
 
-2. **flrig starts** → XML-RPC server on `localhost:12345`
-   - Radio model: Anytone D578 (for D578UV mobile)
+2. **rigctld daemon starts** → XML-RPC server on `localhost:12345`
+   - Radio model: Anytone D578UV (hamlib rig ID 242)
    - Serial port: `/dev/ttyUSB1`
    - Baud rate: 9600
 
@@ -255,7 +258,7 @@ Two files work together:
 
 2. **Edit your local `secrets.env`** with actual WiFi credentials:
    - Replace all placeholder values with your real SSIDs and passwords
-   - Set `WIFI_COUNT` to match the number of networks you configure
+   - Add networks as needed using the `WIFI_SSID_<ID>` format (script auto-detects all entries, no count needed)
 
 3. **Copy the local secrets file to the target Ubuntu system** when deploying
 
@@ -281,37 +284,34 @@ Your `secrets.env` should contain:
 Your `secrets.env` should contain:
 
 ```bash
-# User Configuration
-USER_FULLNAME="Your Name"
-USER_USERNAME="yourname"
-USER_PASSWORD="YourPassword"  # For auto-login
-CALLSIGN="N0CALL"  # Your amateur radio callsign
-MACHINE_NAME="ETC-N0CALL"  # Hostname (defaults to ETC-{CALLSIGN} if left as template)
+# User Account Configuration
+USER_FULLNAME="Your Full Name"
+USER_USERNAME="yourusername"
+USER_PASSWORD="YourPassword"
+USER_EMAIL="your.email@example.com"  # For git commits
 
-# WiFi Networks (indexed for multiple networks)
-WIFI_COUNT=3  # How many networks to configure
+# System Configuration
+CALLSIGN="N0CALL"  # Your amateur radio callsign (e.g., KD7DGF)
+MACHINE_NAME="ETC-KD7DGF"  # Hostname (defaults to ETC-{CALLSIGN})
 
-# WiFi Network 1 - Home
-WIFI_1_SSID="Home-Network-5G"
-WIFI_1_PASSWORD="HomePassword123"
-WIFI_1_AUTOCONNECT="yes"
-```
+# Desktop Environment (GNOME)
+DESKTOP_COLOR_SCHEME="prefer-dark"  # prefer-dark or prefer-light
+DESKTOP_SCALING_FACTOR="1.5"  # Display scale: 1.0 (100%), 1.5 (150%), 2.0 (200%)
 
-# WiFi Network 2 - Mobile Hotspot  
-WIFI_2_SSID="iPhone-Hotspot"
-WIFI_2_PASSWORD="HotspotPassword456"
-WIFI_2_AUTOCONNECT="no"  # Don't auto-connect to mobile
+# WiFi Networks (add as many as needed)
+WIFI_SSID_PRIMARY="Home-Network-5G"
+WIFI_PASSWORD_PRIMARY="HomePassword123"
+WIFI_AUTOCONNECT_PRIMARY="yes"
 
-# WiFi Network 3 - EOC/Field
-WIFI_3_SSID="EmComm-Field"
-WIFI_3_PASSWORD="FieldPassword789"
-WIFI_3_AUTOCONNECT="yes"
+WIFI_SSID_MOBILE="Mobile-Hotspot"
+WIFI_PASSWORD_MOBILE="MobilePassword456"
+WIFI_AUTOCONNECT_MOBILE="no"  # Don't auto-connect to mobile hotspot
 
 # APRS Configuration
-APRS_SSID="10"  # SSID for APRS (typically 10 for iGate)
-APRS_PASSCODE="-1"  # Get from apps.magicbug.co.uk/passcode
+CALLSIGN="N0CALL"
+APRS_SSID="10"
+APRS_PASSCODE="-1"  # Get from https://apps.magicbug.co.uk/passcode/
 APRS_COMMENT="EmComm iGate"
-DIGIPEATER_PATH="WIDE1-1"
 ```
 
 ---
@@ -400,32 +400,46 @@ DIREWOLF_PTT="CM108"      # USB Digirig/SignaLink (default)
 
 ### Pat/Winlink Configuration
 
-Pat Winlink is pre-installed by ETC upstream with default aliases for Winlink RMS Relay networks. This customizer adds an optional **EmComm connect alias** for emergency communications at specific ARDOP frequencies.
+Pat Winlink is pre-installed by ETC upstream. This customizer configures the **EmComm alias** for emergency communications using **VARA FM over VHF/UHF** (recommended for Anytone D578UV + Digirig Mobile).
 
 **Default Pat Aliases** (unchanged):
-- `pat connect ardop:///<CALLSIGN>` - Default ARDOP connection
-- Other standard Winlink RMS aliases available from ETC
+- `pat connect ardop:///<CALLSIGN>` - Standard Pat connection
+- Other Winlink RMS aliases available from ETC
 
-**Optional EmComm Alias** (add with customizer):
+**EmComm Alias** (configured by customizer):
 ```bash
-PAT_EMCOMM_ALIAS="yes"           # Enable EmComm alias
-PAT_EMCOMM_FREQ="3.573.0"        # HF ARDOP frequency
+PAT_EMCOMM_ALIAS="yes"        # Enable EmComm alias
+PAT_EMCOMM_MODE="VARA FM"     # VARA FM for VHF/UHF (Anytone D578UV)
 ```
 
-**Common ARDOP Frequencies by Band**:
+**Primary Modes for This Customizer**:
+
+- **VARA FM over VHF/UHF** (2m/70cm): Recommended for Anytone D578UV + Digirig Mobile
+  - Speed: 2400 bps (high-speed digital)
+  - Range: Local/regional (depends on repeater network)
+  - Hardware: Any FM radio with audio interface
+  - Use Case: Emergency email via internet-connected gateway
+
+- **AX.25 over Bluetooth TNC**: For portable field operations
+  - Speed: 1200-9600 bps
+  - Range: Local packet network
+  - Hardware: Bluetooth TNC + any FM radio
+  - Use Case: APRS, keyboard-to-keyboard digital QSOs
+
+**HF ARDOP Support** (future option):
+
+If you add HF transceiver support in the future, Pat can also connect to HF ARDOP:
 - **80m**: `3.573.0` - Primary emergency frequency
 - **40m**: `5.348.0` - Secondary emergency frequency
-- **20m**: `7.106.0` - Emergency frequency
-- **17m**: `10.149.0` - Emergency frequency
-- **15m**: `14.107.0` - Emergency frequency (often busy)
+- **20m**: `7.106.0`, **17m**: `10.149.0`, **15m**: `14.107.0`
 
 **Usage**:
 ```bash
-# With EmComm alias enabled:
-pat connect emcomm    # Connects to ARDOP at configured frequency
+# With EmComm alias enabled (VHF/UHF VARA FM):
+pat connect emcomm    # Uses configured mode (VARA FM by default)
 
-# Default Pat connection:
-pat connect ardop     # Uses standard ARDOP connection
+# Standard Pat connection:
+pat connect ardop     # Uses default RMS Relay network
 ```
 
 ### Setup Scenarios
@@ -448,11 +462,11 @@ ENABLE_APRS_BEACON="yes"
 APRS_BEACON_INTERVAL="60"
 APRS_BEACON_POWER="5"
 PAT_EMCOMM_ALIAS="yes"
-PAT_EMCOMM_FREQ="3.573.0"
+PAT_EMCOMM_MODE="VARA FM"
 DIREWOLF_ADEVICE="plughw:1,0"
 DIREWOLF_PTT="CM108"
 ```
-*Broadcasts position every 60 seconds, EmComm alias for emergency Winlink*
+*Broadcasts position every 60 seconds, EmComm alias for emergency Winlink via VARA FM*
 
 #### **Scenario 3: EmComm Event (Both iGate + Beacon)**
 ```bash
@@ -479,6 +493,130 @@ nano ~/.config/YAAC/YAAC.properties
 # Add Pat EmComm alias after first boot (if not done automatically):
 ~/.local/bin/configure-pat-emcomm
 ```
+
+---
+
+## VARA FM Backup & Restoration
+
+### Why VARA FM Backups?
+
+**VARA FM** (Variable Rate Audio Codec) is a sophisticated Windows application for high-speed Winlink over VHF/UHF. It requires:
+- **Audio calibration** - Specific levels for your Digirig Mobile interface
+- **Modem settings** - Frequency offset, PTT configuration, profiles
+- **License keys** - One-time activation per system
+
+**Building a fresh ISO every time requires recalibrating VARA FM from scratch** (tedious and error-prone).
+
+**Solution: Backup the configured Wine prefix** - The `.wine` directory contains all VARA FM settings and is automatically restored to every fresh ISO build.
+
+### How It Works
+
+1. **One-time setup**: Create a baseline `wine.tar.gz` with your calibrated VARA FM configuration
+2. **Store in repository**: Commit `wine.tar.gz` to `/backups/` directory
+3. **Automatic restoration**: Every ISO build extracts and restores VARA FM
+4. **Golden master principle**: The backup is **read-only** and never overwritten with post-deployment changes
+
+### Creating Your VARA FM Backup
+
+**On a deployed ETC system with VARA FM configured:**
+
+```bash
+# Compress your calibrated Wine prefix
+tar -czf ~/wine.tar.gz ~/.wine/
+
+# Copy to this repository (on your build system)
+# Place the file in: emcomm-tools-customizer/backups/wine.tar.gz
+
+# Commit to repository
+cd emcomm-tools-customizer
+git add backups/wine.tar.gz
+git commit -m "Add VARA FM baseline configuration backup"
+git push origin main
+```
+
+### Restoration During Builds
+
+The `cubic/restore-backups.sh` script **automatically** restores your VARA FM configuration during every ISO build:
+
+```bash
+./build-etc-iso.sh -r stable
+# Internally: restore-backups.sh:
+#   STEP 1: Captures current ~/.config/emcomm-tools to et-user-current.tar.gz
+#   STEP 2: Extracts wine.tar.gz to /etc/skel/.wine/
+#   STEP 3: Restores et-user config to /etc/skel/.config/emcomm-tools/
+# Result: Fresh system has your VARA FM + user customizations ready to use
+```
+
+### User Customizations Are Preserved On Upgrade
+
+**Three-step backup strategy:**
+
+1. **STEP 1: Capture et-user at build start** (if upgrading)
+   - Saves current callsign, grid square, radio settings
+   - Creates `et-user-current.tar.gz` (specific to this build)
+   - Ensures no loss of customizations during upgrade
+
+2. **STEP 2: Restore VARA FM baseline** 
+   - Restores static `wine.tar.gz` (your golden master)
+   - Same baseline across all deployments
+   - Audio levels reset to baseline (hardware-specific)
+
+3. **STEP 3: Restore et-user configuration**
+   - First uses `et-user-current.tar.gz` (from this build)
+   - Falls back to `et-user.tar.gz` (if not available)
+   - User's callsign, grid, radio settings automatically restored
+
+### Example Upgrade Workflow
+
+```bash
+# Deployment 1: Fresh ISO
+./build-etc-iso.sh -r stable
+# User deploys, sets: callsign=KD7DGF, grid=CN87AB, radio=Anytone D578UV
+# User tunes VARA FM locally
+
+# [Time passes, new ISO version available with better features]
+
+# Deployment 2: Upgrade ISO
+./build-etc-iso.sh -r stable
+# STEP 1: Script captures ~/.config/emcomm-tools (your settings) → et-user-current.tar.gz
+# STEP 2: Script restores wine.tar.gz (VARA FM baseline)
+# STEP 3: Script restores et-user-current (your callsign, grid, radio settings)
+# Result: New ISO has all your custom settings, can re-tune VARA FM if needed
+```
+
+### Intentionally Updating VARA FM Baseline
+
+If you find VARA FM settings that work well and want to carry them to all future deployments:
+
+```bash
+# After deploying and perfecting VARA FM on hardware:
+tar -czf ~/wine.tar.gz ~/.wine/
+
+# Update repository baseline
+cp ~/wine.tar.gz /path/to/emcomm-tools-customizer/backups/wine.tar.gz
+
+# Commit as new baseline
+cd /path/to/emcomm-tools-customizer
+git add backups/wine.tar.gz
+git commit -m "Update VARA FM baseline with improved calibration"
+git push origin main
+```
+
+**Result:** Next build will restore THIS audio calibration to all future deployments.
+
+### Decision Points
+
+**Keep changes LOCAL (default):**
+
+- Each system has different hardware (Digirig audio levels vary)
+- User's VARA FM audio tuning is hardware-specific
+- Don't commit VARA FM changes to repository
+
+**Commit changes to repository (intentional):**
+
+- You've found VARA FM settings that work across multiple systems
+- Want a team standard baseline for consistent behavior
+- Settings represent a known-good configuration
 
 ---
 

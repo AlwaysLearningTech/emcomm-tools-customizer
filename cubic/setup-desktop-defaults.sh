@@ -23,6 +23,25 @@ log() {
 
 log "INFO" "=== Starting Desktop Configuration ==="
 
+# Source secrets.env for desktop preferences
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SECRETS_FILE="$SCRIPT_DIR/../secrets.env"
+
+if [[ -f "$SECRETS_FILE" ]]; then
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+fi
+
+# Set defaults if not provided in secrets.env
+COLOR_SCHEME="${DESKTOP_COLOR_SCHEME:-prefer-dark}"
+SCALING_FACTOR="${DESKTOP_SCALING_FACTOR:-1.5}"
+IDLE_TIMEOUT="${DESKTOP_IDLE_TIMEOUT:-900}"
+SLEEP_AC="${DESKTOP_SLEEP_AC:-3600}"
+SLEEP_BATTERY="${DESKTOP_SLEEP_BATTERY:-1800}"
+SCREEN_KEYBOARD="${DESKTOP_SCREEN_KEYBOARD:-false}"
+
+log "INFO" "Desktop settings: color-scheme=$COLOR_SCHEME, scaling=$SCALING_FACTOR, idle=$IDLE_TIMEOUT"
+
 # Configure GNOME settings via dconf system database
 # This applies settings to all new users created from the ISO
 
@@ -46,26 +65,56 @@ cat > /etc/dconf/db/emcomm.d/01-emcomm-defaults <<'EOF'
 # Applied to all users created from this ISO
 
 [org/gnome/desktop/interface]
-# Enable dark mode
+# Color scheme: prefer-dark or prefer-light
 color-scheme='prefer-dark'
 gtk-theme='Yaru-dark'
 
-# Display scaling (100% = 1.0, 125% = 1.25, etc.)
-text-scaling-factor=1.0
+# Display scaling (150% = 1.5, 100% = 1.0, 125% = 1.25, 200% = 2.0)
+text-scaling-factor=1.5
 
 [org/gnome/desktop/a11y/applications]
-# Disable on-screen keyboard (not needed for field operations)
+# Screen keyboard: true or false
 screen-keyboard-enabled=false
 
 [org/gnome/desktop/session]
-# Reduce idle timeout for battery conservation
+# Idle timeout in seconds before display dims
 idle-delay=uint32 900
 
 [org/gnome/settings-daemon/plugins/power]
-# Power management for field operations
+# Power management: sleep timeouts in seconds
 sleep-inactive-ac-timeout=3600
 sleep-inactive-battery-timeout=1800
 EOF
+
+# Apply the variables from secrets.env if provided
+if [[ "$COLOR_SCHEME" != "prefer-dark" ]] || [[ "$SCALING_FACTOR" != "1.5" ]] || [[ "$IDLE_TIMEOUT" != "900" ]] || [[ "$SLEEP_AC" != "3600" ]] || [[ "$SLEEP_BATTERY" != "1800" ]] || [[ "$SCREEN_KEYBOARD" != "false" ]]; then
+    log "INFO" "Applying custom desktop settings from secrets.env..."
+    cat > /etc/dconf/db/emcomm.d/01-emcomm-defaults <<EOF
+# EmComm Tools Desktop Defaults
+# Applied to all users created from this ISO
+
+[org/gnome/desktop/interface]
+# Color scheme: prefer-dark or prefer-light
+color-scheme=$COLOR_SCHEME
+gtk-theme='Yaru-dark'
+
+# Display scaling (150% = 1.5, 100% = 1.0, 125% = 1.25, 200% = 2.0)
+text-scaling-factor=$SCALING_FACTOR
+
+[org/gnome/desktop/a11y/applications]
+# Screen keyboard: true or false
+screen-keyboard-enabled=$SCREEN_KEYBOARD
+
+[org/gnome/desktop/session]
+# Idle timeout in seconds before display dims
+idle-delay=uint32 $IDLE_TIMEOUT
+
+[org/gnome/settings-daemon/plugins/power]
+# Power management: sleep timeouts in seconds
+sleep-inactive-ac-timeout=$SLEEP_AC
+sleep-inactive-battery-timeout=$SLEEP_BATTERY
+EOF
+fi
 
 log "SUCCESS" "Dconf defaults configured"
 
@@ -86,6 +135,7 @@ mkdir -p /etc/skel/.config/dconf
 mkdir -p /etc/skel/.local/share/applications
 
 # Create initial dconf user overrides directory
+mkdir -p /etc/skel/.config/dconf/user.d
 cat > /etc/skel/.config/dconf/user.d/README.txt <<'EOF'
 This directory contains user-level dconf configuration overrides.
 System defaults are defined in /etc/dconf/db/emcomm.d/

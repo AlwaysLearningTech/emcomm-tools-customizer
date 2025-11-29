@@ -473,6 +473,62 @@ download_etc_installer() {
     return 0
 }
 
+# Extract ETC installer tarball into project directory
+extract_etc_installer() {
+    local tarball_path="${DOWNLOADS_DIR}/${TARBALL_FILE}"
+    local extract_dir="${PROJECT_DIR}/etc-source"
+    
+    if [ ! -f "$tarball_path" ]; then
+        log "ERROR" "ETC installer tarball not found: $tarball_path"
+        return 1
+    fi
+    
+    if [ -d "$extract_dir" ]; then
+        log "INFO" "ETC installer already extracted: $extract_dir"
+        return 0
+    fi
+    
+    log "INFO" "Extracting ETC installer tarball..."
+    log "INFO" "Source: $tarball_path"
+    log "INFO" "Destination: $extract_dir"
+    
+    if [ $DRY_RUN -eq 0 ]; then
+        mkdir -p "$extract_dir"
+        
+        # GitHub tarballs extract to a directory like 'owner-repo-hash'
+        # We need to extract and handle the directory structure
+        if ! tar -xzf "$tarball_path" -C "$extract_dir" 2>&1 | tee -a "$LOG_FILE"; then
+            log "ERROR" "Failed to extract ETC installer tarball"
+            return 1
+        fi
+        
+        # Find the extracted directory (GitHub creates owner-repo-hash/ directory)
+        local extracted_dir
+        extracted_dir=$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d | head -1)
+        
+        if [ -z "$extracted_dir" ]; then
+            log "ERROR" "Failed to find extracted directory in: $extract_dir"
+            return 1
+        fi
+        
+        # Move contents up one level for easier access
+        log "INFO" "Organizing extracted files..."
+        if ! mv "$extracted_dir"/* "$extract_dir/" 2>&1 | tee -a "$LOG_FILE"; then
+            log "WARN" "Some files may not have been moved (this is usually OK)"
+        fi
+        
+        # Remove the now-empty subdirectory if it exists
+        rmdir "$extracted_dir" 2>/dev/null || true
+        
+        log "SUCCESS" "ETC installer tarball extracted successfully"
+        log "INFO" "Scripts available at: $extract_dir/scripts/"
+    else
+        log "DRY-RUN" "Would extract: $tarball_path to: $extract_dir"
+    fi
+    
+    return 0
+}
+
 # Prepare private files
 prepare_private_files() {
     if [ -z "$PRIVATE_FILES_PATH" ]; then
@@ -755,8 +811,9 @@ From your HOST machine (not Cubic terminal), copy files:
 cd /root  # Or wherever you copied the scripts
 
 # Run Cubic customization scripts in order:
-chmod +x cubic/*.sh
+# (Scripts already have execute permissions, just run them directly)
 
+./install-dev-tools.sh
 ./install-ham-tools.sh
 ./configure-aprs-apps.sh
 ./setup-desktop-defaults.sh
@@ -885,19 +942,20 @@ else
 fi)
 
 Execution order:
-1. install-ham-tools.sh - CHIRP, dmrconfig, flrig, LibreOffice
-2. configure-aprs-apps.sh - direwolf/YAAC/Pat config (from secrets.env)
-3. setup-desktop-defaults.sh - GNOME dark mode, accessibility
-4. setup-user-and-hostname.sh - User creation and hostname (ETC-{CALLSIGN})
-5. configure-wifi.sh - WiFi pre-configuration (requires secrets.env)
-6. configure-radio-defaults.sh - Radio presets (BTech/Anytone)
-7. restore-backups.sh - .wine and et-user restore (if provided)
-8. install-private-files.sh - Private files (if provided)
-9. embed-ubuntu-iso.sh - Embed Ubuntu ISO for future builds
-10. finalize-build.sh - Cleanup and manifest generation
+1. install-dev-tools.sh - VS Code, uv, git, build essentials
+2. install-ham-tools.sh - CHIRP, dmrconfig, flrig, LibreOffice
+3. configure-aprs-apps.sh - direwolf/YAAC/Pat config (from secrets.env)
+4. setup-desktop-defaults.sh - GNOME dark mode, accessibility
+5. setup-user-and-hostname.sh - User creation and hostname (ETC-{CALLSIGN})
+6. configure-wifi.sh - WiFi pre-configuration (requires secrets.env)
+7. configure-radio-defaults.sh - Radio presets (BTech/Anytone)
+8. restore-backups.sh - .wine and et-user restore (if provided)
+9. install-private-files.sh - Private files (if provided)
+10. embed-ubuntu-iso.sh - Embed Ubuntu ISO for future builds
+11. finalize-build.sh - Cleanup and manifest generation
 
 Note: If cleanup mode (-c) is used, add this step before creating ISO:
-  11. Remove embedded Ubuntu ISO: rm -f /opt/emcomm-resources/ubuntu-*.iso
+  12. Remove embedded Ubuntu ISO: rm -f /opt/emcomm-resources/ubuntu-*.iso
 
 === SECRETS CONFIGURATION ===
 WiFi Configuration: ${SCRIPT_DIR}/secrets.env
@@ -951,6 +1009,18 @@ main() {
         exit 1
     fi
     
+    # Create project directory (needed for tarball extraction)
+    if ! create_project_directory; then
+        log "ERROR" "Failed to create project directory"
+        exit 1
+    fi
+    
+    # Extract ETC installer tarball
+    if ! extract_etc_installer; then
+        log "ERROR" "Failed to extract ETC installer"
+        exit 1
+    fi
+    
     # Prepare private files
     if ! prepare_private_files; then
         log "ERROR" "Failed to prepare private files"
@@ -960,12 +1030,6 @@ main() {
     # Prepare backups
     if ! prepare_backups; then
         log "ERROR" "Failed to prepare backups"
-        exit 1
-    fi
-    
-    # Create project directory
-    if ! create_project_directory; then
-        log "ERROR" "Failed to create project directory"
         exit 1
     fi
     

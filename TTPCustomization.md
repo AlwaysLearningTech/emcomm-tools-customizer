@@ -179,30 +179,32 @@ This project uses a **secrets management system**:
 
 1. **Create a secrets template** (`secrets.env.template`):
    - Contains placeholder values that can be safely committed to GitHub
-   - Uses indexed format: `WIFI_1_SSID`, `WIFI_2_SSID`, etc.
+   - Uses identifier-based format: `WIFI_SSID_PRIMARY`, `WIFI_SSID_MOBILE`, etc.
 
 2. **Create your local secrets file**:
    - **Using GitHub Repositories Extension:** Right-click `secrets.env.template` → Copy → Paste → Rename to `secrets.env`
    - **Save this file locally** (outside the virtual workspace)
    - Fill in your actual WiFi credentials
 
-3. **Configure WiFi networks**:
+3. **Configure WiFi networks** (add as many as needed):
    ```bash
-   # Number of WiFi networks to configure
-   WIFI_COUNT=3
-
    # WiFi Network 1 - Primary
-   WIFI_1_SSID="YourNetworkName"
-   WIFI_1_PASSWORD="YourPassword"
-   WIFI_1_AUTOCONNECT="yes"
+   WIFI_SSID_PRIMARY="YourNetworkName"
+   WIFI_PASSWORD_PRIMARY="YourPassword"
+   WIFI_AUTOCONNECT_PRIMARY="yes"
 
    # WiFi Network 2 - Mobile hotspot
-   WIFI_2_SSID="YourPhoneHotspot"  
-   WIFI_2_PASSWORD="YourHotspotPassword"
-   WIFI_2_AUTOCONNECT="no"  # Don't auto-connect to mobile
+   WIFI_SSID_MOBILE="YourPhoneHotspot"  
+   WIFI_PASSWORD_MOBILE="YourHotspotPassword"
+   WIFI_AUTOCONNECT_MOBILE="no"  # Don't auto-connect to mobile
+   
+   # Add more as needed - script auto-detects all WIFI_SSID_* entries
+   # WIFI_SSID_BACKUP="BackupNetwork"
+   # WIFI_PASSWORD_BACKUP="BackupPassword"
+   # WIFI_AUTOCONNECT_BACKUP="yes"
    ```
 
-4. **The script automatically loops** through all configured networks using the `WIFI_COUNT` variable
+4. **The script automatically detects** all configured networks by scanning for `WIFI_SSID_*` entries (no fixed count needed)
 
 5. **Deploy securely**: Copy your local `secrets.env` directly to the target Ubuntu system
 
@@ -249,7 +251,61 @@ Your script is now safely stored in your repository and can be accessed or share
 5. Make the script executable: `chmod +x install-customizations.sh`
 6. Run the script: `./install-customizations.sh`
 
-### 9. Documenting Your Customizations
+### 9. Radio Configuration Reference
+
+This customizer is configured for **VHF/UHF digital operations** (2m, 1.25cm, 70cm bands) using modern digital modes optimized for local and regional emergency communications.
+
+**Your Primary Setup:**
+
+**DMR (Digital Mobile Radio)** - Anytone D578UV
+
+- Mode: 12.5 kHz narrowband digital (modern, efficient)
+- Tools: CHIRP (Windows programming), dmrconfig (native Linux support)
+- CAT Control: Full frequency/mode control via Digirig Mobile + hamlib/rigctld
+- Networks: Local repeaters, PNWDigital, SeattleDMR statewide
+- Advantage: Modern protocol, good coverage, reliable in field conditions
+
+**VARA FM over VHF/UHF** - Pat Winlink client
+
+- Mode: High-speed digital modulation over standard 2m/70cm FM
+- Tools: Pat (Winlink email client), VARA FM codec (installed via .wine backup)
+- Hardware: Anytone D578UV + Digirig Mobile
+- Use Case: Emergency email via internet-connected gateway (when available)
+- Speed: 2400 bps (much faster than traditional HF ARDOP)
+- Benefit: Works on VHF/UHF where reception is typically better than HF
+
+**AX.25 Packet Radio** - Bluetooth TNC (portable)
+
+- Mode: Traditional packet radio protocol (lightweight, proven)
+- Tools: direwolf (TNC emulation), YAAC or APRS clients
+- Interface: Bluetooth TNC (e.g., WA5DJJ) for laptop field operations
+- Use Case: APRS position reporting, keyboard-to-keyboard digital QSOs, packet network
+- Advantage: Portable setup, no USB cables, works with any FM radio
+- Ideal for: Emergency responders with mobile laptops
+
+**Why This Focus (VHF/UHF Only)?**
+
+Optimized for **local/regional emergency communications**:
+
+- More reliable in urban/mountainous terrain (shorter wavelengths penetrate better)
+- Faster setup—no antenna tuning, just power on and go
+- Works indoors and in Faraday cage environments where HF doesn't
+- Better for field operations—portable 2m rig vs. heavy HF transceiver
+- Lower power consumption (critical for battery-powered field deployments)
+- Faster digital speeds via VARA FM (2400 bps vs. 300-1200 bps HF ARDOP)
+
+**Future HF Expansion (Optional):**
+
+The system architecture supports HF transceivers if needed. To add HF capabilities:
+
+1. Add CAT control for your HF radio (FT-897D, etc.) via Digirig or USB interface
+2. Install fldigi or JS8Call for HF digital modes
+3. Configure Pat for HF ARDOP mode (slower, but long-distance capable)
+4. Add separate frequency allocations in CHIRP/dmrconfig
+
+But for now, **VHF/UHF is the primary focus** of this customizer.
+
+### 10. Documenting Your Customizations
 
 Good documentation helps you remember your choices and helps others learn from your work. You can generate professional documentation using Copilot:
 
@@ -264,19 +320,21 @@ Markdown is a lightweight markup language that makes it easy to format text usin
 
 #### Creating Documentation with Copilot
 
-1. **Ask Copilot Chat:**  
+1. **Ask Copilot Chat:**
+
    - Open a new file named `README.md`
-   - Prompt Copilot:  
-     ```
-     Generate a README for this EmComm Tools customization project.
-     Include:
-     - Project overview
-     - Prerequisites (Cubic, Ubuntu, secrets.env)
-     - Installation/build instructions
-     - Usage examples
-     - Troubleshooting tips
-     - Radio compatibility notes
-     ```
+   - Prompt Copilot:
+
+   ```text
+   Generate a README for this EmComm Tools customization project.
+   Include:
+   - Project overview
+   - Prerequisites (Cubic, Ubuntu, secrets.env)
+   - Installation/build instructions
+   - Usage examples
+   - Troubleshooting tips
+   - Radio compatibility notes
+   ```
 
 2. **Use VS Code Extensions for Markdown:**  
    - [Markdown All in One](https://marketplace.visualstudio.com/items?itemName=yzhang.markdown-all-in-one) - Auto-formatting, table of contents

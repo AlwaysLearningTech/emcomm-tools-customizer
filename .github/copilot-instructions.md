@@ -10,7 +10,7 @@
 ## Project Overview
 This project provides customizations for **EmComm Tools Community (ETC)**, a turnkey Ubuntu-based operating system for emergency communications by amateur radio operators.
 
-- **Upstream Project**: https://github.com/thetechprepper/emcomm-tools-os-community
+- **Upstream Project**: https://github.com/thetechprepper/emcomm-tools-os-community (R5 - Released 2025-11-28)
 - **Documentation**: https://community.emcommtools.com/
 - **Base OS**: Ubuntu 22.10 (customized via Cubic for ISO creation)
 - **Target Users**: Amateur radio operators, emergency coordinators, field operators (single-user deployments)
@@ -31,7 +31,7 @@ This project provides customizations for **EmComm Tools Community (ETC)**, a tur
 
 ## Project Architecture
 
-### Directory Structure
+### Recent Updates (Code Review - 2025-11-28)
 ```
 emcomm-tools-customizer/
 ├── .github/
@@ -39,15 +39,20 @@ emcomm-tools-customizer/
 ├── .gitignore                      # Protects secrets.env and other sensitive files
 ├── README.md                       # User-facing documentation
 ├── TTPCustomization.md             # Beginner's guide to Copilot and bash scripting
-├── secrets.env.template            # Template for WiFi credentials (safe to commit)
+├── secrets.env.template            # Template for all configuration (safe to commit)
 ├── secrets.env                     # Actual secrets (NEVER commit - gitignored)
 ├── cubic/                          # Scripts that run during ISO build in Cubic
-│   ├── install-base-packages.sh   # APT packages, system-wide configs
-│   ├── install-ham-tools.sh       # CHIRP, dmrconfig, other radio tools
+│   ├── install-dev-tools.sh       # VS Code, uv, git, build essentials
+│   ├── install-ham-tools.sh       # CHIRP, dmrconfig, flrig, radio tools
 │   ├── setup-desktop-defaults.sh  # Desktop environment, themes, accessibility
 │   ├── configure-wifi.sh          # WiFi setup (sources secrets.env during build)
-│   ├── download-resources.sh      # Download docs during build (internet available)
-│   └── finalize-build.sh          # Final cleanup, optimization
+│   ├── configure-aprs-apps.sh     # APRS/digital mode configuration
+│   ├── configure-radio-defaults.sh # Radio presets and defaults
+│   ├── setup-user-and-hostname.sh # User creation and hostname setup
+│   ├── restore-backups.sh         # Restore .wine and et-user backups
+│   ├── install-private-files.sh   # Install custom private files
+│   ├── embed-ubuntu-iso.sh        # Embed Ubuntu ISO for future builds
+│   └── finalize-build.sh          # Final cleanup and optimization
 └── images/                         # Screenshots for documentation
 
 Note: post-install/ directory is ONLY for edge cases that truly cannot be done in Cubic
@@ -232,8 +237,8 @@ local package_name="dmrconfig"
 local install_path="/opt/hamtools"
 
 # Environment variables from secrets.env (uppercase)
-WIFI_1_SSID="MyNetwork"
-WIFI_1_PASSWORD="secret123"
+WIFI_SSID_PRIMARY="MyNetwork"
+WIFI_PASSWORD_PRIMARY="secret123"
 ```
 
 ### Function Naming
@@ -300,32 +305,47 @@ echo "User: $USER"  # Prints: User: kd7dgf
 **CRITICAL: NEVER commit actual secrets to git!**
 
 #### Template File (secrets.env.template)
+
+The secrets.env.template file contains all configuration: user account, system settings, desktop preferences, networking, and radio apps. Users fill in actual values in their local secrets.env file.
+
 ```bash
-# WiFi Credentials Configuration
+# All Configuration (User Account, System, Network, Radio)
 # Copy this file to secrets.env and fill in your actual values
 # DO NOT commit secrets.env to git - it should only exist locally
 
-# Number of WiFi networks to configure
-WIFI_COUNT=2
+# User Account Creation
+USER_FULLNAME="Your Full Name"
+USER_USERNAME="yourusername"
+USER_PASSWORD="YourPassword"
+USER_EMAIL="your.email@example.com"  # For git commits
 
-# WiFi Network 1 (Primary)
-WIFI_1_SSID="YOUR_PRIMARY_SSID"
-WIFI_1_PASSWORD="YOUR_PRIMARY_PASSWORD"
-WIFI_1_AUTOCONNECT="yes"
+# System Configuration
+CALLSIGN="N0CALL"
+MACHINE_NAME=""  # Defaults to ETC-{CALLSIGN}
 
-# WiFi Network 2 (Secondary - mobile hotspot)
-WIFI_2_SSID="YOUR_SECONDARY_SSID"
-WIFI_2_PASSWORD="YOUR_SECONDARY_PASSWORD"
-WIFI_2_AUTOCONNECT="no"
+# Desktop Environment
+DESKTOP_COLOR_SCHEME="prefer-dark"  # prefer-dark or prefer-light
+DESKTOP_SCALING_FACTOR="1.5"  # 1.0=100%, 1.5=150%, 2.0=200%
 
-# Add more networks by incrementing:
-# WIFI_3_SSID="..."
-# WIFI_3_PASSWORD="..."
-# WIFI_3_AUTOCONNECT="yes"
-# And update WIFI_COUNT
+# WiFi Networks (add as many as needed - script auto-detects all WIFI_SSID_* entries)
+WIFI_SSID_PRIMARY="YOUR_PRIMARY_SSID"
+WIFI_PASSWORD_PRIMARY="YOUR_PRIMARY_PASSWORD"
+WIFI_AUTOCONNECT_PRIMARY="yes"
+
+WIFI_SSID_MOBILE="YOUR_MOBILE_SSID"
+WIFI_PASSWORD_MOBILE="YOUR_MOBILE_PASSWORD"
+WIFI_AUTOCONNECT_MOBILE="no"
+
+# APRS Configuration
+APRS_SSID="10"
+APRS_PASSCODE="-1"
+APRS_COMMENT="EmComm iGate"
 ```
 
 #### Loading Secrets in Scripts
+
+Scripts source secrets.env at build time (during Cubic), read the variables, and apply them to system configuration:
+
 ```bash
 #!/bin/bash
 
@@ -333,7 +353,7 @@ WIFI_2_AUTOCONNECT="no"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source the secrets file
-SECRETS_FILE="$SCRIPT_DIR/secrets.env"
+SECRETS_FILE="$SCRIPT_DIR/../secrets.env"
 if [[ ! -f "$SECRETS_FILE" ]]; then
     echo "ERROR: secrets.env file not found at $SECRETS_FILE"
     echo "Please copy secrets.env.template to secrets.env and fill in your credentials"
@@ -343,11 +363,23 @@ fi
 # shellcheck source=/dev/null
 source "$SECRETS_FILE"
 
-# Validate required variables
-if [[ -z "$WIFI_COUNT" ]] || [[ "$WIFI_COUNT" -lt 1 ]]; then
-    echo "ERROR: WIFI_COUNT not set or invalid in secrets.env"
-    exit 2
-fi
+# Use variables from secrets.env
+CALLSIGN="${CALLSIGN:-N0CALL}"
+MACHINE_NAME="${MACHINE_NAME:-ETC-${CALLSIGN}}"
+USER_EMAIL="${USER_EMAIL:-user@localhost}"
+
+# Example: Dynamically configure WiFi networks (auto-detect all WIFI_SSID_* entries)
+for var in $(compgen -v | grep "^WIFI_SSID_"); do
+    identifier="${var#WIFI_SSID_}"
+    ssid="${!var}"
+    password_var="WIFI_PASSWORD_${identifier}"
+    password="${!password_var:-}"
+    
+    [[ -z "$ssid" ]] && continue
+    [[ -z "$password" ]] && continue
+    
+    # Configure network with $ssid and $password...
+done
 ```
 
 #### .gitignore Protection
@@ -371,6 +403,323 @@ logs/
 .DS_Store
 Thumbs.db
 ```
+
+## Git Configuration
+
+### Overview
+
+Git is configured during the Cubic ISO build by reading credentials from `secrets.env`. This allows:
+
+1. **Personalized git user name/email** baked into the ISO
+2. **Best-practice git settings** automatically applied to all new users
+3. **Credentials NOT hardcoded** - they come from your local secrets.env file
+4. **SSH keys kept separate** - generated unique to each system for security
+
+### Configuration in install-dev-tools.sh
+
+The `cubic/install-dev-tools.sh` script reads git credentials from `secrets.env` during the Cubic ISO build:
+
+```bash
+# Source secrets.env to get user account info (name and email)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SECRETS_FILE="$SCRIPT_DIR/../secrets.env"
+
+if [[ ! -f "$SECRETS_FILE" ]]; then
+    log "WARN" "secrets.env not found - using default user information"
+    GIT_NAME="User"
+    GIT_EMAIL="user@localhost"
+else
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    # Get git credentials from user account section (USER_FULLNAME, USER_EMAIL)
+    GIT_NAME="${USER_FULLNAME:-User}"
+    GIT_EMAIL="${USER_EMAIL:-user@localhost}"
+    if [[ "$GIT_NAME" == "Your Full Name" ]] || [[ "$GIT_EMAIL" == "your.email@example.com" ]]; then
+        log "WARN" "User account not configured in secrets.env - using defaults"
+        GIT_NAME="User"
+        GIT_EMAIL="user@localhost"
+    fi
+fi
+
+# Apply git configuration
+git config --global user.name "$GIT_NAME"
+git config --global user.email "$GIT_EMAIL"
+git config --global core.autocrlf input
+git config --global core.safecrlf warn
+git config --global pull.rebase false
+git config --global color.ui auto
+git config --global push.default simple
+git config --global init.defaultBranch main
+git config --global status.showUntrackedFiles all
+git config --global diff.algorithm patience
+git config --global merge.conflictstyle diff3
+```
+
+### secrets.env Configuration
+
+Add these lines to your `secrets.env` file:
+
+```bash
+# Git Configuration (for development workflows)
+# These credentials will be baked into the custom ISO and applied globally
+# WARNING: These are sensitive credentials - NEVER commit secrets.env to git!
+GIT_NAME="Your Full Name"  # Your full name for git commits
+GIT_EMAIL="yourname@example.com"  # Your email for git commits
+```
+
+**Note:** SSH keys are NOT stored in secrets.env (see SSH key setup below).
+
+### SSH Key Management (Post-Deployment)
+
+**IMPORTANT:** SSH keys should be **unique to each system** and generated **after deployment**, not baked into the ISO.
+
+**Why:**
+- Each system needs its own SSH key pair
+- Keeping private keys out of build files reduces attack surface
+- Keys generated on the deployed system stay fully under your control
+- If ISO is compromised, private keys are not exposed
+
+**Setup on deployed system (one-time):**
+
+```bash
+# Generate SSH key for this specific system
+ssh-keygen -t ed25519 -C "snyder.dl@outlook.com"
+# Press Enter to use default location (~/.ssh/id_ed25519)
+# Enter a strong passphrase when prompted
+
+# View your public key
+cat ~/.ssh/id_ed25519.pub
+
+# Add to GitHub: Settings → SSH Keys → New SSH Key
+# Paste the contents of ~/.ssh/id_ed25519.pub
+
+# Test the connection
+ssh -T git@github.com
+# Should see: Hi username! You've successfully authenticated...
+```
+
+**Optional: Use HTTPS instead of SSH**
+
+If you prefer HTTPS authentication (no SSH key setup needed):
+
+```bash
+# Clone with HTTPS
+git clone https://github.com/AlwaysLearningTech/emcomm-tools-customizer.git
+
+# Use personal access token when prompted for password
+# Create token at: GitHub → Settings → Developer settings → Personal access tokens
+```
+
+### Security Best Practices
+
+**✅ DO:**
+- Store `secrets.env` locally ONLY (never in git)
+- Generate SSH keys directly on each deployed system
+- Use a strong passphrase when generating keys
+- Keep SSH private keys on the system where generated
+- Use different SSH keys for different systems/purposes
+
+**✅ OPTIONAL - Better SSH Management:**
+- Use SSH config file (`~/.ssh/config`) for multiple keys/hosts
+- Use SSH agent to manage passphrases (`ssh-agent`)
+- Rotate SSH keys periodically
+
+**❌ DON'T:**
+- Include SSH keys in `secrets.env` or any configuration file
+- Commit `secrets.env` to git
+- Share SSH private keys
+- Use same SSH key across multiple systems
+- Store private keys in version control or build files
+
+**Recommended approach: SSH keys generated on deployed system**
+
+SSH keys should be generated directly on the system where they'll be used (the deployed ETC system), not on your development machine or in build templates.
+
+### .gitconfig Template in /etc/skel
+
+A complete `.gitconfig` file is placed in `/etc/skel/.gitconfig` during the Cubic build. This file is automatically copied to every user's home directory when created from the customized ISO.
+
+**Key sections:**
+
+```ini
+[user]
+    name = $GIT_NAME
+    email = $GIT_EMAIL
+
+[core]
+    # Use LF line endings on Linux
+    autocrlf = input
+    # Warn if CRLF would be introduced
+    safecrlf = warn
+    # Store file permissions in git (important for scripts like cubic/*.sh)
+    filemode = true
+
+[pull]
+    # Use merge strategy (safer than rebase)
+    rebase = false
+
+[color]
+    # Colorize output for readability
+    ui = auto
+    status = auto
+    branch = auto
+    diff = auto
+
+[push]
+    # Push only current branch (safer default)
+    default = simple
+
+[init]
+    # Default branch name for new repos (matches GitHub/modern standard)
+    defaultBranch = main
+
+[alias]
+    # Common shortcuts
+    st = status
+    co = checkout
+    br = branch
+    ci = commit
+    unstage = reset HEAD --
+    last = log -1 HEAD
+    visual = log --graph --oneline --all
+
+[diff]
+    # Use patience algorithm for better diff quality
+    algorithm = patience
+
+[merge]
+    # Provide clearer conflict resolution context
+    conflictstyle = diff3
+```
+
+**Note:** Git user name/email are injected from `secrets.env` at build time, so they appear as variables in the template.
+
+### Git Workflow Best Practices
+
+#### Committing Changes
+
+**Standard workflow for this project:**
+
+```bash
+# Check status before committing
+git status
+
+# Stage specific files
+git add cubic/install-dev-tools.sh
+git add README.md
+
+# Or stage all changes
+git add .
+
+# Commit with descriptive message
+git commit -m "Add git configuration to install-dev-tools.sh"
+
+# Push to remote
+git push origin main
+```
+
+**Commit message format:**
+- **First line**: 50 characters or less, imperative mood
+  - ✅ Good: "Add git configuration to dev tools"
+  - ❌ Bad: "Added git configuration" or "git stuff"
+- **Blank line**: Separate summary from body
+- **Body** (optional): Explain what and why, not how
+
+**Example:**
+```
+Add git configuration to install-dev-tools script
+
+- Configure user name/email for David Snyder
+- Set core.autocrlf=input for cross-platform compatibility
+- Add .gitconfig template to /etc/skel for all users
+- Use patience algorithm for better diffs
+```
+
+#### Branching Strategy
+
+For this project:
+
+- **main**: Production-ready ISO builds
+- **feature/radio-support**: New radio variant support
+- **feature/documentation**: Documentation improvements
+- **fix/bug-description**: Bug fixes
+
+```bash
+# Create feature branch
+git checkout -b feature/anytone-578-support
+
+# Make changes, commit
+git add .
+git commit -m "Add Anytone D578UV CAT support"
+
+# Push to GitHub
+git push origin feature/anytone-578-support
+
+# Create pull request on GitHub
+```
+
+#### Viewing Commit History
+
+```bash
+# Last 5 commits
+git log -5
+
+# One-line summary with graph
+git log --oneline --graph --all
+
+# Or use the configured alias
+git visual
+
+# Commits by author
+git log --author="David Snyder"
+
+# Commits affecting specific file
+git log -p cubic/install-dev-tools.sh
+```
+
+### SSH Key Advantages (Optional)
+
+If you plan to push/pull frequently without entering a password, consider SSH keys:
+
+**Advantages:**
+- No password required for git operations
+- More secure than HTTPS credentials
+- Works across all git tools and IDEs
+- Can restrict permissions per-key
+
+**Disadvantages:**
+- Requires initial setup
+- Key management responsibility
+- Not needed for read-only access
+
+**Setup (if desired):**
+
+```bash
+# Generate SSH key (one-time)
+ssh-keygen -t ed25519 -C "snyder.dl@outlook.com"
+
+# Add to SSH agent
+eval "$(ssh-agent -s)"
+ssh-add ~/.ssh/id_ed25519
+
+# Add public key to GitHub
+# Copy: cat ~/.ssh/id_ed25519.pub
+# Settings → SSH Keys → New SSH Key → Paste
+
+# Test connection
+ssh -T git@github.com
+```
+
+**Usage:**
+```bash
+# Clone with SSH (no password required)
+git clone git@github.com:AlwaysLearningTech/emcomm-tools-customizer.git
+
+# Configure for existing repository
+git remote set-url origin git@github.com:AlwaysLearningTech/emcomm-tools-customizer.git
+```
+
+**SSH keys are optional** for this project. HTTPS authentication (username + token) works fine if you prefer simpler setup.
 
 ## Cubic Integration
 
@@ -560,6 +909,299 @@ fi
 | Interactive wizards | ❌ | ✅ | Requires user interaction at runtime |
 
 **Key Principle**: If it CAN be done in Cubic, it SHOULD be done in Cubic!
+
+## Backup Strategy for VARA FM Configuration
+
+### Overview
+
+This project includes **persistent backups** of critical user configurations that are restored during every ISO build:
+
+- **`wine.tar.gz`** - VARA FM application state and settings (Windows Prefix in ~/.wine)
+- **`et-user.tar.gz`** - ETC user profile (callsign, grid square, radio defaults)
+
+These backups are stored in the `/backups/` directory and treated as **golden masters** for consistency across all future ISO builds.
+
+### Why Backup VARA FM?
+
+**VARA FM (Variable Rate Audio Codec for Winlink)** is a complex Windows application running under Wine. Configuration includes:
+
+- **Modem settings** - Audio levels, PTT configuration, frequency offset
+- **Modem profile** - Specific settings for 2m VHF/UHF operation
+- **License keys** - VARA FM requires activation (one-time)
+- **Audio calibration** - Levels tuned for Digirig Mobile interface
+- **Profile persistence** - Stored in Windows Registry under ~/.wine
+
+**Without backup:** Every fresh ISO build requires manual VARA FM recalibration (tedious and error-prone).
+
+**With backup:** Fresh ISO automatically includes pre-configured VARA FM, ready to use.
+
+### Backup File Locations and Usage
+
+#### File Structure
+```
+emcomm-tools-customizer/
+├── /backups/
+│   ├── wine.tar.gz              # VARA FM application state (Windows Prefix)
+│   └── et-user.tar.gz           # ETC user profile (callsign, grid square)
+├── cubic/
+│   └── restore-backups.sh        # Extracts and restores backups during build
+└── build-etc-iso.sh             # Orchestrates entire build process
+```
+
+#### restore-backups.sh (Cubic Stage)
+
+This script runs **DURING** the Cubic ISO build and restores the backup files:
+
+```bash
+#!/bin/bash
+# 
+# Script: restore-backups.sh
+# Purpose: Restore VARA FM and ETC user backups during Cubic ISO build
+# Stage: Cubic (runs during ISO creation, not post-install)
+#
+
+# Detect backup files from /backups/ directory or environment
+BACKUP_DIR="${BACKUP_DIR:-.../backups}"
+
+if [ -f "$BACKUP_DIR/wine.tar.gz" ]; then
+    tar -xzf "$BACKUP_DIR/wine.tar.gz" -C /etc/skel/
+    log "INFO" "Restored VARA FM configuration from wine.tar.gz"
+fi
+
+if [ -f "$BACKUP_DIR/et-user.tar.gz" ]; then
+    tar -xzf "$BACKUP_DIR/et-user.tar.gz" -C /etc/skel/
+    log "INFO" "Restored ETC user profile from et-user.tar.gz"
+fi
+```
+
+**Key Points:**
+- ✅ Runs **DURING** ISO build (in Cubic chroot), not post-install
+- ✅ Captures current et-user state at build start (if upgrading)
+- ✅ Restores wine.tar.gz (static baseline) to `/etc/skel/.wine/`
+- ✅ Restores et-user config to `/etc/skel/.config/emcomm-tools/`
+- ✅ All new users created from ISO get both configurations automatically
+
+#### Backup Strategy - Three-Step Workflow
+
+The `restore-backups.sh` script preserves user customizations while maintaining a stable VARA FM baseline:
+
+**STEP 1: Capture Current et-user State (at build start)**
+- If upgrading from previous deployment, captures current:
+  - Callsign and grid square settings
+  - Radio hardware preferences
+  - Pat mailbox and forms
+  - Digital mode configurations
+- Saves to `et-user-current.tar.gz` (only created during upgrade builds)
+- Ensures no user info is lost when upgrading ISO versions
+
+**STEP 2: Restore VARA FM Baseline**
+- Extracts static `wine.tar.gz` to `/etc/skel/.wine/`
+- This is your golden master VARA FM configuration
+- Never changes automatically
+- To update baseline intentionally:
+  ```bash
+  tar -czf ~/wine.tar.gz ~/.wine/
+  cp ~/wine.tar.gz /backups/wine.tar.gz
+  git add /backups/wine.tar.gz
+  git commit -m "Update VARA FM baseline"
+  ```
+
+**STEP 3: Restore et-user Configuration**
+- First tries `et-user-current.tar.gz` (from Step 1, this build)
+- Falls back to `et-user.tar.gz` (last known good state)
+- Restores to `/etc/skel/.config/emcomm-tools/` for new users
+- User customizations automatically carried into upgraded ISO
+
+#### Why This Strategy?
+
+**Wine (VARA FM):** Static golden master
+- ✅ Same baseline across all deployments
+- ✅ Updated only intentionally by you
+- ❌ User's local audio tweaks don't propagate (hardware-specific)
+
+**Et-user:** Dynamic capture on each build
+- ✅ Preserves callsign, grid square, radio settings during upgrade
+- ✅ Automatically captured from previous deployment
+- ✅ No loss of user customizations
+- ✅ Multiple deployments can have different settings
+
+#### Upgrade Workflow Example
+
+```bash
+# Deployment 1: Fresh build
+./build-etc-iso.sh -r stable
+# User deploys, sets callsign="KD7DGF", grid="CN87AB"
+# User tunes VARA FM audio levels locally
+
+# [Time passes, user wants to upgrade ISO with new features]
+
+# Deployment 2: Upgrade build
+./build-etc-iso.sh -r stable
+# STEP 1: Captures current ~/.config/emcomm-tools → et-user-current.tar.gz
+# STEP 2: Restores wine.tar.gz baseline (VARA FM reset to baseline)
+# STEP 3: Restores et-user-current (callsign, grid, radio settings preserved)
+# User deploys new ISO, all custom settings preserved
+```
+
+### Creating/Updating Backups (Intentional Process)
+
+```bash
+# After deploying and customizing VARA FM:
+tar -czf ~/wine.tar.gz ~/.wine/
+
+# Copy to repository backups directory
+cp ~/wine.tar.gz /path/to/emcomm-tools-customizer/backups/wine.tar.gz
+
+# Commit as new baseline (will be used in all future builds)
+cd /path/to/emcomm-tools-customizer
+git add backups/wine.tar.gz
+git commit -m "Update VARA FM baseline with calibration changes"
+git push origin main
+
+# Now next ISO build will restore THIS configuration
+```
+
+**Key Points:**
+- ✅ User customizations stay LOCAL by default (ephemeral, hardware-specific)
+- ✅ When you intentionally update `/backups/wine.tar.gz`, that becomes the new baseline for all future builds
+- ✅ This gives you explicit control over when/if changes become permanent
+- ✅ Useful when you've found optimal settings that work across all deployments
+
+**Decision Matrix:**
+
+| Scenario | Action | Result |
+|----------|--------|--------|
+| Fresh deployment, user customizes locally | Do nothing | Changes stay on that system only |
+| You find settings that work everywhere | Run backup commands → commit to `/backups/` | Next ISO build gets your settings |
+| Different hardware needs different tuning | Don't commit user changes | Each system keeps its own calibration |
+| Team wants standard VARA FM baseline | Commit optimized settings to `/backups/` | All future deployments get the baseline |
+
+**Proper workflow examples:**
+
+```bash
+# Workflow 1: Keep systems independent (default)
+./build-etc-iso.sh -r stable
+# User deploys on System A, calibrates VARA FM
+# User deploys on System B, calibrates VARA FM
+# (System A and B have different audio calibration - no problem)
+
+# Workflow 2: Establish team baseline (intentional update)
+./build-etc-iso.sh -r stable
+# User deploys, finds perfect VARA FM calibration
+tar -czf ~/wine.tar.gz ~/.wine/
+cp ~/wine.tar.gz /backups/wine.tar.gz
+git add /backups/wine.tar.gz && git commit -m "Update baseline"
+# Next build: ./build-etc-iso.sh -r stable
+# All future deployments get that baseline configuration
+```
+
+### Creating/Updating Backups (Intentional Process)
+
+#### Creating wine.tar.gz (One-time Setup)
+
+```bash
+# On a deployed ETC system with configured VARA FM:
+
+# Compress the ~/.wine directory
+tar -czf ~/wine.tar.gz ~/.wine/
+
+# Move to backups directory in the repository
+mv ~/wine.tar.gz /path/to/emcomm-tools-customizer/backups/
+
+# Commit to repository
+cd /path/to/emcomm-tools-customizer
+git add backups/wine.tar.gz
+git commit -m "Add VARA FM baseline configuration backup"
+git push origin main
+```
+
+**Backup includes:**
+- VARA FM modem settings
+- Audio level configuration
+- Frequency offset calibration
+- License key (if activated)
+- Registry configuration
+
+#### Creating et-user.tar.gz (One-time Setup)
+
+```bash
+# On a deployed ETC system with configured user profile:
+
+# Compress the et-user directory
+tar -czf ~/et-user.tar.gz ~/.config/emcomm-tools/
+
+# Move to backups directory
+mv ~/et-user.tar.gz /path/to/emcomm-tools-customizer/backups/
+
+# Commit to repository
+cd /path/to/emcomm-tools-customizer
+git add backups/et-user.tar.gz
+git commit -m "Add ETC user profile backup"
+git push origin main
+```
+
+**Backup includes:**
+- Callsign setting
+- Grid square location
+- Radio hardware preference (Anytone D578UV)
+- Digital mode configuration (DMR, VARA FM, AX.25)
+
+### Build Script Integration
+
+The main `build-etc-iso.sh` script accepts backup paths:
+
+```bash
+./build-etc-iso.sh -r stable -b /backups/wine.tar.gz -e /backups/et-user.tar.gz
+
+# Or with auto-detection (script finds them in /backups/):
+./build-etc-iso.sh -r stable
+```
+
+The build script passes these paths to Cubic, which runs `restore-backups.sh` during the ISO build process.
+
+### Versioning Backups
+
+If you need to maintain multiple VARA FM configurations (e.g., different audio profiles):
+
+```bash
+backups/
+├── wine.tar.gz                    # Current baseline (always used)
+├── wine-backup-20250119.tar.gz    # Previous version (archived)
+├── wine-portable-20250115.tar.gz  # Alternative for portable operations
+└── et-user.tar.gz
+```
+
+Specify the backup in `build-etc-iso.sh`:
+
+```bash
+# Build with portable VARA FM config
+./build-etc-iso.sh -r stable -b /backups/wine-portable-20250115.tar.gz
+```
+
+### Troubleshooting Backups
+
+#### VARA FM not appearing after fresh install
+
+**Check:**
+1. Verify wine.tar.gz exists: `ls -lh /backups/wine.tar.gz`
+2. Check restore script executed: Look for "Restored VARA FM" in Cubic build log
+3. Verify extraction to /etc/skel: `tar -tzf /backups/wine.tar.gz | head`
+
+**Solution:** Manually restore if build was interrupted:
+```bash
+# On fresh system
+tar -xzf ~/path/to/wine.tar.gz -C ~/
+# VARA FM should now appear in Wine prefix
+```
+
+#### Audio calibration lost after ISO rebuild
+
+**Expected behavior:** Each ISO rebuild restores the baseline wine.tar.gz, not user's custom audio levels.
+
+**Solution:**
+- Recalibrate VARA FM on the new deployment (takes ~5 minutes)
+- If you want to preserve specific calibration, update backups/wine.tar.gz with the new settings
+- Commit new baseline to repository for all future builds
 
 ## Ubuntu 22.10 Specific Considerations
 
@@ -1067,6 +1709,160 @@ et-mirror.sh https://example.com/
 - USB-serial adapters (radio interfaces) auto-detected
 - GPS location services may not work in Faraday cage environments
 - Provide manual fallback for all auto-detection features
+
+## Anytone D578UV + Digirig Mobile CAT Integration
+
+### Architecture Overview
+
+The customizer provides **native et-radio integration** for Anytone D578UV mobile transceivers using Digirig Mobile.
+
+**Key Pattern**: Models after Yaesu FT-897D reference (hamlib + rigctld daemon, not GUI-based flrig)
+
+**Data Flow**:
+```
+et-radio selection (user runs: et-radio)
+  ↓
+  ├→ Reads: ~/.config/emcomm-tools/radios.d/anytone-d578uv.json
+  ├→ Starts: rigctld daemon (hamlib rig ID 242)
+  ├→ Configures: Audio levels via amixer
+  └→ Makes available to: fldigi, Pat, JS8Call (via port 12345)
+
+Apps use CAT automatically via XML-RPC to rigctld daemon
+```
+
+### Configuration Files Created
+
+**During Cubic build, these files are placed in /etc/skel:**
+
+1. **~/.config/emcomm-tools/radios.d/anytone-d578uv.json**
+   - Hamlib rig ID 242 (Anytone D578UV)
+   - Baud: 9600
+   - PTT: RTS via /dev/ttyUSB1
+   - Audio script: anytone-d578uv.sh (amixer levels)
+   - Notes: Integration pattern, Digirig cables
+
+2. **~/.config/emcomm-tools/radios.d/audio/anytone-d578uv.sh**
+   - Audio level configuration for Digirig CM108 codec
+   - Sets Speaker Playback: 42%
+   - Sets Mic Capture: 52%, Playback: 31%
+   - Disables AGC for digital modes
+
+3. **~/.local/bin/setup-anytone-digirig**
+   - Verification helper script
+   - Checks USB devices (/dev/ttyUSB0 audio, /dev/ttyUSB1 CAT)
+   - Verifies hamlib installation
+   - Tests rigctl connection to radio
+   - Guides user to et-radio
+
+4. **~/Desktop/Anytone-CAT-Setup.txt**
+   - Comprehensive setup and troubleshooting guide
+   - Hardware connection diagram
+   - Workflow and testing instructions
+   - Hamlib vs flrig comparison
+   - Permission and port configuration
+
+### Scripts Involved
+
+**install-ham-tools.sh:**
+- Installs hamlib + hamlib-tools (PRIMARY: rigctld CAT control)
+- Installs flrig (FALLBACK: manual GUI mode if needed)
+- Installs CHIRP, dmrconfig, LibreOffice
+
+**configure-radio-defaults.sh:**
+- Creates JSON config for et-radio (anytone-d578uv.json)
+- Creates audio script for amixer configuration
+- Creates setup verification helper
+- Creates user documentation
+
+### Operational Workflow
+
+**User experience after boot:**
+```bash
+1. Power on radio
+2. Connect Digirig Mobile (USB-C)
+3. Run: et-radio
+   → Select: "Anytone D578UV"
+   → Select: Your mode (Winlink, APRS, fldigi, etc.)
+4. rigctld daemon starts on port 12345 (transparent to user)
+5. Audio levels configured automatically
+6. Apps (fldigi, Pat) use CAT via hamlib automatically
+7. Change frequency in app → radio follows
+```
+
+### Important Distinctions
+
+**CAT Support by Radio (NOT by cable or software):**
+
+✅ **TIER 1 - FULL CAT SUPPORT:**
+- Anytone D578UV (mobile) via Digirig Mobile ← This customizer
+- Yaesu FT-897D, FT-857D, FT-818ND (HF/6m) via Digirig Mobile
+- Most HF transceivers via Digirig Mobile
+
+◐ **TIER 2 - AUDIO + PTT ONLY (No CAT):**
+- Anytone D878UV (handheld) via Digirig Mobile
+  * /dev/ttyUSB0 (audio codec) only
+  * Hardware PTT switch on Digirig
+  * No CAT control possible (handhelds rarely support CAT)
+
+◐ **TIER 3 - BLUETOOTH TNC INTEGRATION:**
+- BTech UV-Pro (handheld) via Bluetooth TNC
+  * Uses upstream et-radio KISS TNC configuration
+  * Keyboard-to-keyboard digital modes
+  * No USB Digirig interface needed
+
+**Per Digirig documentation:**
+> "Serial CAT control can be commonly found in HF transceivers, but rare in VHF/UHF radios, practically non-existent in HTs."
+
+### Hamlib vs flrig
+
+**Primary (Recommended):**
+- **hamlib/rigctld** (daemon-based)
+- Integrated with et-radio
+- Multiple apps can connect simultaneously
+- Automatic frequency/mode sync across apps
+- Used for daily operations
+
+**Fallback (Testing/Troubleshooting):**
+- **flrig** (GUI-based)
+- Manual startup required
+- Single connection at a time
+- Useful for debugging CAT issues
+- Can interfere with hamlib if both running
+
+### Testing CAT Control
+
+After setup, verify CAT connection:
+```bash
+# Test hamlib connection directly
+rigctl -m 242 -r /dev/ttyUSB1 -s 9600 F
+# Should return frequency like: 144050000
+
+# Check rigctld daemon running
+pgrep rigctld
+
+# Check XML-RPC port listening
+netstat -tulpn | grep 12345
+```
+
+### Troubleshooting Reference
+
+**No USB devices:**
+- Verify Digirig USB-C connected
+- Verify radio cable connected to Digirig
+- Try different USB port
+- Check: `lsusb | grep Digirig`
+
+**CAT not working:**
+- Verify `/dev/ttyUSB1` exists (NOT /dev/ttyUSB0)
+- Verify dialout group: `groups | grep dialout`
+- Check hamlib installed: `rigctld -V`
+- Test: `rigctl -m 242 -r /dev/ttyUSB1 -s 9600 F`
+
+**Apps not connecting:**
+- Check rigctld running: `pgrep rigctld`
+- Check port: `netstat -tulpn | grep 12345`
+- Restart et-radio session
+- Review ~/Desktop/Anytone-CAT-Setup.txt
 
 ## Continuous Improvement
 

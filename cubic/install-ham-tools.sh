@@ -80,15 +80,17 @@ fi
 
 log "SUCCESS" "dmrconfig installed successfully"
 
-# Install flrig (for Anytone D578UV CAT control)
-log "INFO" "Installing flrig (for Anytone D578UV CAT control)..."
+# Note: hamlib and rigctld are already installed by ETC upstream
+# They provide CAT control for Anytone D578UV via et-radio integration
+
+# Install flrig as fallback (for manual GUI-based CAT control if hamlib has issues)
+log "INFO" "Installing flrig (fallback CAT control - manual mode)..."
 
 if ! apt install -y flrig 2>&1 | tee -a "$LOG_FILE"; then
-    log "ERROR" "Failed to install flrig"
-    exit 1
+    log "WARN" "Failed to install flrig (non-fatal, hamlib will provide CAT control)"
+else
+    log "SUCCESS" "flrig installed successfully (fallback only)"
 fi
-
-log "SUCCESS" "flrig installed successfully"
 
 # Install other ham radio utilities
 log "INFO" "Installing additional ham radio utilities..."

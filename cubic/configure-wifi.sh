@@ -38,13 +38,7 @@ fi
 # shellcheck source=/dev/null
 source "$SECRETS_FILE"
 
-# Validate required variables
-if [[ -z "${WIFI_COUNT:-}" ]] || [[ "$WIFI_COUNT" -lt 1 ]]; then
-    log "ERROR" "WIFI_COUNT not set or invalid in secrets.env"
-    exit 2
-fi
-
-log "INFO" "Configuring $WIFI_COUNT WiFi networks..."
+log "INFO" "Scanning secrets.env for WiFi networks (WIFI_SSID_* format)..."
 
 # Create NetworkManager system connections directory
 NM_CONNECTIONS_DIR="/etc/NetworkManager/system-connections"
@@ -60,26 +54,43 @@ generate_uuid() {
     fi
 }
 
+# Extract all WiFi network identifiers from secrets.env (WIFI_SSID_* format)
+# This allows dynamic detection of any number of networks without WIFI_COUNT
+wifi_networks=()
+while IFS= read -r line; do
+    if [[ "$line" =~ ^WIFI_SSID_([A-Z0-9_]+)= ]]; then
+        identifier="${BASH_REMATCH[1]}"
+        wifi_networks+=("$identifier")
+    fi
+done < "$SECRETS_FILE"
+
+if [[ ${#wifi_networks[@]} -eq 0 ]]; then
+    log "WARN" "No WiFi networks found in secrets.env (expected WIFI_SSID_* variables)"
+    exit 0
+fi
+
+log "INFO" "Found ${#wifi_networks[@]} WiFi network(s): ${wifi_networks[*]}"
+
 # Configure each WiFi network
-for i in $(seq 1 "$WIFI_COUNT"); do
-    # Dynamically construct variable names
-    ssid_var="WIFI_${i}_SSID"
-    password_var="WIFI_${i}_PASSWORD"
-    autoconnect_var="WIFI_${i}_AUTOCONNECT"
+for identifier in "${wifi_networks[@]}"; do
+    # Construct variable names using the identifier (e.g., PRIMARY, MOBILE, BACKUP)
+    ssid_var="WIFI_SSID_${identifier}"
+    password_var="WIFI_PASSWORD_${identifier}"
+    autoconnect_var="WIFI_AUTOCONNECT_${identifier}"
     
     # Indirect variable expansion
     ssid="${!ssid_var:-}"
     password="${!password_var:-}"
     autoconnect="${!autoconnect_var:-yes}"
     
-    # Skip if SSID or password is empty
-    if [[ -z "$ssid" ]]; then
-        log "WARN" "WIFI_${i}_SSID is empty, skipping network $i"
+    # Skip if SSID or password is empty or still contains template value
+    if [[ -z "$ssid" ]] || [[ "$ssid" == "YOUR_"* ]]; then
+        log "WARN" "WIFI_SSID_${identifier} is empty or template value, skipping network $identifier"
         continue
     fi
     
     if [[ -z "$password" ]]; then
-        log "WARN" "WIFI_${i}_PASSWORD is empty, skipping network $i"
+        log "WARN" "WIFI_PASSWORD_${identifier} is empty, skipping network $identifier"
         continue
     fi
     
@@ -90,7 +101,7 @@ for i in $(seq 1 "$WIFI_COUNT"); do
         autoconnect="true"
     fi
     
-    log "INFO" "Adding WiFi network $i: $ssid (autoconnect: $autoconnect)"
+    log "INFO" "Adding WiFi network: $ssid (autoconnect: $autoconnect)"
     
     # Generate UUID for this connection
     connection_uuid=$(generate_uuid)
