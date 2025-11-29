@@ -277,11 +277,19 @@ APRS_PASSCODE="-1"                  # Get from https://apps.magicbug.co.uk/passc
 **APRS SSID Reference** (common values):
 - `0` = Primary station (default for fixed location or first mobile)
 - `1` = Alternate mobile (second vehicle, alternate callsign)
-- `10` = Mobile (deprecated, use 1-7 instead)
-- `11` = Fixed/Home
-- `12` = APRS digipeater
-- `13` = Weather station
-- `14` = Tactical call (temporary)
+- `2` = Generic additional station, digi, mobile, wx, etc
+- `3` = Generic additional station, digi, mobile, wx, etc
+- `4` = Generic additional station, digi, mobile, wx, etc
+- `5` = Other networks (D-Star, iPhones, Androids, Blackberry's, etc)
+- `6` = Special activity, Satellite ops, camping or 6 meters, etc
+- `7` = Walkie talkies, HT's or other human portable
+- `8` = Boats, sailboats, RV's or second main mobile
+- `9` = Primary mobile (usually message capable)
+- `10` = Internet, iGates, EchoLink, Winlink, AVRS, APRN, etc
+- `11` = Balloons, aircraft, spacecraft, etc
+- `12` = APRStt, DTMF, RFID, devices, one-way trackers, etc
+- `13` = Weather stations
+- `14` = Truckers or generally full time drivers
 - `15` = Generic name (for gates, relays)
 
 See `secrets.env.template` for all available beacon options and descriptions.
