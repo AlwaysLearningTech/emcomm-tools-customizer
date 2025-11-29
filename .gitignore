@@ -12,7 +12,8 @@ builds/
 
 # Private files (never commit these)
 private-files/
-backups/
+backups/*
+!backups/README.md
 
 # Temporary files
 *.tmp
