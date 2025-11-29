@@ -188,46 +188,20 @@ All customization comes from a single file: **`secrets.env`**
 Copy the template and edit with your values:
 
 ```bash
-# User Account
-USER_FULLNAME="Your Name"           # Full name for git commits
-USER_USERNAME="yourusername"        # Must match your Linux username
-USER_PASSWORD="your_password"       # Will be stored in sudoers
-USER_EMAIL="you@example.com"        # For git
-
-# System
-CALLSIGN="KD7DGF"                   # Ham radio callsign (in ISO hostname)
-MACHINE_NAME="ETC-KD7DGF"           # Hostname (optional, defaults to ETC-{CALLSIGN})
-
-# Desktop
-DESKTOP_COLOR_SCHEME="prefer-dark"  # or prefer-light
-DESKTOP_SCALING_FACTOR="1.5"        # 1.0=100%, 1.5=150%, 2.0=200%
-
-# WiFi Networks (add as many as needed - script auto-detects all)
-WIFI_SSID_PRIMARY="Home-5G"
-WIFI_PASSWORD_PRIMARY="YourPassword"
-WIFI_AUTOCONNECT_PRIMARY="yes"
-
-WIFI_SSID_MOBILE="Mobile-Hotspot"
-WIFI_PASSWORD_MOBILE="MobilePassword"
-WIFI_AUTOCONNECT_MOBILE="no"        # Don't auto-connect to phone hotspot
-
-# APRS Beacon (RF position broadcasting)
-ENABLE_APRS_BEACON="no"             # Enable beacon (requires GPS)
-APRS_BEACON_INTERVAL="300"          # Seconds between beacons (default: 5 min)
-APRS_SSID="10"                      # Secondary station ID
-APRS_PASSCODE="-1"                  # Get from https://apps.magicbug.co.uk/passcode/
-APRS_COMMENT="EmComm Mobile"        # Beacon comment (30 chars max)
-
-# Direwolf Audio (APRS/packet)
-DIREWOLF_ADEVICE="plughw:1,0"       # Digirig Mobile (default)
-DIREWOLF_PTT="CM108"                # USB Digirig PTT (default)
-
-# Git Configuration
-GIT_NAME="Your Full Name"           # From USER_FULLNAME
-GIT_EMAIL="you@example.com"         # From USER_EMAIL
+cp secrets.env.template secrets.env
+nano secrets.env
 ```
 
-**That's it.** One file, all configuration. All settings are baked into the ISO at build time—no config files to edit after deployment.
+The template contains all available options with descriptions:
+- User account (name, username, password, email)
+- System settings (callsign, hostname)
+- Desktop environment (color scheme, scaling)
+- WiFi networks (add as many as needed)
+- APRS beacon configuration
+- Direwolf audio device settings
+- Git configuration
+
+**All settings are baked into the ISO at build time.** No config files to edit after deployment.
 
 ---
 
@@ -291,15 +265,16 @@ The customizer configures **direwolf** to broadcast your position via APRS RF at
 
 ### Beacon Configuration
 
-In `secrets.env`:
+Edit your `secrets.env` to enable and configure beacon:
 
 ```bash
-ENABLE_APRS_BEACON="no"             # Enable (requires GPS)
-APRS_BEACON_INTERVAL="300"          # 300 seconds = 5 minutes between beacons
+ENABLE_APRS_BEACON="no"             # Set to "yes" to enable
+APRS_BEACON_INTERVAL="300"          # Seconds between beacons
 APRS_SSID="10"                      # Secondary station ID
 APRS_PASSCODE="-1"                  # Get from https://apps.magicbug.co.uk/passcode/
-APRS_COMMENT="EmComm Mobile"        # What shows in APRS map
 ```
+
+See `secrets.env.template` for all available beacon options and descriptions.
 
 **Beacon defaults to 300 seconds (5 min)** for mobile operations. Adjust based on your needs:
 - 60-120s: High-speed mobile (car, bike)
