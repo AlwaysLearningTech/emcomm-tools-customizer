@@ -299,6 +299,42 @@ See `secrets.env.template` for all available beacon options and descriptions.
 - 300s: Normal mobile
 - 600s+: Stationary/slow
 
+### Beacon Power & Antenna Configuration
+
+The customizer includes additional beacon parameters for fine-tuning RF coverage:
+
+```bash
+APRS_BEACON_POWER="10"              # Transmit power code (0-9)
+APRS_BEACON_HEIGHT="20"             # Antenna height above ground in feet
+APRS_BEACON_GAIN="3"                # Antenna gain code (0-9)
+```
+
+**Transmit Power Code** (0-9):
+- `0` = 1 watt
+- `1` = 2 watts
+- `2` = 5 watts
+- `3` = 10 watts
+- `4` = 20 watts
+- `5` = 50 watts
+- `6` = 100 watts
+- `7` = 250 watts
+- `8` = 500 watts
+- `9` = 1000+ watts (1 kilowatt)
+
+**Antenna Height** (feet above ground level - AGL):
+- Typical values: 10-100 feet
+- Higher antenna = longer RF range
+- Used for APRS coverage calculation and network awareness
+
+**Antenna Gain Code** (0-9):
+- `0` = Omnidirectional (0 dBi)
+- `1` = 3 dBi gain
+- `2` = 6 dBi gain
+- `3` = 9 dBi gain
+- `4-9` = Higher directional gains
+
+These values are included in your beacon transmissions and help other stations understand your coverage area and antenna characteristics. Set them realistically for accurate path predictions.
+
 ### After Deployment
 
 Modify beacon settings without rebuilding ISO:
