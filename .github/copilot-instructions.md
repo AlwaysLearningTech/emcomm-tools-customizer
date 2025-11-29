@@ -959,7 +959,7 @@ emcomm-tools-customizer/
 └── build-etc-iso.sh            # Orchestrates entire build process
 
 External backup location (user home directory):
-~/ETC-Customizer-Backups/
+~/etc-customizer-backups/
 ├── wine.tar.gz                 # VARA FM application state (Windows Prefix)
 ├── et-user.tar.gz              # ETC user profile baseline (callsign, grid square)
 └── et-user-current.tar.gz      # Auto-captured at build start (if upgrading)
@@ -977,8 +977,8 @@ This script runs **DURING** the Cubic ISO build and restores the backup files:
 # Stage: Cubic (runs during ISO creation, not post-install)
 #
 
-# Detect backup files from ~/ETC-Customizer-Backups/ directory
-BACKUP_DIR="$HOME/ETC-Customizer-Backups"
+# Detect backup files from ~/etc-customizer-backups/ directory
+BACKUP_DIR="$HOME/etc-customizer-backups"
 
 if [ -f "$BACKUP_DIR/wine.tar.gz" ]; then
     tar -xzf "$BACKUP_DIR/wine.tar.gz" -C /etc/skel/
@@ -994,10 +994,10 @@ fi
 **Key Points:**
 - ✅ Runs **DURING** ISO build (in Cubic chroot), not post-install
 - ✅ Captures current et-user state at build start (if upgrading)
-- ✅ Restores wine.tar.gz (static baseline) to `/etc/skel/.wine/` from `~/ETC-Customizer-Backups/`
-- ✅ Restores et-user config to `/etc/skel/.config/emcomm-tools/` from `~/ETC-Customizer-Backups/`
+- ✅ Restores wine.tar.gz (static baseline) to `/etc/skel/.wine/` from `~/etc-customizer-backups/`
+- ✅ Restores et-user config to `/etc/skel/.config/emcomm-tools/` from `~/etc-customizer-backups/`
 - ✅ All new users created from ISO get both configurations automatically
-- ✅ Backups stored externally (`~/ETC-Customizer-Backups/`) separate from repository
+- ✅ Backups stored externally (`~/etc-customizer-backups/`) separate from repository
 
 #### Backup Strategy - Three-Step Workflow
 
@@ -1009,11 +1009,11 @@ The `restore-backups.sh` script preserves user customizations while maintaining 
   - Radio hardware preferences
   - Pat mailbox and forms
   - Digital mode configurations
-- Saves to `~/ETC-Customizer-Backups/et-user-current.tar.gz` (only created during upgrade builds)
+- Saves to `~/etc-customizer-backups/et-user-current.tar.gz` (only created during upgrade builds)
 - Ensures no user info is lost when upgrading ISO versions
 
 **STEP 2: Restore VARA FM Baseline**
-- Extracts static `~/ETC-Customizer-Backups/wine.tar.gz` to `/etc/skel/.wine/`
+- Extracts static `~/etc-customizer-backups/wine.tar.gz` to `/etc/skel/.wine/`
 - This is your golden master VARA FM configuration
 - Never changes automatically
 - To update baseline intentionally:

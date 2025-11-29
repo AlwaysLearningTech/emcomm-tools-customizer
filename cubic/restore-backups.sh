@@ -28,7 +28,7 @@ log() {
 log "INFO" "=== Starting Backup Restore ==="
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BACKUPS_DIR="$HOME/ETC-Customizer-Backups"
+BACKUPS_DIR="$HOME/etc-customizer-backups"
 
 # Ensure backup directory exists (create if needed)
 if [ ! -d "$BACKUPS_DIR" ]; then

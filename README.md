@@ -498,11 +498,11 @@ nano ~/.config/YAAC/YAAC.properties
 
 ## Backup Files
 
-Persistent backup files are stored in `~/ETC-Customizer-Backups/` (external to the repository) and are automatically restored during every Cubic ISO build. This separation keeps your backups private and independent of the git repository.
+Persistent backup files are stored in `~/etc-customizer-backups/` (external to the repository) and are automatically restored during every Cubic ISO build. This separation keeps your backups private and independent of the git repository.
 
 **Setup** (one-time):
 ```bash
-mkdir -p ~/ETC-Customizer-Backups/
+mkdir -p ~/etc-customizer-backups/
 ```
 
 For detailed information about backup management, see [`backups/README.md`](backups/README.md).
@@ -513,27 +513,27 @@ For detailed information about backup management, see [`backups/README.md`](back
 
 - Static golden master restored to all new users
 - Update only when you want to establish a new baseline
-- Location: `~/ETC-Customizer-Backups/wine.tar.gz`
+- Location: `~/etc-customizer-backups/wine.tar.gz`
 
 **et-user-current.tar.gz** - Captured automatically at build start
 
 - Preserves your callsign, grid square, radio settings during upgrades
 - No manual action needed
 - Created automatically during Cubic build if upgrading
-- Location: `~/ETC-Customizer-Backups/et-user-current.tar.gz`
+- Location: `~/etc-customizer-backups/et-user-current.tar.gz`
 
 **et-user.tar.gz** - Last known backup (fallback)
 
 - Used if et-user-current.tar.gz not available
 - Can be manually updated to establish a new baseline
-- Location: `~/ETC-Customizer-Backups/et-user.tar.gz`
+- Location: `~/etc-customizer-backups/et-user.tar.gz`
 
 ### How Backup Restoration Works
 
 During every Cubic ISO build, `cubic/restore-backups.sh` executes a three-step process:
 
-1. **Capture**: If upgrading, captures current ~/.config/emcomm-tools to ~/ETC-Customizer-Backups/et-user-current.tar.gz
-2. **Restore VARA FM**: Extracts ~/ETC-Customizer-Backups/wine.tar.gz to /etc/skel/.wine/ (all new users get it)
+1. **Capture**: If upgrading, captures current ~/.config/emcomm-tools to ~/etc-customizer-backups/et-user-current.tar.gz
+2. **Restore VARA FM**: Extracts ~/etc-customizer-backups/wine.tar.gz to /etc/skel/.wine/ (all new users get it)
 3. **Restore et-user**: Applies et-user-current.tar.gz or et-user.tar.gz (preserves customizations)
 
 **Result**: Fresh ISO includes your VARA FM baseline + all user customizations from previous deployment.
@@ -545,7 +545,7 @@ During every Cubic ISO build, `cubic/restore-backups.sh` executes a three-step p
 ```bash
 # After configuring VARA FM on a deployed system:
 tar -czf ~/wine.tar.gz ~/.wine/
-cp ~/wine.tar.gz ~/ETC-Customizer-Backups/wine.tar.gz
+cp ~/wine.tar.gz ~/etc-customizer-backups/wine.tar.gz
 ```
 
 **Et-user Backup** (update intentionally to establish baseline):
@@ -553,7 +553,7 @@ cp ~/wine.tar.gz ~/ETC-Customizer-Backups/wine.tar.gz
 ```bash
 # After setting callsign, grid, radio settings:
 tar -czf ~/et-user.tar.gz ~/.config/emcomm-tools/ ~/.local/share/pat/
-cp ~/et-user.tar.gz ~/ETC-Customizer-Backups/et-user.tar.gz
+cp ~/et-user.tar.gz ~/etc-customizer-backups/et-user.tar.gz
 ```
 
 For complete details and troubleshooting, see [`backups/README.md`](backups/README.md).
