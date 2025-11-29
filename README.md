@@ -496,6 +496,68 @@ nano ~/.config/YAAC/YAAC.properties
 
 ---
 
+## Backup Files
+
+Persistent backup files are stored in `~/ETC-Customizer-Backups/` (external to the repository) and are automatically restored during every Cubic ISO build. This separation keeps your backups private and independent of the git repository.
+
+**Setup** (one-time):
+```bash
+mkdir -p ~/ETC-Customizer-Backups/
+```
+
+For detailed information about backup management, see [`backups/README.md`](backups/README.md).
+
+### Quick Reference
+
+**wine.tar.gz** - VARA FM baseline configuration
+
+- Static golden master restored to all new users
+- Update only when you want to establish a new baseline
+- Location: `~/ETC-Customizer-Backups/wine.tar.gz`
+
+**et-user-current.tar.gz** - Captured automatically at build start
+
+- Preserves your callsign, grid square, radio settings during upgrades
+- No manual action needed
+- Created automatically during Cubic build if upgrading
+- Location: `~/ETC-Customizer-Backups/et-user-current.tar.gz`
+
+**et-user.tar.gz** - Last known backup (fallback)
+
+- Used if et-user-current.tar.gz not available
+- Can be manually updated to establish a new baseline
+- Location: `~/ETC-Customizer-Backups/et-user.tar.gz`
+
+### How Backup Restoration Works
+
+During every Cubic ISO build, `cubic/restore-backups.sh` executes a three-step process:
+
+1. **Capture**: If upgrading, captures current ~/.config/emcomm-tools to ~/ETC-Customizer-Backups/et-user-current.tar.gz
+2. **Restore VARA FM**: Extracts ~/ETC-Customizer-Backups/wine.tar.gz to /etc/skel/.wine/ (all new users get it)
+3. **Restore et-user**: Applies et-user-current.tar.gz or et-user.tar.gz (preserves customizations)
+
+**Result**: Fresh ISO includes your VARA FM baseline + all user customizations from previous deployment.
+
+### Creating/Updating Backups
+
+**VARA FM Baseline** (one-time setup, then update intentionally):
+
+```bash
+# After configuring VARA FM on a deployed system:
+tar -czf ~/wine.tar.gz ~/.wine/
+cp ~/wine.tar.gz ~/ETC-Customizer-Backups/wine.tar.gz
+```
+
+**Et-user Backup** (update intentionally to establish baseline):
+
+```bash
+# After setting callsign, grid, radio settings:
+tar -czf ~/et-user.tar.gz ~/.config/emcomm-tools/ ~/.local/share/pat/
+cp ~/et-user.tar.gz ~/ETC-Customizer-Backups/et-user.tar.gz
+```
+
+For complete details and troubleshooting, see [`backups/README.md`](backups/README.md).
+
 ## VARA FM Backup & Restoration
 
 ### Why VARA FM Backups?
@@ -512,7 +574,7 @@ nano ~/.config/YAAC/YAAC.properties
 ### How It Works
 
 1. **One-time setup**: Create a baseline `wine.tar.gz` with your calibrated VARA FM configuration
-2. **Store in repository**: Commit `wine.tar.gz` to `/backups/` directory
+2. **Store in repository**: Place in `/backups/wine.tar.gz` directory
 3. **Automatic restoration**: Every ISO build extracts and restores VARA FM
 4. **Golden master principle**: The backup is **read-only** and never overwritten with post-deployment changes
 

@@ -28,7 +28,14 @@ log() {
 log "INFO" "=== Starting Backup Restore ==="
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BACKUPS_DIR="$SCRIPT_DIR/../backups"
+BACKUPS_DIR="$HOME/ETC-Customizer-Backups"
+
+# Ensure backup directory exists (create if needed)
+if [ ! -d "$BACKUPS_DIR" ]; then
+    log "WARN" "Backup directory not found: $BACKUPS_DIR"
+    log "WARN" "Creating directory... (Note: You may need to populate it with wine.tar.gz and et-user.tar.gz)"
+    mkdir -p "$BACKUPS_DIR"
+fi
 
 # STEP 1: Capture current et-user state (if this is an upgrade build)
 # This ensures we preserve user customizations (callsign, grid square, etc.)
