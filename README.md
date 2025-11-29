@@ -311,6 +311,203 @@ systemctl restart direwolf
 
 ---
 
+## APRS Symbol Table Reference
+
+The APRS symbol set includes two main tables: **Primary** (/) and **Alternate** (\). Each symbol consists of a table character and a symbol character. For images and detailed overlay definitions, see https://www.aprs.org/symbols/symbolsX.txt
+
+### Primary Symbol Table (/)
+
+| Notation | Symbol Type | Description |
+|----------|------|------------|
+| `/!` | BB | Police, Sheriff |
+| `/"` | BC | Reserved (was rain) |
+| `/#` | BD | DIGI (white center) |
+| `/$` | BE | PHONE |
+| `/%` | BF | DX CLUSTER |
+| `/&` | BG | HF GATEWAY |
+| `/'` | BH | Small AIRCRAFT (SSID-11) |
+| `/(` | BI | Mobile Satellite Station |
+| `/)` | BJ | Wheelchair (handicapped) |
+| `/*` | BK | SnowMobile |
+| `/+` | BL | Red Cross |
+| `/,` | BM | Boy Scouts |
+| `/-` | BN | House QTH (VHF) |
+| `/.` | BO | X |
+| `//` | BP | Red Dot |
+| `/0`-`/9` | P0-P9 | TBD (numbered symbols, overlay-capable) |
+| `/:` | MR | FIRE |
+| `/;` | MS | Campground (Portable ops) |
+| `/<` | MT | Motorcycle (SSID-10) |
+| `/=` | MU | RAILROAD ENGINE |
+| `/>` | MV | CAR (SSID-9) |
+| `/?` | MW | SERVER for Files |
+| `/@` | MX | HC FUTURE predict (dot) |
+| `/A` | PA | Aid Station |
+| `/B` | PB | BBS or PBBS |
+| `/C` | PC | Canoe |
+| `/D` | PD | (unassigned) |
+| `/E` | PE | EYEBALL (Events, etc!) |
+| `/F` | PF | Farm Vehicle (tractor) |
+| `/G` | PG | Grid Square (6 digit) |
+| `/H` | PH | HOTEL (blue bed symbol) |
+| `/I` | PI | TcpIp on air network stn |
+| `/J` | PJ | (unassigned) |
+| `/K` | PK | School |
+| `/L` | PL | PC user |
+| `/M` | PM | MacAPRS |
+| `/N` | PN | NTS Station |
+| `/O` | PO | BALLOON (SSID-11) |
+| `/P` | PP | Police |
+| `/Q` | PQ | TBD |
+| `/R` | PR | REC. VEHICLE (SSID-13) |
+| `/S` | PS | SHUTTLE |
+| `/T` | PT | SSTV |
+| `/U` | PU | BUS (SSID-2) |
+| `/V` | PV | ATV |
+| `/W` | PW | National WX Service Site |
+| `/X` | PX | HELO (SSID-6) |
+| `/Y` | PY | YACHT (sail) (SSID-5) |
+| `/Z` | PZ | WinAPRS |
+| `/[` | HS | Human/Person (SSID-7) |
+| `/\` | HT | TRIANGLE (DF station) |
+| `/]` | HU | MAIL/PostOffice (was PBBS) |
+| `/^` | HV | LARGE AIRCRAFT |
+| `/_` | HW | WEATHER Station (blue) |
+| `/`` | HX | Dish Antenna |
+| `/a` | LA | AMBULANCE (SSID-1) |
+| `/b` | LB | BIKE (SSID-4) |
+| `/c` | LC | Incident Command Post |
+| `/d` | LD | Fire dept |
+| `/e` | LE | HORSE (equestrian) |
+| `/f` | LF | FIRE TRUCK (SSID-3) |
+| `/g` | LG | Glider |
+| `/h` | LH | HOSPITAL |
+| `/i` | LI | IOTA (islands on the air) |
+| `/j` | LJ | JEEP (SSID-12) |
+| `/k` | LK | TRUCK (SSID-14) |
+| `/l` | LL | Laptop |
+| `/m` | LM | Mic-E Repeater |
+| `/n` | LN | Node (black bulls-eye) |
+| `/o` | LO | EOC |
+| `/p` | LP | ROVER (puppy, or dog) |
+| `/q` | LQ | GRID SQ shown above 128 m |
+| `/r` | LR | Repeater |
+| `/s` | LS | SHIP (pwr boat) (SSID-8) |
+| `/t` | LT | TRUCK STOP |
+| `/u` | LU | TRUCK (18 wheeler) |
+| `/v` | LV | VAN (SSID-15) |
+| `/w` | LW | WATER station |
+| `/x` | LX | xAPRS (Unix) |
+| `/y` | LY | YAGI @ QTH |
+| `/z` | LZ | TBD |
+
+### Alternate Symbol Table (\)
+
+| Notation | Symbol Type | Description |
+|----------|------|------------|
+| `\!` | OBO | EMERGENCY (and overlays) |
+| `\"` | OC | Reserved |
+| `\#` | OD | OVERLAY DIGI (green star) |
+| `\$` | OEO | Bank or ATM (green box) |
+| `\%` | OFO | Power Plant with overlay |
+| `\&` | OG | I=IGate R=RX T=1hopTX 2=2hopTX |
+| `\'` | OHO | Crash (& now Incident sites) |
+| `\(` | OIO | CLOUDY (other clouds w ovly) |
+| `\)` | OJO | Firenet MEO, MODIS Earth Obs. |
+| `\*` | OK | AVAIL (SNOW moved to ovly) |
+| `\+` | OL | Church |
+| `\,` | OM | Girl Scouts |
+| `\-` | ONO | House (H=HF) (O = Op Present) |
+| `\.` | OO | Ambiguous (Big Question mark) |
+| `\/` | OP | Waypoint Destination |
+| `\0` | A0 | CIRCLE (IRLP/Echolink/WIRES) |
+| `\1`-`\7` | A1-A7 | AVAIL |
+| `\8` | A8O | 802.11 or other network node |
+| `\9` | A9 | Gas Station (blue pump) |
+| `\:` | NR | AVAIL (Hail => ovly) |
+| `\;` | NSO | Park/Picnic + overlay events |
+| `\<` | NTO | ADVISORY (one WX flag) |
+| `\=` | NUO | Avail. symbol overlay group |
+| `\>` | NV | OVERLAYED CARs & Vehicles |
+| `\?` | NW | INFO Kiosk (Blue box with ?) |
+| `\@` | NX | HURRICANE/Tropical-Storm |
+| `\A` | AA | OVERLAY BOX DTMF & RFID & XO |
+| `\B` | AB | AVAIL (BlwngSnow => ovly) |
+| `\C` | AC | Coast Guard |
+| `\D` | ADO | DEPOTS (Drizzle => ovly) |
+| `\E` | AE | Smoke (& other vis codes) |
+| `\F` | AF | AVAIL (FrzngRain => ovly) |
+| `\G` | AG | AVAIL (Snow Shwr => ovly) |
+| `\H` | AHO | Haze (& Overlay Hazards) |
+| `\I` | AI | Rain Shower |
+| `\J` | AJ | AVAIL (Lightning => ovly) |
+| `\K` | AK | Kenwood HT (W) |
+| `\L` | AL | Lighthouse |
+| `\M` | AMO | MARS (A=Army, N=Navy, F=AF) |
+| `\N` | AN | Navigation Buoy |
+| `\O` | AO | Overlay Balloon (Rocket) |
+| `\P` | AP | Parking |
+| `\Q` | AQ | QUAKE |
+| `\R` | ARO | Restaurant |
+| `\S` | AS | Satellite/Pacsat |
+| `\T` | AT | Thunderstorm |
+| `\U` | AU | SUNNY |
+| `\V` | AV | VORTAC Nav Aid |
+| `\W` | AW | NWS site (NWS options) |
+| `\X` | AX | Pharmacy Rx (Apothicary) |
+| `\Y` | AYO | Radios and devices |
+| `\Z` | AZ | AVAIL |
+| `\[` | DSO | W.Cloud (& humans w Ovly) |
+| `\\` | DTO | New overlayable GPS symbol |
+| `\]` | DU | AVAIL |
+| `\^` | DV | Other Aircraft overlays (2014) |
+| `\_` | DW | WX site (green digi) |
+| `\`` | DX | Rain (all types w ovly) |
+| `\a` | SAO | ARRL, ARES, WinLINK, D-Star, etc |
+| `\b` | SB | AVAIL (Blwng Dst/Snd => ovly) |
+| `\c` | SCO | CD triangle RACES/SATERN/etc |
+| `\d` | SD | DX spot by callsign |
+| `\e` | SE | Sleet (& future ovly codes) |
+| `\f` | SF | Funnel Cloud |
+| `\g` | SG | Gale Flags |
+| `\h` | SHO | Store or HAMFST Hh=HAM store |
+| `\i` | SI | BOX or points of Interest |
+| `\j` | SJ | WorkZone (Steam Shovel) |
+| `\k` | SKO | Special Vehicle SUV, ATV, 4x4 |
+| `\l` | SL | Areas (box, circles, etc) |
+| `\m` | SM | Value Sign (3 digit display) |
+| `\n` | SN | OVERLAY TRIANGLE |
+| `\o` | SO | Small circle |
+| `\p` | SP | AVAIL (PrtlyCldy => ovly) |
+| `\q` | SQ | AVAIL |
+| `\r` | SR | Restrooms |
+| `\s` | SSO | OVERLAY SHIP/boats |
+| `\t` | ST | Tornado |
+| `\u` | SU | OVERLAYED TRUCK |
+| `\v` | SV | OVERLAYED Van |
+| `\w` | SWO | Flooding (Avalanches/Slides) |
+| `\x` | SX | Wreck or Obstruction ->X<- |
+| `\y` | SY | Skywarn |
+| `\z` | SZ | OVERLAYED Shelter |
+
+### Symbol Notation Reference
+
+- **Table Character**: `/` (Primary) or `\` (Alternate)
+- **Symbol Character**: A single letter or number (case-sensitive)
+- **Examples**: `/a` = Ambulance (Primary), `\s` = Ship (Alternate)
+- **Overlays**: Many symbols support overlays (0-9, A-Z) for extended meanings
+- **Special**: Some symbols are marked with `#O` for overlay-capable or special handling
+
+### Finding Symbol Images
+
+Official symbol images and detailed overlay definitions are available at:
+- https://www.aprs.org/symbols/symbolsX.txt — Master symbol list with notes
+- https://www.aprs.org/symbols/symbols-new.txt — New overlay symbol definitions
+
+Note: As of 2007, provisions allow overlays on nearly all alternate symbols, creating hundreds of possible symbol combinations. Check the symbols-new.txt file for overlay-specific meanings.
+
+---
+
 ## Backup & Restore
 
 ### What Gets Backed Up
