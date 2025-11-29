@@ -19,11 +19,11 @@ This project automates the process of creating a customized Ubuntu-based ISO for
 
 **This Customizer adds:**
 - ✅ Automated WiFi configuration (baked into ISO at build time)
-- ✅ Automated callsign and APRS configuration
+- ✅ Automated callsign and APRS configuration (beacon + iGate)
 - ✅ Automated git user configuration
 - ✅ Desktop environment preferences (dark mode, scaling)
 - ✅ **Anytone D578UV CAT support** (hamlib rigctld for frequency control)
-- ✅ APRS beacon configuration (position broadcasting via RF)
+- ✅ APRS beacon + iGate configuration (position broadcasting and internet relay)
 - ✅ Backup/restore automation for VARA FM and user settings
 - ✅ Fully reproducible builds from command line
 
@@ -38,7 +38,7 @@ This project automates the process of creating a customized Ubuntu-based ISO for
 
 ### Prerequisites
 
-- **x64/AMD64 Ubuntu system** (18.04+) for building
+- **x64/AMD64 Ubuntu system** (22.10) for building
 - **~8GB disk space** for build files and ISO
 - **Internet connection** (downloads ~3.6GB base ISO once, then cached)
 
@@ -261,7 +261,7 @@ The customizer configures **direwolf** to broadcast your position via APRS RF at
 - **iGate** (Internet Gateway): Relay APRS packets between RF and internet
   - Requires: Internet connection + hamradio network account
   - Use: Home stations, EOC relay
-  - **NOT included in this customizer** (upstream only)
+  - **Enabled by this customizer** (upstream provides infrastructure, we enable it)
 
 ### Beacon Configuration
 
@@ -270,9 +270,19 @@ Edit your `secrets.env` to enable and configure beacon:
 ```bash
 ENABLE_APRS_BEACON="no"             # Set to "yes" to enable
 APRS_BEACON_INTERVAL="300"          # Seconds between beacons
-APRS_SSID="10"                      # Secondary station ID
+APRS_SSID="0"                       # Station ID (0=base, 1-15=secondary)
 APRS_PASSCODE="-1"                  # Get from https://apps.magicbug.co.uk/passcode/
 ```
+
+**APRS SSID Reference** (common values):
+- `0` = Primary station (default for fixed location or first mobile)
+- `1` = Alternate mobile (second vehicle, alternate callsign)
+- `10` = Mobile (deprecated, use 1-7 instead)
+- `11` = Fixed/Home
+- `12` = APRS digipeater
+- `13` = Weather station
+- `14` = Tactical call (temporary)
+- `15` = Generic name (for gates, relays)
 
 See `secrets.env.template` for all available beacon options and descriptions.
 
@@ -299,8 +309,9 @@ systemctl restart direwolf
 
 Two things persist across ISO builds:
 
-1. **wine.tar.gz** - VARA FM configuration
-   - Your audio calibration, modem settings, license keys
+1. **wine.tar.gz** - VARA FM Windows Prefix
+   - Audio calibration, modem settings, driver configurations
+   - Note: License keys are in Windows Registry (backed up with wine prefix)
    - Static "golden master" - same for all deployments
    - Update intentionally when you find good settings
 
@@ -412,8 +423,8 @@ EXAMPLES:
 
 **What we DON'T add:**
 - ❌ Multi-user setup (not needed for emergency ops)
-- ❌ Network services (upstream is already offline-capable)
-- ❌ Unnecessary complexity (KISS principle)
+- ❌ Upstream package updates (builds are reproducible from fixed ETC release)
+- ❌ Unnecessary complexity (KISS principle - only add automation, don't modify upstream)
 - ❌ Promises we don't keep (this README is honest about what works)
 
 ---
