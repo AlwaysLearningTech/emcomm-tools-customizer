@@ -126,36 +126,80 @@ OPTIONAL POST-INSTALL (on deployed system):
 - GitHub account (fork this repository)
 - Your WiFi credentials and amateur radio callsign
 
-### Build Process
-1. **Fork this repository** to your GitHub account
-2. **Create `secrets.env`** from template (see Security section below)
-3. **On Ubuntu system:**
-   ```bash
+### Build Process - Test Run
 
-   # Clone your fork
-   git clone https://github.com/YourUsername/emcomm-tools-customizer.git
-   cd emcomm-tools-customizer
-   
-   # Copy secrets.env to this folder (transfer securely from dev system)
-   
-   # Run build with latest stable release
-   ./build-etc-iso.sh -r stable
-   
-   # Or with cleanup mode to save space (~3.6GB)
-   ./build-etc-iso.sh -r stable -c
-   ```
-4. **Terminal**: Run Cubic commands OR open Cubic GUI (instructions generated automatically)
-5. **Cubic Chroot**: Customization scripts run automatically (hands-off) 
-6. **Terminal**: ISO ready to use
+**Simple 4-step test run to build your first ISO:**
 
-**IMPORTANT DISTINCTION**: 
-- `cubic/` scripts are **fully automated** — Cubic executes them with no user intervention needed
-- Only Cubic GUI steps or specific manual operations appear in generated instructions
-- The goal is to **minimize manual steps** — all automation happens in `cubic/` scripts
+#### Step 1: Terminal - Clone & Setup
+
+```bash
+# Clone repository
+git clone https://github.com/AlwaysLearningTech/emcomm-tools-customizer.git
+cd emcomm-tools-customizer
+
+# Create and edit secrets.env
+cp secrets.env.template secrets.env
+nano secrets.env
+# Edit these at minimum:
+#   USER_USERNAME = (match your Linux username)
+#   USER_FULLNAME = (your name)
+#   USER_PASSWORD = (your password)
+#   CALLSIGN = (your ham radio callsign, e.g., KD7DGF)
+#   WIFI_SSID_PRIMARY = (your WiFi network)
+#   WIFI_PASSWORD_PRIMARY = (your WiFi password)
+```
+
+#### Step 2: Terminal - Start Build
+
+```bash
+# Run the build script (fully automated)
+./build-etc-iso.sh -r stable
+
+# This automatically:
+# ✅ Downloads ETC release + Ubuntu ISO
+# ✅ Detects backups from ~/etc-customizer-backups/
+# ✅ Prepares all build files
+# ✅ Generates Cubic project directory
+# ✅ Prints next steps when complete
+```
+
+#### Step 3: Cubic GUI - Create ISO (Hands-Off)
+
+```bash
+# Open Cubic (it's a GUI application)
+sudo cubic
+
+# In Cubic GUI:
+#   1. Click "File" → "New Project"
+#   2. Select the prepared project directory
+#   3. Click "Next" to build
+#   → ALL cubic/*.sh scripts run AUTOMATICALLY
+#   → NO manual steps needed
+# When done, Cubic creates your ISO
+```
+
+#### Step 4: Terminal - Copy to Boot Media
+
+```bash
+# Copy ISO to Ventoy drive (or any boot media)
+./copy-iso-to-ventoy.sh ~/etc-builds/*/emcomm-tools-os-community-*.iso
+
+# Boot on target hardware
+```
+
+**Automation Summary:**
+
+- ✅ `build-etc-iso.sh` - Fully automated (you run it once)
+- ✅ `cubic/*.sh` scripts - Fully automated (Cubic runs them, no intervention)
+- ⚠️ Cubic GUI - 3 clicks (necessary to start build)
+- ✅ Copy to USB - Fully automated (you run the helper script)
+
+---
 
 ### Build Script Options
 
 The `build-etc-iso.sh` script orchestrates the entire build process, handling:
+
 - ✅ Download and validation of ETC release files
 - ✅ Preparation of backup files and ISO locations
 - ✅ Generation of Cubic instructions
