@@ -304,7 +304,7 @@ See `secrets.env.template` for all available beacon options and descriptions.
 The customizer includes additional beacon parameters for fine-tuning RF coverage:
 
 ```bash
-APRS_BEACON_POWER="10"              # Transmit power code (0-9)
+APRS_BEACON_POWER="5"              # Transmit power code (0-9)
 APRS_BEACON_HEIGHT="20"             # Antenna height above ground in feet
 APRS_BEACON_GAIN="3"                # Antenna gain code (0-9)
 ```
