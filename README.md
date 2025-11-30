@@ -28,6 +28,12 @@ ETC already includes all ham radio tools (Winlink, VARA, JS8Call, fldigi, etc.).
 - Wine/VARA installation (already in ETC)
 - System packages (already optimized)
 
+### Future Enhancements (TODO)
+
+- ⏳ **D578 CAT Control**: Hamlib/rigctld configuration for Anytone D578UV radio
+- ⏳ **GPS Auto-Detection**: Automatic grid square from GPS hardware
+- ⏳ **Radio Auto-Detection**: USB VID/PID detection for CAT control setup
+
 ## Directory Structure
 
 ```text

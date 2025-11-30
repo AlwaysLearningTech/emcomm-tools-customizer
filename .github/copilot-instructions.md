@@ -22,6 +22,7 @@ Automated customization of EmComm Tools Community (ETC) ISO images.
 - Utilities: et-user, et-radio, et-mode
 
 ### What This Project Customizes
+
 - WiFi networks (pre-configured)
 - Hostname (ETC-{CALLSIGN})
 - Desktop preferences (dark mode, scaling)
@@ -29,23 +30,35 @@ Automated customization of EmComm Tools Community (ETC) ISO images.
 - VARA license injection via secrets.env
 - APRS configuration with symbols
 - Git configuration
+- Autologin for emergency deployment
+
+### Future Enhancements (TODO)
+
+- **D578 CAT Control**: Hamlib/rigctld configuration for Anytone D578UV (post-install script)
+- **GPS Auto-Detection**: Automatic grid square from GPS hardware
+- **Radio Auto-Detection**: USB VID/PID detection for CAT control setup
 
 ## Directory Structure
 
-```
+```text
 emcomm-tools-customizer/
 ├── README.md                    # Main documentation
-├── QUICK_START.md              # Quick reference
-├── build-etc-iso.sh            # Main build script (xorriso/squashfs, no Cubic)
+├── QUICK_START.md               # Quick reference
+├── TTPCustomization.md          # Original Cubic guide (legacy reference)
+├── build-etc-iso.sh             # Main build script (xorriso/squashfs, no Cubic)
 ├── secrets.env.template         # Config template
 ├── secrets.env                  # User config (gitignored)
 ├── cache/                       # Downloaded files (persistent across builds)
-│   ├── ubuntu-22.10-desktop-amd64.iso  # Ubuntu base ISO (drop here to skip download!)
+│   ├── ubuntu-22.10-desktop-amd64.iso  # Ubuntu base ISO (drop here to skip!)
 │   └── emcomm-tools-os-*.tar.gz        # ETC installer tarballs
 ├── output/                      # Generated custom ISOs
 ├── logs/                        # Build logs
-├── post-install/                # Post-installation scripts
-└── .github/copilot-instructions.md
+├── post-install/                # Post-installation scripts (for runtime detection)
+│   ├── README.md
+│   ├── download-resources.sh
+│   └── restore-backups-from-skel.sh
+└── .github/
+    └── copilot-instructions.md  # This file
 ```
 
 ## Build Options
