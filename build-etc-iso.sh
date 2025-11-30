@@ -1,198 +1,994 @@
 #!/bin/bash
 #
 # Script Name: build-etc-iso.sh
-# Description: Automated wrapper for building EmComm Tools Community ISO with Cubic
+# Description: Fully automated ETC ISO customization using xorriso/squashfs (no Cubic GUI)
 # Usage: ./build-etc-iso.sh [OPTIONS]
 # Options:
 #   -r MODE   Release mode: stable, latest, or tag (default: latest)
 #   -t TAG    Specify release tag (required when -r tag)
 #   -l        List available tags from GitHub and exit
-#   -u PATH   Path to existing Ubuntu ISO (default: auto-download)
-#   -b PATH   Path to .wine backup (default: ~/etc-wine-backup*.tar.gz)
-#   -e PATH   Path to et-user backup (default: ~/etc-user-backup*.tar.gz)
-#   -p PATH   Path to private files (local directory or GitHub repo URL)
-#   -c        Cleanup mode: Remove embedded Ubuntu ISO from final build
 #   -d        Dry-run mode (show what would be done)
 #   -v        Verbose mode (enable set -x)
 #   -h        Show this help message
 # Author: KD7DGF
-# Date: 2025-10-15
-# Cubic Stage: No (orchestrates Cubic build process)
-# Post-Install: No
+# Date: 2025-11-29
+# Method: Direct ISO modification via xorriso/squashfs (fully automated, no Cubic)
 #
 
 set -euo pipefail
 
-# Source secrets.env to get USER_USERNAME for backup paths
+# ============================================================================
+# Configuration
+# ============================================================================
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SECRETS_FILE="${SCRIPT_DIR}/secrets.env"
 
-# Load USER_USERNAME from secrets.env (required for backup paths)
-if [ -f "$SECRETS_FILE" ]; then
-    # shellcheck source=/dev/null
-    source "$SECRETS_FILE"
-    USER_USERNAME="${USER_USERNAME:-}"
-else
-    echo "ERROR: secrets.env file not found at $SECRETS_FILE"
-    echo "Please copy secrets.env.template to secrets.env and configure it"
-    exit 2
-fi
-
-if [ -z "$USER_USERNAME" ]; then
-    echo "ERROR: USER_USERNAME not set in secrets.env"
-    exit 2
-fi
-
-# Configuration
-UBUNTU_ISO_URL="https://old-releases.ubuntu.com/releases/kinetic/ubuntu-22.10-desktop-amd64.iso"
-UBUNTU_ISO_FILE="ubuntu-22.10-desktop-amd64.iso"
+# GitHub repository info
 GITHUB_REPO="thetechprepper/emcomm-tools-os-community"
 GITHUB_API_BASE="https://api.github.com/repos/${GITHUB_REPO}"
 GITHUB_RELEASES_URL="${GITHUB_API_BASE}/releases"
 GITHUB_TAGS_URL="${GITHUB_API_BASE}/tags"
-BACKUPS_AND_ISO_DIR="/home/${USER_USERNAME}/etc-customizer-backups"
-BUILD_BASE_DIR="/home/${USER_USERNAME}/etc-builds"
-DOWNLOADS_DIR="${BACKUPS_AND_ISO_DIR}"
-DRY_RUN=0
-CLEANUP_EMBEDDED_ISO=0
-RELEASE_MODE="latest"  # stable, latest, or tag
-SPECIFIED_TAG=""
-UBUNTU_ISO_PATH=""
-WINE_BACKUP_PATH=""
-ET_USER_BACKUP_PATH=""
-PRIVATE_FILES_PATH=""
 
+# Ubuntu ISO info
+UBUNTU_ISO_URL="https://old-releases.ubuntu.com/releases/kinetic/ubuntu-22.10-desktop-amd64.iso"
+UBUNTU_ISO_FILE="ubuntu-22.10-desktop-amd64.iso"
+
+# Directory structure (relative to script)
+CACHE_DIR="${SCRIPT_DIR}/cache"          # Downloaded files (ISOs, tarballs) - persists across builds
+OUTPUT_DIR="${SCRIPT_DIR}/output"         # Generated ISOs
+WORK_DIR="${SCRIPT_DIR}/.work"            # Temporary build directory (cleaned each build)
+
+# Build state
+DRY_RUN=0
+RELEASE_MODE="latest"
+SPECIFIED_TAG=""
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# ============================================================================
 # Logging
-LOG_DIR="${BUILD_BASE_DIR}/logs"
+# ============================================================================
+
+LOG_DIR="${SCRIPT_DIR}/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="${LOG_DIR}/build-etc-iso_$(date +'%Y%m%d_%H%M%S').log"
 
 log() {
     local level="${1:-INFO}"
     local message="$2"
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [$level] $message" | tee -a "$LOG_FILE"
+    local timestamp
+    timestamp=$(date +'%Y-%m-%d %H:%M:%S')
+    
+    # Log to file
+    echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
+    
+    # Log to console with color
+    case "$level" in
+        ERROR)   echo -e "${RED}[$level]${NC} $message" ;;
+        WARN)    echo -e "${YELLOW}[$level]${NC} $message" ;;
+        SUCCESS) echo -e "${GREEN}[$level]${NC} $message" ;;
+        INFO)    echo -e "${BLUE}[$level]${NC} $message" ;;
+        *)       echo "[$level] $message" ;;
+    esac
 }
+
+# ============================================================================
+# Usage
+# ============================================================================
 
 usage() {
     cat <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
-Automated wrapper for building EmComm Tools Community ISO with Cubic.
+Fully automated ETC ISO customization using xorriso/squashfs.
+No Cubic GUI required - everything is scripted.
 
-OPTIONS:
+RELEASE OPTIONS:
     -r MODE   Release mode (default: latest)
-              - stable: Latest formal GitHub Release (e.g., R5 final 5.0.0)
-                        These are fully tested, production-ready releases
-              - latest: Most recent git tag (includes development builds)
-                        Tags like 'emcomm-tools-os-community-20251113-r5-build17'
+              - stable: Latest formal GitHub Release (production-ready)
+              - latest: Most recent git tag (development builds)
               - tag:    Use a specific tag by name (requires -t)
-    -t TAG    Specify exact tag name (e.g., emcomm-tools-os-community-20251113-r5-build17)
-              Required when -r tag. Use -l to list available tags.
-    -l        List available tags and releases from GitHub, then exit
-    -u PATH   Path to existing Ubuntu ISO file (skips download if provided)
-    -b PATH   Path to .wine backup (tar.gz from et-user-backup or directory)
-              Default: Auto-detect ~/etc-wine-backup-*.tar.gz
-    -e PATH   Path to et-user backup (tar.gz from et-user-backup or directory)
-              Default: Auto-detect ~/etc-user-backup-*.tar.gz
-    -p PATH   Path to private files:
-              - Local directory path: /path/to/private/files
-              - GitHub repo: https://github.com/username/repo or git@github.com:username/repo.git
-    -c        Cleanup mode: Remove embedded Ubuntu ISO from final build to save space
-    -d        Dry-run mode (show what would be done without executing)
-    -v        Verbose mode (enable bash debugging)
+    -t TAG    Specify exact tag name (use -l to list available)
+    -l        List available tags and releases, then exit
+
+BUILD OPTIONS:
+    -d        Dry-run mode (show what would be done without making changes)
+    -v        Verbose mode (enable bash -x debugging)
     -h        Show this help message
 
-RELEASE MODES EXPLAINED:
-    The ETC project uses two types of versioning on GitHub:
-
-    stable (-r stable):
-        - Official GitHub Releases with semantic versions (e.g., 5.0.0)
-        - Tested and production-ready
-        - Example: emcomm-tools-os-community-20251128-r5-final-5.0.0
-        - Found at: https://github.com/thetechprepper/emcomm-tools-os-community/releases
-
-    latest (-r latest):
-        - Development/build tags pushed between releases
-        - May contain new features or fixes not yet in stable
-        - Example: emcomm-tools-os-community-20251113-r5-build17
-        - Found at: https://github.com/thetechprepper/emcomm-tools-os-community/tags
-
-EXAMPLES:
-    # List available releases and tags
-    ./build-etc-iso.sh -l
-
-    # Build latest stable release (recommended for most users)
-    ./build-etc-iso.sh -r stable
-
-    # Build bleeding-edge development version
-    ./build-etc-iso.sh -r latest
-
-    # Build a specific development build by tag name
-    ./build-etc-iso.sh -r tag -t emcomm-tools-os-community-20251113-r5-build17
-
-    # Full build with backups and private files
-    ./build-etc-iso.sh -r stable \\
-        -b ~/etc-wine-backup-ETC-FZG1-20251015.tar.gz \\
-        -e ~/etc-user-backup-ETC-FZG1-20251015.tar.gz \\
-        -p ~/private-emcomm-files
-
-    # Dry-run to see what would happen
-    ./build-etc-iso.sh -d
+DIRECTORY STRUCTURE:
+    cache/    Downloaded ISOs and tarballs (persistent)
+              - Drop your Ubuntu ISO here to skip download
+              - ETC tarballs are cached here too
+    output/   Generated custom ISOs
+    logs/     Build logs
 
 PREREQUISITES:
-    - Cubic installed (sudo apt install cubic)
-    - Internet connection (to fetch release info from GitHub)
-    - Sufficient disk space (~10GB for ISO + build artifacts)
-    - secrets.env file configured in $(dirname "$0")
-    - git (if using private GitHub repos)
+    sudo apt install xorriso squashfs-tools genisoimage p7zip-full wget curl jq
 
-NOTES:
-    - Release URLs are dynamically fetched from GitHub API (no hardcoded URLs)
-    - Ubuntu ISO will be downloaded if not provided with -u
-    - ETC installer tarball will be automatically downloaded from GitHub
-    - Project directory created at: ${BUILD_BASE_DIR}/<release-name>
-    - Logs saved to: ${LOG_DIR}
+EXAMPLES:
+    # List available releases
+    ./build-etc-iso.sh -l
+
+    # Build from stable release (recommended)
+    sudo ./build-etc-iso.sh -r stable
+
+    # Build from latest development tag
+    sudo ./build-etc-iso.sh -r latest
+
+    # Build specific version
+    sudo ./build-etc-iso.sh -r tag -t emcomm-tools-os-community-20251113-r5-build17
+
 EOF
 }
 
-# List available tags and releases from GitHub
+# ============================================================================
+# GitHub API Functions
+# ============================================================================
+
 list_available_versions() {
     echo ""
-    echo "Fetching available versions from GitHub..."
+    echo "=== Available ETC Releases ==="
     echo ""
     
-    # Fetch latest stable release
-    echo "=== STABLE RELEASES (GitHub Releases) ==="
-    echo "Use with: ./build-etc-iso.sh -r stable"
-    echo ""
-    
+    echo "STABLE RELEASES (GitHub Releases - production ready):"
+    echo "------------------------------------------------------"
     if RELEASES_JSON=$(curl -s -f "${GITHUB_RELEASES_URL}?per_page=5" 2>/dev/null); then
-        echo "$RELEASES_JSON" | jq -r '.[] | "  \(.tag_name)  (\(.name // "unnamed") - \(.published_at | split("T")[0]))"' 2>/dev/null || echo "  (unable to parse releases)"
+        echo "$RELEASES_JSON" | jq -r '.[] | "  \(.tag_name) - \(.name) (\(.published_at | split("T")[0]))"' 2>/dev/null || echo "  (Unable to parse releases)"
     else
-        echo "  (unable to fetch releases)"
+        echo "  (Unable to fetch releases - check network connection)"
     fi
     
     echo ""
-    echo "=== DEVELOPMENT TAGS (All Git Tags) ==="
-    echo "Use with: ./build-etc-iso.sh -r latest  (for most recent)"
-    echo "      or: ./build-etc-iso.sh -r tag -t <tag-name>"
-    echo ""
-    
-    if TAGS_JSON=$(curl -s -f "${GITHUB_TAGS_URL}?per_page=15" 2>/dev/null); then
+    echo "DEVELOPMENT TAGS (Git Tags - bleeding edge):"
+    echo "----------------------------------------------"
+    if TAGS_JSON=$(curl -s -f "${GITHUB_TAGS_URL}?per_page=10" 2>/dev/null); then
         echo "$TAGS_JSON" | jq -r '.[].name' 2>/dev/null | while read -r tag; do
             echo "  $tag"
         done
     else
-        echo "  (unable to fetch tags)"
+        echo "  (Unable to fetch tags - check network connection)"
     fi
     
     echo ""
-    echo "For more tags, visit: https://github.com/thetechprepper/emcomm-tools-os-community/tags"
+    echo "Usage:"
+    echo "  ./build-etc-iso.sh -r stable                    # Latest stable release"
+    echo "  ./build-etc-iso.sh -r latest                    # Latest development tag"
+    echo "  ./build-etc-iso.sh -r tag -t <tag-name>         # Specific tag"
     echo ""
 }
 
-# Parse command-line options
-while getopts ":r:t:u:b:e:p:lcdvh" opt; do
+get_release_info() {
+    log "INFO" "Fetching release information (mode: $RELEASE_MODE)..."
+    
+    case "$RELEASE_MODE" in
+        stable)
+            log "INFO" "Fetching latest stable release from GitHub Releases API..."
+            if ! RELEASE_JSON=$(curl -s -f "${GITHUB_RELEASES_URL}/latest"); then
+                log "ERROR" "Failed to fetch latest release from GitHub"
+                return 1
+            fi
+            
+            RELEASE_TAG=$(echo "$RELEASE_JSON" | jq -r '.tag_name // empty')
+            RELEASE_NAME=$(echo "$RELEASE_JSON" | jq -r '.name // empty')
+            RELEASE_DATE=$(echo "$RELEASE_JSON" | jq -r '.published_at // empty' | cut -d'T' -f1)
+            TARBALL_URL=$(echo "$RELEASE_JSON" | jq -r '.tarball_url // empty')
+            ;;
+            
+        latest)
+            log "INFO" "Fetching latest tag from GitHub Tags API..."
+            if ! TAGS_JSON=$(curl -s -f "${GITHUB_TAGS_URL}?per_page=1"); then
+                log "ERROR" "Failed to fetch tags from GitHub"
+                return 1
+            fi
+            
+            RELEASE_TAG=$(echo "$TAGS_JSON" | jq -r '.[0].name // empty')
+            TARBALL_URL=$(echo "$TAGS_JSON" | jq -r '.[0].tarball_url // empty')
+            RELEASE_NAME="$RELEASE_TAG"
+            RELEASE_DATE=$(date +%Y-%m-%d)
+            ;;
+            
+        tag)
+            log "INFO" "Looking up specific tag: $SPECIFIED_TAG"
+            if ! TAGS_JSON=$(curl -s -f "${GITHUB_TAGS_URL}?per_page=100"); then
+                log "ERROR" "Failed to fetch tags from GitHub"
+                return 1
+            fi
+            
+            RELEASE_TAG=$(echo "$TAGS_JSON" | jq -r --arg tag "$SPECIFIED_TAG" '.[] | select(.name == $tag) | .name // empty')
+            TARBALL_URL=$(echo "$TAGS_JSON" | jq -r --arg tag "$SPECIFIED_TAG" '.[] | select(.name == $tag) | .tarball_url // empty')
+            
+            if [ -z "$RELEASE_TAG" ]; then
+                log "ERROR" "Tag not found: $SPECIFIED_TAG"
+                log "INFO" "Use -l to list available tags"
+                return 1
+            fi
+            
+            RELEASE_NAME="$RELEASE_TAG"
+            RELEASE_DATE=$(date +%Y-%m-%d)
+            ;;
+    esac
+    
+    if [ -z "$RELEASE_TAG" ] || [ -z "$TARBALL_URL" ]; then
+        log "ERROR" "Failed to determine release information"
+        return 1
+    fi
+    
+    # Parse version components from tag
+    TARBALL_FILE="${RELEASE_TAG}.tar.gz"
+    VERSION=$(echo "$RELEASE_TAG" | grep -oP '\d+\.\d+\.\d+$' || echo "dev")
+    DATE_VERSION=$(echo "$RELEASE_TAG" | grep -oP '\d{8}' | head -1 || echo "unknown")
+    RELEASE_NUMBER=$(echo "$RELEASE_TAG" | grep -oP 'r\d+' | head -1 || echo "r0")
+    BUILD_NUMBER=$(echo "$RELEASE_TAG" | grep -oP 'build\d+' || echo "")
+    
+    # Output ISO filename
+    OUTPUT_ISO="${OUTPUT_DIR}/${RELEASE_TAG}-custom.iso"
+    
+    log "SUCCESS" "Release: $RELEASE_NAME"
+    log "INFO" "  Tag: $RELEASE_TAG"
+    log "INFO" "  Version: $VERSION"
+    [ -n "$BUILD_NUMBER" ] && log "INFO" "  Build: $BUILD_NUMBER"
+    log "INFO" "  Date: $DATE_VERSION"
+    
+    return 0
+}
+
+# ============================================================================
+# Prerequisites Check
+# ============================================================================
+
+check_prerequisites() {
+    log "INFO" "Checking prerequisites..."
+    
+    local missing=0
+    local required_commands=(xorriso unsquashfs mksquashfs genisoimage wget curl jq)
+    
+    for cmd in "${required_commands[@]}"; do
+        if ! command -v "$cmd" &>/dev/null; then
+            log "ERROR" "Required command not found: $cmd"
+            missing=1
+        fi
+    done
+    
+    if [ $missing -eq 1 ]; then
+        log "ERROR" "Install missing prerequisites with:"
+        log "ERROR" "  sudo apt install xorriso squashfs-tools genisoimage p7zip-full wget curl jq"
+        return 1
+    fi
+    
+    # Check for root (required for squashfs operations)
+    if [ "$(id -u)" -ne 0 ]; then
+        log "ERROR" "This script must be run as root (sudo)"
+        log "ERROR" "  sudo ./build-etc-iso.sh $*"
+        return 1
+    fi
+    
+    # Check for secrets.env
+    if [ ! -f "$SECRETS_FILE" ]; then
+        log "ERROR" "secrets.env not found: $SECRETS_FILE"
+        log "ERROR" "Copy secrets.env.template to secrets.env and configure it"
+        return 1
+    fi
+    
+    # Validate secrets.env has required fields
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    
+    if [ -z "${CALLSIGN:-}" ] || [ "$CALLSIGN" = "N0CALL" ]; then
+        log "WARN" "CALLSIGN not configured in secrets.env (using default N0CALL)"
+    fi
+    
+    log "SUCCESS" "All prerequisites satisfied"
+    return 0
+}
+
+# ============================================================================
+# Download Functions
+# ============================================================================
+
+download_ubuntu_iso() {
+    mkdir -p "$CACHE_DIR"
+    
+    local iso_path="${CACHE_DIR}/${UBUNTU_ISO_FILE}"
+    
+    # Check if already cached
+    if [ -f "$iso_path" ]; then
+        log "SUCCESS" "Ubuntu ISO found in cache: $iso_path"
+        UBUNTU_ISO_PATH="$iso_path"
+        return 0
+    fi
+    
+    log "INFO" "Ubuntu ISO not found in cache"
+    log "INFO" "Downloading Ubuntu 22.10 ISO (3.6 GB)..."
+    log "INFO" "  URL: $UBUNTU_ISO_URL"
+    log "INFO" "  Destination: $iso_path"
+    log "INFO" ""
+    log "INFO" "TIP: To skip download, place your Ubuntu ISO at:"
+    log "INFO" "     $iso_path"
+    
+    if [ $DRY_RUN -eq 1 ]; then
+        log "DRY-RUN" "Would download Ubuntu ISO"
+        UBUNTU_ISO_PATH="$iso_path"
+        return 0
+    fi
+    
+    if ! wget -c -O "$iso_path" "$UBUNTU_ISO_URL"; then
+        log "ERROR" "Failed to download Ubuntu ISO"
+        return 1
+    fi
+    
+    log "SUCCESS" "Ubuntu ISO downloaded: $iso_path"
+    UBUNTU_ISO_PATH="$iso_path"
+    return 0
+}
+
+download_etc_installer() {
+    mkdir -p "$CACHE_DIR"
+    
+    local tarball_path="${CACHE_DIR}/${TARBALL_FILE}"
+    
+    # Check if already cached
+    if [ -f "$tarball_path" ]; then
+        log "SUCCESS" "ETC tarball found in cache: $tarball_path"
+        ETC_TARBALL_PATH="$tarball_path"
+        return 0
+    fi
+    
+    log "INFO" "Downloading ETC installer: $TARBALL_FILE"
+    
+    if [ $DRY_RUN -eq 1 ]; then
+        log "DRY-RUN" "Would download ETC tarball"
+        ETC_TARBALL_PATH="$tarball_path"
+        return 0
+    fi
+    
+    if ! wget -O "$tarball_path" "$TARBALL_URL"; then
+        log "ERROR" "Failed to download ETC installer"
+        return 1
+    fi
+    
+    log "SUCCESS" "ETC tarball downloaded: $tarball_path"
+    ETC_TARBALL_PATH="$tarball_path"
+    return 0
+}
+
+# ============================================================================
+# ISO Extraction
+# ============================================================================
+
+extract_iso() {
+    log "INFO" "Extracting Ubuntu ISO..."
+    
+    local iso_extract_dir="${WORK_DIR}/iso"
+    local squashfs_dir="${WORK_DIR}/squashfs"
+    
+    mkdir -p "$iso_extract_dir" "$squashfs_dir"
+    
+    if [ $DRY_RUN -eq 1 ]; then
+        log "DRY-RUN" "Would extract ISO to: $iso_extract_dir"
+        log "DRY-RUN" "Would extract squashfs to: $squashfs_dir"
+        return 0
+    fi
+    
+    # Extract ISO contents
+    log "INFO" "Extracting ISO structure..."
+    xorriso -osirrox on -indev "$UBUNTU_ISO_PATH" -extract / "$iso_extract_dir"
+    
+    # Find and extract squashfs filesystem
+    local squashfs_file
+    squashfs_file=$(find "$iso_extract_dir" -name "filesystem.squashfs" -type f | head -1)
+    
+    if [ -z "$squashfs_file" ]; then
+        log "ERROR" "Could not find filesystem.squashfs in ISO"
+        return 1
+    fi
+    
+    log "INFO" "Extracting squashfs filesystem (this takes several minutes)..."
+    unsquashfs -d "$squashfs_dir" -f "$squashfs_file"
+    
+    # Store paths for later
+    ISO_EXTRACT_DIR="$iso_extract_dir"
+    SQUASHFS_DIR="$squashfs_dir"
+    SQUASHFS_FILE="$squashfs_file"
+    
+    log "SUCCESS" "ISO extracted successfully"
+    return 0
+}
+
+# ============================================================================
+# Customization Functions (from cubic scripts)
+# ============================================================================
+
+customize_hostname() {
+    log "INFO" "Configuring hostname..."
+    
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    
+    local callsign="${CALLSIGN:-N0CALL}"
+    local machine_name="${MACHINE_NAME:-ETC-${callsign}}"
+    
+    if [ $DRY_RUN -eq 1 ]; then
+        log "DRY-RUN" "Would set hostname to: $machine_name"
+        return 0
+    fi
+    
+    # Set hostname
+    echo "$machine_name" > "${SQUASHFS_DIR}/etc/hostname"
+    
+    # Update /etc/hosts
+    cat > "${SQUASHFS_DIR}/etc/hosts" <<EOF
+127.0.0.1       localhost
+127.0.1.1       $machine_name
+
+::1     ip6-localhost ip6-loopback
+fe00::0 ip6-localnet
+ff00::0 ip6-mcastprefix
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+EOF
+    
+    log "SUCCESS" "Hostname set to: $machine_name"
+}
+
+customize_wifi() {
+    log "INFO" "Configuring WiFi networks..."
+    
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    
+    local nm_dir="${SQUASHFS_DIR}/etc/NetworkManager/system-connections"
+    mkdir -p "$nm_dir"
+    
+    # Find all WIFI_SSID_* variables
+    local wifi_count=0
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^WIFI_SSID_([A-Z0-9_]+)= ]]; then
+            local identifier="${BASH_REMATCH[1]}"
+            local ssid_var="WIFI_SSID_${identifier}"
+            local password_var="WIFI_PASSWORD_${identifier}"
+            local autoconnect_var="WIFI_AUTOCONNECT_${identifier}"
+            
+            local ssid="${!ssid_var:-}"
+            local password="${!password_var:-}"
+            local autoconnect="${!autoconnect_var:-yes}"
+            
+            # Skip empty/template values
+            if [[ -z "$ssid" ]] || [[ "$ssid" == "YOUR_"* ]]; then
+                continue
+            fi
+            if [[ -z "$password" ]]; then
+                log "WARN" "No password for $ssid, skipping"
+                continue
+            fi
+            
+            if [ $DRY_RUN -eq 1 ]; then
+                log "DRY-RUN" "Would configure WiFi: $ssid"
+                ((wifi_count++))
+                continue
+            fi
+            
+            # Normalize autoconnect
+            [[ "${autoconnect,,}" == "no" || "${autoconnect,,}" == "false" ]] && autoconnect="false" || autoconnect="true"
+            
+            # Generate UUID
+            local uuid
+            uuid=$(cat /proc/sys/kernel/random/uuid)
+            
+            # Create connection file
+            cat > "${nm_dir}/${ssid}.nmconnection" <<EOF
+[connection]
+id=$ssid
+uuid=$uuid
+type=wifi
+autoconnect=$autoconnect
+
+[wifi]
+mode=infrastructure
+ssid=$ssid
+
+[wifi-security]
+key-mgmt=wpa-psk
+psk=$password
+
+[ipv4]
+method=auto
+
+[ipv6]
+addr-gen-mode=default
+method=auto
+EOF
+            
+            chmod 600 "${nm_dir}/${ssid}.nmconnection"
+            log "SUCCESS" "WiFi configured: $ssid"
+            ((wifi_count++))
+        fi
+    done < "$SECRETS_FILE"
+    
+    if [ $wifi_count -eq 0 ]; then
+        log "WARN" "No WiFi networks configured in secrets.env"
+    else
+        log "SUCCESS" "Configured $wifi_count WiFi network(s)"
+    fi
+}
+
+customize_desktop() {
+    log "INFO" "Configuring desktop preferences..."
+    
+    local skel_dconf="${SQUASHFS_DIR}/etc/skel/.config/dconf"
+    mkdir -p "$skel_dconf"
+    
+    if [ $DRY_RUN -eq 1 ]; then
+        log "DRY-RUN" "Would configure: dark mode, scaling, accessibility disabled"
+        return 0
+    fi
+    
+    # Create dconf user database directory
+    mkdir -p "${skel_dconf}/user.d"
+    
+    # Create dconf settings file
+    cat > "${skel_dconf}/user.d/00-emcomm-defaults" <<'EOF'
+# Dark mode
+[org/gnome/desktop/interface]
+color-scheme='prefer-dark'
+gtk-theme='Yaru-dark'
+icon-theme='Yaru-dark'
+
+# Disable accessibility features
+[org/gnome/desktop/a11y]
+always-show-universal-access-status=false
+
+[org/gnome/desktop/a11y/applications]
+screen-keyboard-enabled=false
+screen-reader-enabled=false
+
+[org/gnome/desktop/a11y/interface]
+high-contrast=false
+
+# Disable automatic brightness
+[org/gnome/settings-daemon/plugins/power]
+ambient-enabled=false
+
+# Desktop scaling (1x by default, user can adjust)
+[org/gnome/desktop/interface]
+text-scaling-factor=1.0
+EOF
+    
+    log "SUCCESS" "Desktop preferences configured"
+}
+
+customize_aprs() {
+    log "INFO" "Configuring APRS applications (direwolf, YAAC)..."
+    
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    
+    local callsign="${CALLSIGN:-N0CALL}"
+    local aprs_ssid="${APRS_SSID:-10}"
+    local aprs_passcode="${APRS_PASSCODE:--1}"
+    local aprs_symbol="${APRS_SYMBOL:-r/}"
+    local aprs_comment="${APRS_COMMENT:-EmComm iGate}"
+    local digipeater_path="${DIGIPEATER_PATH:-WIDE1-1}"
+    local enable_beacon="${ENABLE_APRS_BEACON:-no}"
+    local beacon_interval="${APRS_BEACON_INTERVAL:-300}"
+    local enable_igate="${ENABLE_APRS_IGATE:-yes}"
+    local aprs_server="${APRS_SERVER:-noam.aprs2.net}"
+    local direwolf_adevice="${DIREWOLF_ADEVICE:-plughw:1,0}"
+    local direwolf_ptt="${DIREWOLF_PTT:-CM108}"
+    
+    if [ $DRY_RUN -eq 1 ]; then
+        log "DRY-RUN" "Would configure APRS for: ${callsign}-${aprs_ssid}"
+        return 0
+    fi
+    
+    # Configure direwolf
+    local direwolf_dir="${SQUASHFS_DIR}/etc/skel/.config/direwolf"
+    mkdir -p "$direwolf_dir"
+    
+    cat > "${direwolf_dir}/direwolf.conf" <<EOF
+# Direwolf Configuration - Internet iGate
+# Generated by build-etc-iso.sh
+
+ADEVICE ${direwolf_adevice}
+ACHANNELS 1
+
+MYCALL ${callsign}-${aprs_ssid}
+
+IGSERVER ${aprs_server}
+IGLOGIN ${callsign}-${aprs_ssid} ${aprs_passcode}
+
+$(if [ "$enable_igate" = "yes" ]; then
+    echo "IGTXVIA 0 ${digipeater_path}"
+    echo "IGFILTER m/500"
+else
+    echo "# iGate DISABLED"
+fi)
+
+PTT ${direwolf_ptt}
+
+$(if [ "$enable_beacon" = "yes" ]; then
+    echo "PBEACON delay=1 every=${beacon_interval} overlay=S symbol=\"${aprs_symbol}\" comment=\"${aprs_comment}\" via=${digipeater_path}"
+else
+    echo "# Beacon DISABLED - enable after GPS connection"
+fi)
+
+LOGDIR /var/log/direwolf
+EOF
+    
+    chmod 644 "${direwolf_dir}/direwolf.conf"
+    
+    # Configure YAAC
+    local yaac_dir="${SQUASHFS_DIR}/etc/skel/.config/YAAC"
+    mkdir -p "$yaac_dir"
+    
+    cat > "${yaac_dir}/YAAC.properties" <<EOF
+# YAAC Configuration
+# Generated by build-etc-iso.sh
+
+callsign=${callsign}
+ssid=${aprs_ssid}
+aprsIsEnabled=true
+aprsIsServer=${aprs_server}
+aprsIsPort=14580
+aprsIsPasscode=${aprs_passcode}
+digipeaterEnabled=true
+digipeaterAlias=${digipeater_path}
+mapEnabled=true
+onlineMapEnabled=false
+comment=${aprs_comment}
+EOF
+    
+    chmod 644 "${yaac_dir}/YAAC.properties"
+    
+    log "SUCCESS" "APRS configured for ${callsign}-${aprs_ssid}"
+}
+
+customize_user_and_autologin() {
+    log "INFO" "Configuring user and autologin..."
+    
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    
+    local fullname="${USER_FULLNAME:-EmComm User}"
+    local username="${USER_USERNAME:-emcomm}"
+    
+    if [ $DRY_RUN -eq 1 ]; then
+        log "DRY-RUN" "Would configure autologin for: $username"
+        return 0
+    fi
+    
+    # Configure LightDM autologin
+    local lightdm_dir="${SQUASHFS_DIR}/etc/lightdm/lightdm.conf.d"
+    mkdir -p "$lightdm_dir"
+    
+    cat > "${lightdm_dir}/50-autologin.conf" <<EOF
+[Seat:*]
+autologin-user=$username
+autologin-user-timeout=0
+user-session=ubuntu
+EOF
+    
+    log "SUCCESS" "Autologin configured for: $username"
+}
+
+customize_vara_license() {
+    log "INFO" "Configuring VARA license (if provided)..."
+    
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    
+    local vara_fm_callsign="${VARA_FM_CALLSIGN:-}"
+    local vara_fm_key="${VARA_FM_LICENSE_KEY:-}"
+    local vara_hf_callsign="${VARA_HF_CALLSIGN:-}"
+    local vara_hf_key="${VARA_HF_LICENSE_KEY:-}"
+    
+    if [ -z "$vara_fm_key" ] && [ -z "$vara_hf_key" ]; then
+        log "INFO" "No VARA license keys configured, skipping"
+        return 0
+    fi
+    
+    if [ $DRY_RUN -eq 1 ]; then
+        [ -n "$vara_fm_key" ] && log "DRY-RUN" "Would inject VARA FM license"
+        [ -n "$vara_hf_key" ] && log "DRY-RUN" "Would inject VARA HF license"
+        return 0
+    fi
+    
+    # Create Wine registry snippet directory
+    local wine_reg_dir="${SQUASHFS_DIR}/etc/skel/.wine/user.reg.d"
+    mkdir -p "$wine_reg_dir"
+    
+    if [ -n "$vara_fm_key" ]; then
+        cat > "${wine_reg_dir}/vara-fm-license.reg" <<EOF
+REGEDIT4
+
+[HKEY_CURRENT_USER\\Software\\VARA FM]
+"Callsign"="${vara_fm_callsign}"
+"License"="${vara_fm_key}"
+EOF
+        log "SUCCESS" "VARA FM license configured"
+    fi
+    
+    if [ -n "$vara_hf_key" ]; then
+        cat > "${wine_reg_dir}/vara-hf-license.reg" <<EOF
+REGEDIT4
+
+[HKEY_CURRENT_USER\\Software\\VARA]
+"Callsign"="${vara_hf_callsign}"
+"License"="${vara_hf_key}"
+EOF
+        log "SUCCESS" "VARA HF license configured"
+    fi
+}
+
+customize_git_config() {
+    log "INFO" "Configuring Git..."
+    
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    
+    local git_name="${USER_FULLNAME:-User}"
+    local git_email="${USER_EMAIL:-user@localhost}"
+    
+    if [[ "$git_name" == "Your Full Name" ]] || [[ "$git_email" == "your.email@example.com" ]]; then
+        log "WARN" "Git not configured - template values in secrets.env"
+        return 0
+    fi
+    
+    if [ $DRY_RUN -eq 1 ]; then
+        log "DRY-RUN" "Would configure Git for: $git_name <$git_email>"
+        return 0
+    fi
+    
+    cat > "${SQUASHFS_DIR}/etc/skel/.gitconfig" <<EOF
+[user]
+    name = $git_name
+    email = $git_email
+[init]
+    defaultBranch = main
+[pull]
+    rebase = false
+EOF
+    
+    log "SUCCESS" "Git configured for: $git_name"
+}
+
+create_build_manifest() {
+    log "INFO" "Creating build manifest..."
+    
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    
+    local manifest_file="${SQUASHFS_DIR}/etc/emcomm-customizations-manifest.txt"
+    
+    if [ $DRY_RUN -eq 1 ]; then
+        log "DRY-RUN" "Would create manifest at: $manifest_file"
+        return 0
+    fi
+    
+    cat > "$manifest_file" <<EOF
+EmComm Tools Community - KD7DGF Customizations
+Build Date: $(date +'%Y-%m-%d %H:%M:%S')
+Release: ${RELEASE_TAG}
+Version: ${VERSION}
+
+=== CUSTOMIZATIONS APPLIED ===
+
+Station Configuration:
+- Callsign: ${CALLSIGN:-N0CALL}
+- Hostname: ${MACHINE_NAME:-ETC-${CALLSIGN:-N0CALL}}
+
+Network:
+- WiFi networks pre-configured from secrets.env
+
+Desktop:
+- Dark mode enabled
+- Accessibility features disabled
+- Automatic brightness disabled
+
+APRS:
+- direwolf configured
+- YAAC configured
+
+Build Information:
+- Built with: build-etc-iso.sh (xorriso/squashfs method)
+- Source: ${RELEASE_TAG}
+- No Cubic GUI used - fully automated
+EOF
+    
+    log "SUCCESS" "Build manifest created"
+}
+
+# ============================================================================
+# ISO Rebuild
+# ============================================================================
+
+rebuild_squashfs() {
+    log "INFO" "Rebuilding squashfs filesystem (this takes 10-20 minutes)..."
+    
+    if [ $DRY_RUN -eq 1 ]; then
+        log "DRY-RUN" "Would rebuild squashfs"
+        return 0
+    fi
+    
+    local new_squashfs="${WORK_DIR}/filesystem.squashfs.new"
+    
+    # Create new squashfs with compression
+    mksquashfs "$SQUASHFS_DIR" "$new_squashfs" \
+        -comp xz \
+        -b 1M \
+        -Xbcj x86 \
+        -noappend
+    
+    # Replace original squashfs
+    mv "$new_squashfs" "$SQUASHFS_FILE"
+    
+    # Update filesystem.size
+    local fs_size
+    fs_size=$(du -s "$SQUASHFS_DIR" | cut -f1)
+    echo "$fs_size" > "$(dirname "$SQUASHFS_FILE")/filesystem.size"
+    
+    log "SUCCESS" "Squashfs rebuilt"
+}
+
+rebuild_iso() {
+    log "INFO" "Rebuilding ISO image..."
+    
+    mkdir -p "$OUTPUT_DIR"
+    
+    if [ $DRY_RUN -eq 1 ]; then
+        log "DRY-RUN" "Would create ISO: $OUTPUT_ISO"
+        return 0
+    fi
+    
+    # Calculate MD5 sums
+    log "INFO" "Calculating checksums..."
+    (cd "$ISO_EXTRACT_DIR" && find . -type f -print0 | xargs -0 md5sum > md5sum.txt)
+    
+    # Rebuild ISO with xorriso
+    log "INFO" "Creating ISO image..."
+    xorriso -as mkisofs \
+        -r -V "ETC_${RELEASE_NUMBER^^}_CUSTOM" \
+        -cache-inodes \
+        -J -l \
+        -b isolinux/isolinux.bin \
+        -c isolinux/boot.cat \
+        -no-emul-boot \
+        -boot-load-size 4 \
+        -boot-info-table \
+        -eltorito-alt-boot \
+        -e boot/grub/efi.img \
+        -no-emul-boot \
+        -isohybrid-gpt-basdat \
+        -o "$OUTPUT_ISO" \
+        "$ISO_EXTRACT_DIR"
+    
+    # Make ISO hybrid (bootable from USB)
+    if command -v isohybrid &>/dev/null; then
+        isohybrid --uefi "$OUTPUT_ISO" 2>/dev/null || true
+    fi
+    
+    local iso_size
+    iso_size=$(du -h "$OUTPUT_ISO" | cut -f1)
+    
+    log "SUCCESS" "ISO created: $OUTPUT_ISO ($iso_size)"
+}
+
+# ============================================================================
+# Cleanup
+# ============================================================================
+
+cleanup_work_dir() {
+    if [ -d "$WORK_DIR" ]; then
+        log "INFO" "Cleaning up work directory..."
+        rm -rf "$WORK_DIR"
+        log "SUCCESS" "Work directory cleaned"
+    fi
+}
+
+# ============================================================================
+# Main
+# ============================================================================
+
+main() {
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║   EmComm Tools Community ISO Customizer                      ║"
+    echo "║   Fully Automated Build (xorriso/squashfs)                   ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+    
+    log "INFO" "Build started at $(date)"
+    log "INFO" "Log file: $LOG_FILE"
+    
+    # Check prerequisites
+    if ! check_prerequisites; then
+        exit 2
+    fi
+    
+    # Get release information
+    if ! get_release_info; then
+        exit 1
+    fi
+    
+    # Create work directory
+    log "INFO" "Creating work directory: $WORK_DIR"
+    rm -rf "$WORK_DIR"
+    mkdir -p "$WORK_DIR"
+    
+    # Download files
+    if ! download_ubuntu_iso; then
+        cleanup_work_dir
+        exit 1
+    fi
+    
+    if ! download_etc_installer; then
+        cleanup_work_dir
+        exit 1
+    fi
+    
+    # Extract ISO
+    if ! extract_iso; then
+        cleanup_work_dir
+        exit 1
+    fi
+    
+    # Apply customizations
+    log "INFO" ""
+    log "INFO" "=== Applying Customizations ==="
+    
+    customize_hostname
+    customize_wifi
+    customize_desktop
+    customize_aprs
+    customize_user_and_autologin
+    customize_vara_license
+    customize_git_config
+    create_build_manifest
+    
+    # Rebuild ISO
+    log "INFO" ""
+    log "INFO" "=== Rebuilding ISO ==="
+    
+    if ! rebuild_squashfs; then
+        cleanup_work_dir
+        exit 1
+    fi
+    
+    if ! rebuild_iso; then
+        cleanup_work_dir
+        exit 1
+    fi
+    
+    # Cleanup
+    cleanup_work_dir
+    
+    # Summary
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║   Build Complete!                                            ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+    log "SUCCESS" "Custom ISO: $OUTPUT_ISO"
+    log "INFO" ""
+    log "INFO" "Next steps:"
+    log "INFO" "  1. Copy ISO to Ventoy USB: cp \"$OUTPUT_ISO\" /media/\$USER/Ventoy/"
+    log "INFO" "  2. Safely eject the USB drive"
+    log "INFO" "  3. Boot target system from Ventoy"
+    log "INFO" ""
+    log "INFO" "Build log: $LOG_FILE"
+}
+
+# ============================================================================
+# Parse Arguments
+# ============================================================================
+
+while getopts "r:t:ldvh" opt; do
     case $opt in
         r)
             RELEASE_MODE="$OPTARG"
@@ -206,33 +1002,15 @@ while getopts ":r:t:u:b:e:p:lcdvh" opt; do
         t)
             SPECIFIED_TAG="$OPTARG"
             ;;
-        u)
-            UBUNTU_ISO_PATH="$OPTARG"
-            ;;
-        b)
-            WINE_BACKUP_PATH="$OPTARG"
-            ;;
-        e)
-            ET_USER_BACKUP_PATH="$OPTARG"
-            ;;
-        p)
-            PRIVATE_FILES_PATH="$OPTARG"
-            ;;
         l)
             list_available_versions
             exit 0
             ;;
-        c)
-            CLEANUP_EMBEDDED_ISO=1
-            log "INFO" "Cleanup mode enabled - will remove embedded Ubuntu ISO"
-            ;;
         d)
             DRY_RUN=1
-            log "INFO" "Dry-run mode enabled"
             ;;
         v)
             set -x
-            log "INFO" "Verbose mode enabled"
             ;;
         h)
             usage
@@ -258,942 +1036,5 @@ if [[ "$RELEASE_MODE" == "tag" ]] && [[ -z "$SPECIFIED_TAG" ]]; then
     exit 1
 fi
 
-# Helper function to execute or show commands
-run_command() {
-    local cmd="$*"
-    if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would execute: $cmd"
-        return 0
-    else
-        log "INFO" "Executing: $cmd"
-        eval "$cmd"
-    fi
-}
-
-# Check prerequisites
-check_prerequisites() {
-    log "INFO" "Checking prerequisites..."
-    
-    local missing=0
-    
-    # Check for required commands
-    local required_commands=(curl jq wget)
-    for cmd in "${required_commands[@]}"; do
-        if ! command -v "$cmd" &>/dev/null; then
-            log "ERROR" "Required command not found: $cmd"
-            missing=1
-        fi
-    done
-    
-    # Check for Cubic (optional warning, as it's opened manually)
-    if ! command -v cubic &>/dev/null; then
-        log "WARN" "Cubic not found. Install with: sudo apt install cubic"
-        log "WARN" "You can still use this script to prepare the build environment"
-    fi
-    
-    # Check for internet connection
-    if ! ping -c 1 -W 2 8.8.8.8 &>/dev/null; then
-        log "ERROR" "No internet connection detected"
-        missing=1
-    fi
-    
-    # Check for secrets.env (for customizations)
-    if [ ! -f "$SCRIPT_DIR/secrets.env" ]; then
-        log "WARN" "secrets.env not found - WiFi customizations will not be applied"
-        log "WARN" "Copy secrets.env.template to secrets.env and configure it"
-    fi
-    
-    return $missing
-}
-
-# Auto-detect backup files in home directory
-auto_detect_backups() {
-    log "INFO" "Auto-detecting backup files in home directory..."
-    
-    # Auto-detect .wine backup
-    if [ -z "$WINE_BACKUP_PATH" ]; then
-        local wine_backup
-        # Check backup location first
-        wine_backup="/home/${USER_USERNAME}/etc-customizer-backups/wine.tar.gz"
-        if [ ! -f "$wine_backup" ]; then
-            # Fall back to old pattern for backward compatibility
-            wine_backup=$(find ~ -maxdepth 1 -name "etc-wine-backup-*.tar.gz" -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2)
-        fi
-        
-        if [ -n "$wine_backup" ] && [ -f "$wine_backup" ]; then
-            WINE_BACKUP_PATH="$wine_backup"
-            log "SUCCESS" "Auto-detected .wine backup: $wine_backup"
-        else
-            log "WARN" "No .wine backup found in /home/${USER_USERNAME}/etc-customizer-backups/ or home directory"
-            echo ""
-            echo "To create .wine backup on your ETC system:"
-            echo "  1. Deploy and configure VARA FM on your ETC system"
-            echo "  2. Run: tar -czf ~/wine.tar.gz ~/.wine/"
-            echo "  3. Copy to: /home/${USER_USERNAME}/etc-customizer-backups/wine.tar.gz"
-            echo ""
-            read -r -p "Do you want to continue without .wine backup? (y/N): " response
-            if [[ ! "$response" =~ ^[Yy]$ ]]; then
-                log "INFO" "Please create .wine backup and re-run this script"
-                exit 0
-            fi
-        fi
-    fi
-    
-    # Auto-detect et-user backup
-    if [ -z "$ET_USER_BACKUP_PATH" ]; then
-        local etuser_backup
-        # Use find instead of ls for better handling
-        etuser_backup=$(find ~ -maxdepth 1 -name "etc-user-backup-*.tar.gz" -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2)
-        if [ -n "$etuser_backup" ]; then
-            ET_USER_BACKUP_PATH="$etuser_backup"
-            log "SUCCESS" "Auto-detected et-user backup: $etuser_backup"
-        else
-            log "WARN" "No et-user backup found in home directory"
-            echo ""
-            echo "To create et-user backup on your ETC system:"
-            echo "  et-user-backup"
-            echo ""
-            read -r -p "Do you want to continue without et-user backup? (y/N): " response
-            if [[ ! "$response" =~ ^[Yy]$ ]]; then
-                log "INFO" "Please create et-user backup and re-run this script"
-                exit 0
-            fi
-        fi
-    fi
-}
-
-# Fetch release info based on mode
-# Note: The ETC project has two types of versioning:
-#   - "stable" releases: Full GitHub Releases with version numbers (e.g., R5 final 5.0.0)
-#   - "latest" tags: Development builds with date-based tags (e.g., 20251113-r5-build17)
-#
-# GitHub API structure:
-#   - /releases/latest: Returns most recent non-prerelease GitHub Release
-#   - /tags: Returns ALL tags (including development builds not in Releases)
-#
-# The tarball_url from either API provides source code archives containing install.sh scripts
-get_release_info() {
-    log "INFO" "Fetching release information from GitHub..."
-    log "INFO" "Release mode: $RELEASE_MODE"
-    
-    case "$RELEASE_MODE" in
-        stable)
-            # Stable = latest GitHub Release (non-prerelease)
-            # These are formal releases like "2025.11.28.R5" with version X.X.X
-            log "INFO" "Fetching latest stable release from GitHub Releases..."
-            if ! RELEASE_JSON=$(curl -s -f "${GITHUB_RELEASES_URL}/latest"); then
-                log "ERROR" "Failed to fetch latest stable release"
-                log "ERROR" "Check network connection and try again"
-                return 1
-            fi
-            
-            # Extract from releases API response
-            RELEASE_TAG=$(echo "$RELEASE_JSON" | jq -r '.tag_name // empty')
-            RELEASE_NAME=$(echo "$RELEASE_JSON" | jq -r '.name // .tag_name // "unknown"')
-            RELEASE_DATE=$(echo "$RELEASE_JSON" | jq -r '.published_at // .created_at // "unknown"' | cut -d'T' -f1)
-            TARBALL_URL=$(echo "$RELEASE_JSON" | jq -r '.tarball_url // empty')
-            ;;
-            
-        latest)
-            # Latest = most recent git tag (including development/build tags)
-            # These are tags like "emcomm-tools-os-community-20251113-r5-build17"
-            # that may not have a corresponding GitHub Release
-            log "INFO" "Fetching latest tag from GitHub Tags API..."
-            if ! TAGS_JSON=$(curl -s -f "${GITHUB_TAGS_URL}?per_page=1"); then
-                log "ERROR" "Failed to fetch tags from GitHub"
-                log "ERROR" "Check network connection and try again"
-                return 1
-            fi
-            
-            # Extract the most recent tag
-            RELEASE_TAG=$(echo "$TAGS_JSON" | jq -r '.[0].name // empty')
-            TARBALL_URL=$(echo "$TAGS_JSON" | jq -r '.[0].tarball_url // empty')
-            
-            if [ -z "$RELEASE_TAG" ] || [ "$RELEASE_TAG" = "null" ]; then
-                log "ERROR" "No tags found in repository"
-                return 1
-            fi
-            
-            # For tags, we don't have release metadata, construct from tag name
-            RELEASE_NAME="$RELEASE_TAG"
-            RELEASE_DATE=$(date +%Y-%m-%d)  # Use current date as we don't have publish date
-            ;;
-            
-        tag)
-            # Specific tag requested - fetch from tags API
-            log "INFO" "Looking up specific tag: $SPECIFIED_TAG"
-            if ! TAGS_JSON=$(curl -s -f "${GITHUB_TAGS_URL}?per_page=100"); then
-                log "ERROR" "Failed to fetch tags from GitHub"
-                return 1
-            fi
-            
-            # Find the specific tag
-            RELEASE_TAG=$(echo "$TAGS_JSON" | jq -r --arg tag "$SPECIFIED_TAG" '.[] | select(.name == $tag) | .name // empty')
-            TARBALL_URL=$(echo "$TAGS_JSON" | jq -r --arg tag "$SPECIFIED_TAG" '.[] | select(.name == $tag) | .tarball_url // empty')
-            
-            if [ -z "$RELEASE_TAG" ] || [ "$RELEASE_TAG" = "null" ]; then
-                log "ERROR" "Tag not found: $SPECIFIED_TAG"
-                log "INFO" "Available recent tags:"
-                echo "$TAGS_JSON" | jq -r '.[].name' | head -10 | while read -r t; do
-                    log "INFO" "  - $t"
-                done
-                return 1
-            fi
-            
-            RELEASE_NAME="$RELEASE_TAG"
-            RELEASE_DATE=$(date +%Y-%m-%d)
-            ;;
-    esac
-    
-    # Validate we got the required data
-    if [ -z "$RELEASE_TAG" ] || [ "$RELEASE_TAG" = "null" ]; then
-        log "ERROR" "Failed to determine release tag"
-        return 1
-    fi
-    
-    if [ -z "$TARBALL_URL" ] || [ "$TARBALL_URL" = "null" ]; then
-        log "ERROR" "Failed to get tarball URL for tag: $RELEASE_TAG"
-        return 1
-    fi
-    
-    # GitHub tarball URL format: https://api.github.com/repos/.../tarball/TAG
-    # Convert to a more descriptive filename
-    TARBALL_FILE="${RELEASE_TAG}.tar.gz"
-    
-    # Parse version info from tag
-    # Stable tag format: emcomm-tools-os-community-YYYYMMDD-rX-final-X.X.X
-    # Build tag format: emcomm-tools-os-community-YYYYMMDD-rX-buildNN
-    VERSION=$(echo "$RELEASE_TAG" | grep -oP '\d+\.\d+\.\d+$' || echo "dev")
-    DATE_VERSION=$(echo "$RELEASE_TAG" | grep -oP '\d{8}' | head -1 || echo "unknown")
-    RELEASE_NUMBER=$(echo "$RELEASE_TAG" | grep -oP 'r\d+' | head -1 || echo "r0")
-    BUILD_NUMBER=$(echo "$RELEASE_TAG" | grep -oP 'build\d+' || echo "")
-    
-    # Construct project directory name
-    PROJECT_DIR="${BUILD_BASE_DIR}/${RELEASE_TAG}"
-    
-    log "SUCCESS" "Release found: $RELEASE_NAME"
-    log "INFO" "Tag: $RELEASE_TAG"
-    log "INFO" "Version: $VERSION"
-    if [ -n "$BUILD_NUMBER" ]; then
-        log "INFO" "Build: $BUILD_NUMBER"
-    fi
-    log "INFO" "Date: $DATE_VERSION"
-    log "INFO" "Tarball: $TARBALL_FILE"
-    log "INFO" "URL: $TARBALL_URL"
-    
-    return 0
-}
-
-# Check if ISO exists on Ventoy drive
-find_iso_on_ventoy() {
-    local iso_filename="$1"
-    local ventoy_path
-    
-    # Try to auto-detect Ventoy mount
-    if ventoy_path=$(findmnt -rn -S LABEL=Ventoy -o TARGET 2>/dev/null || true); then
-        if [ -n "$ventoy_path" ] && [ -f "$ventoy_path/$iso_filename" ]; then
-            log "SUCCESS" "Found Ubuntu ISO on Ventoy: $ventoy_path/$iso_filename"
-            printf '%s' "$ventoy_path/$iso_filename"
-            return 0
-        fi
-    fi
-    
-    # Check common Ventoy mount locations
-    local candidates=(
-        "/media/$USER/Ventoy"
-        "/run/media/$USER/Ventoy"
-        "/mnt/Ventoy"
-        "/Volumes/Ventoy"
-    )
-    
-    for candidate in "${candidates[@]}"; do
-        if [ -f "$candidate/$iso_filename" ]; then
-            log "SUCCESS" "Found Ubuntu ISO on Ventoy: $candidate/$iso_filename"
-            printf '%s' "$candidate/$iso_filename"
-            return 0
-        fi
-    done
-    
-    return 1
-}
-
-# Download or verify Ubuntu ISO
-download_ubuntu_iso() {
-    mkdir -p "$DOWNLOADS_DIR"
-    
-    # Use provided path or download location
-    if [ -n "$UBUNTU_ISO_PATH" ]; then
-        if [ ! -f "$UBUNTU_ISO_PATH" ]; then
-            log "ERROR" "Specified Ubuntu ISO not found: $UBUNTU_ISO_PATH"
-            return 1
-        fi
-        log "SUCCESS" "Using provided Ubuntu ISO: $UBUNTU_ISO_PATH"
-        # Create symlink in downloads dir for consistency
-        local iso_path="${DOWNLOADS_DIR}/${UBUNTU_ISO_FILE}"
-        if [ ! -L "$iso_path" ]; then
-            ln -sf "$UBUNTU_ISO_PATH" "$iso_path"
-            log "INFO" "Created symlink: $iso_path -> $UBUNTU_ISO_PATH"
-        fi
-        return 0
-    fi
-    
-    local iso_path="${DOWNLOADS_DIR}/${UBUNTU_ISO_FILE}"
-    
-    if [ -f "$iso_path" ]; then
-        log "INFO" "Ubuntu ISO already downloaded: $iso_path"
-        return 0
-    fi
-    
-    # Check Ventoy before downloading
-    local ventoy_iso
-    if ventoy_iso=$(find_iso_on_ventoy "$UBUNTU_ISO_FILE"); then
-        log "INFO" "Copying Ubuntu ISO from Ventoy to downloads..."
-        if [ $DRY_RUN -eq 0 ]; then
-            if cp "$ventoy_iso" "$iso_path"; then
-                log "SUCCESS" "Ubuntu ISO copied from Ventoy"
-                return 0
-            else
-                log "WARN" "Failed to copy from Ventoy, will attempt download"
-            fi
-        else
-            log "DRY-RUN" "Would copy from Ventoy: $ventoy_iso to $iso_path"
-            return 0
-        fi
-    fi
-    
-    log "INFO" "Downloading Ubuntu 22.10 ISO..."
-    log "INFO" "URL: $UBUNTU_ISO_URL"
-    log "INFO" "This may take several minutes (3.6 GB)..."
-    
-    if [ $DRY_RUN -eq 0 ]; then
-        if ! wget -c -O "$iso_path" "$UBUNTU_ISO_URL"; then
-            log "ERROR" "Failed to download Ubuntu ISO"
-            return 1
-        fi
-        log "SUCCESS" "Ubuntu ISO downloaded successfully"
-    else
-        log "DRY-RUN" "Would download Ubuntu ISO to: $iso_path"
-    fi
-    
-    return 0
-}
-
-# Download ETC installer tarball
-download_etc_installer() {
-    mkdir -p "$DOWNLOADS_DIR"
-    
-    local tarball_path="${DOWNLOADS_DIR}/${TARBALL_FILE}"
-    
-    if [ -f "$tarball_path" ]; then
-        log "INFO" "ETC installer tarball already downloaded: $tarball_path"
-        return 0
-    fi
-    
-    log "INFO" "Downloading ETC installer tarball..."
-    log "INFO" "URL: $TARBALL_URL"
-    
-    if [ $DRY_RUN -eq 0 ]; then
-        if ! wget -O "$tarball_path" "$TARBALL_URL"; then
-            log "ERROR" "Failed to download ETC installer tarball"
-            return 1
-        fi
-        log "SUCCESS" "ETC installer tarball downloaded successfully"
-    else
-        log "DRY-RUN" "Would download ETC tarball to: $tarball_path"
-    fi
-    
-    return 0
-}
-
-# Extract ETC installer tarball into project directory
-extract_etc_installer() {
-    local tarball_path="${DOWNLOADS_DIR}/${TARBALL_FILE}"
-    local extract_dir="${PROJECT_DIR}/etc-source"
-    
-    if [ ! -f "$tarball_path" ]; then
-        log "ERROR" "ETC installer tarball not found: $tarball_path"
-        return 1
-    fi
-    
-    if [ -d "$extract_dir" ]; then
-        log "INFO" "ETC installer already extracted: $extract_dir"
-        return 0
-    fi
-    
-    log "INFO" "Extracting ETC installer tarball..."
-    log "INFO" "Source: $tarball_path"
-    log "INFO" "Destination: $extract_dir"
-    
-    if [ $DRY_RUN -eq 0 ]; then
-        mkdir -p "$extract_dir"
-        
-        # GitHub tarballs extract to a directory like 'owner-repo-hash'
-        # We need to extract and handle the directory structure
-        if ! tar -xzf "$tarball_path" -C "$extract_dir" 2>&1 | tee -a "$LOG_FILE"; then
-            log "ERROR" "Failed to extract ETC installer tarball"
-            return 1
-        fi
-        
-        # Find the extracted directory (GitHub creates owner-repo-hash/ directory)
-        local extracted_dir
-        extracted_dir=$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d | head -1)
-        
-        if [ -z "$extracted_dir" ]; then
-            log "ERROR" "Failed to find extracted directory in: $extract_dir"
-            return 1
-        fi
-        
-        # Move contents up one level for easier access
-        log "INFO" "Organizing extracted files..."
-        if ! mv "$extracted_dir"/* "$extract_dir/" 2>&1 | tee -a "$LOG_FILE"; then
-            log "WARN" "Some files may not have been moved (this is usually OK)"
-        fi
-        
-        # Remove the now-empty subdirectory if it exists
-        rmdir "$extracted_dir" 2>/dev/null || true
-        
-        log "SUCCESS" "ETC installer tarball extracted successfully"
-        log "INFO" "Scripts available at: $extract_dir/scripts/"
-    else
-        log "DRY-RUN" "Would extract: $tarball_path to: $extract_dir"
-    fi
-    
-    return 0
-}
-
-# Prepare private files
-prepare_private_files() {
-    if [ -z "$PRIVATE_FILES_PATH" ]; then
-        log "INFO" "No private files specified, skipping"
-        return 0
-    fi
-    
-    local private_dir="${PROJECT_DIR}/private-files"
-    mkdir -p "$private_dir"
-    
-    log "INFO" "Preparing private files..."
-    
-    # Check if it's a GitHub repo URL
-    if [[ "$PRIVATE_FILES_PATH" =~ ^(https://github\.com/|git@github\.com:) ]]; then
-        log "INFO" "Cloning private GitHub repo: $PRIVATE_FILES_PATH"
-        
-        if [ $DRY_RUN -eq 0 ]; then
-            if ! git clone "$PRIVATE_FILES_PATH" "$private_dir" 2>&1 | tee -a "$LOG_FILE"; then
-                log "ERROR" "Failed to clone private repo"
-                log "WARN" "Ensure you have SSH keys configured or use HTTPS with token"
-                return 1
-            fi
-            log "SUCCESS" "Private repo cloned successfully"
-        else
-            log "DRY-RUN" "Would clone: $PRIVATE_FILES_PATH to: $private_dir"
-        fi
-    # Check if it's a local directory
-    elif [ -d "$PRIVATE_FILES_PATH" ]; then
-        log "INFO" "Copying private files from local directory: $PRIVATE_FILES_PATH"
-        
-        if [ $DRY_RUN -eq 0 ]; then
-            if ! cp -r "$PRIVATE_FILES_PATH"/* "$private_dir/" 2>&1 | tee -a "$LOG_FILE"; then
-                log "ERROR" "Failed to copy private files"
-                return 1
-            fi
-            log "SUCCESS" "Private files copied successfully"
-        else
-            log "DRY-RUN" "Would copy: $PRIVATE_FILES_PATH/* to: $private_dir/"
-        fi
-    else
-        log "ERROR" "Private files path is not a valid directory or GitHub URL: $PRIVATE_FILES_PATH"
-        return 1
-    fi
-    
-    log "INFO" "Private files ready at: $private_dir"
-    return 0
-}
-
-# Prepare backup files
-prepare_backups() {
-    local backups_dir="${PROJECT_DIR}/backups"
-    mkdir -p "$backups_dir"
-    
-    # Prepare .wine backup
-    if [ -n "$WINE_BACKUP_PATH" ]; then
-        log "INFO" "Preparing .wine backup..."
-        
-        # Check if it's a tar.gz file (from et-user-backup)
-        if [[ "$WINE_BACKUP_PATH" == *.tar.gz ]]; then
-            if [ ! -f "$WINE_BACKUP_PATH" ]; then
-                log "ERROR" ".wine backup file not found: $WINE_BACKUP_PATH"
-                return 1
-            fi
-            
-            local wine_backup="${backups_dir}/wine.tar.gz"
-            if [ $DRY_RUN -eq 0 ]; then
-                if ! cp "$WINE_BACKUP_PATH" "$wine_backup" 2>&1 | tee -a "$LOG_FILE"; then
-                    log "ERROR" "Failed to copy .wine backup"
-                    return 1
-                fi
-                log "SUCCESS" ".wine backup (tar.gz) copied to: $wine_backup"
-            else
-                log "DRY-RUN" "Would copy .wine backup: $WINE_BACKUP_PATH to: $wine_backup"
-            fi
-        # Check if it's a directory
-        elif [ -d "$WINE_BACKUP_PATH" ]; then
-            local wine_backup="${backups_dir}/wine.tar.gz"
-            if [ $DRY_RUN -eq 0 ]; then
-                # Create tar.gz from directory
-                log "INFO" "Creating tar.gz from directory..."
-                if ! tar -czf "$wine_backup" -C "$(dirname "$WINE_BACKUP_PATH")" "$(basename "$WINE_BACKUP_PATH")" 2>&1 | tee -a "$LOG_FILE"; then
-                    log "ERROR" "Failed to create .wine backup tar.gz"
-                    return 1
-                fi
-                log "SUCCESS" ".wine backup archived to: $wine_backup"
-            else
-                log "DRY-RUN" "Would archive .wine directory: $WINE_BACKUP_PATH to: $wine_backup"
-            fi
-        else
-            log "ERROR" ".wine backup path is not a file or directory: $WINE_BACKUP_PATH"
-            return 1
-        fi
-    fi
-    
-    # Prepare et-user backup
-    if [ -n "$ET_USER_BACKUP_PATH" ]; then
-        log "INFO" "Preparing et-user backup..."
-        
-        # Check if it's a tar.gz file (from et-user-backup)
-        if [[ "$ET_USER_BACKUP_PATH" == *.tar.gz ]]; then
-            if [ ! -f "$ET_USER_BACKUP_PATH" ]; then
-                log "ERROR" "et-user backup file not found: $ET_USER_BACKUP_PATH"
-                return 1
-            fi
-            
-            local etuser_backup="${backups_dir}/et-user.tar.gz"
-            if [ $DRY_RUN -eq 0 ]; then
-                if ! cp "$ET_USER_BACKUP_PATH" "$etuser_backup" 2>&1 | tee -a "$LOG_FILE"; then
-                    log "ERROR" "Failed to copy et-user backup"
-                    return 1
-                fi
-                log "SUCCESS" "et-user backup (tar.gz) copied to: $etuser_backup"
-            else
-                log "DRY-RUN" "Would copy et-user backup: $ET_USER_BACKUP_PATH to: $etuser_backup"
-            fi
-        # Check if it's a directory (legacy format)
-        elif [ -d "$ET_USER_BACKUP_PATH" ]; then
-            local etuser_backup="${backups_dir}/et-user.tar.gz"
-            if [ $DRY_RUN -eq 0 ]; then
-                # Create tar.gz from directory
-                log "INFO" "Creating tar.gz from directory..."
-                if ! tar -czf "$etuser_backup" -C "$(dirname "$ET_USER_BACKUP_PATH")" "$(basename "$ET_USER_BACKUP_PATH")" 2>&1 | tee -a "$LOG_FILE"; then
-                    log "ERROR" "Failed to create et-user backup tar.gz"
-                    return 1
-                fi
-                log "SUCCESS" "et-user backup archived to: $etuser_backup"
-            else
-                log "DRY-RUN" "Would archive et-user directory: $ET_USER_BACKUP_PATH to: $etuser_backup"
-            fi
-        # Check if it's a legacy .conf file
-        elif [ -f "$ET_USER_BACKUP_PATH" ] && [[ "$ET_USER_BACKUP_PATH" == *.conf ]]; then
-            local etuser_backup="${backups_dir}/et-user.conf"
-            if [ $DRY_RUN -eq 0 ]; then
-                if ! cp "$ET_USER_BACKUP_PATH" "$etuser_backup" 2>&1 | tee -a "$LOG_FILE"; then
-                    log "ERROR" "Failed to copy et-user backup"
-                    return 1
-                fi
-                log "SUCCESS" "et-user backup (legacy .conf) copied to: $etuser_backup"
-            else
-                log "DRY-RUN" "Would copy et-user backup: $ET_USER_BACKUP_PATH to: $etuser_backup"
-            fi
-        else
-            log "ERROR" "et-user backup path is not a recognized format: $ET_USER_BACKUP_PATH"
-            return 1
-        fi
-    fi
-    
-    if [ -z "$WINE_BACKUP_PATH" ] && [ -z "$ET_USER_BACKUP_PATH" ]; then
-        log "INFO" "No backup files specified, skipping"
-    fi
-    
-    return 0
-}
-
-# Create project directory
-create_project_directory() {
-    if [ -d "$PROJECT_DIR" ]; then
-        log "WARN" "Project directory already exists: $PROJECT_DIR"
-        read -r -p "Delete and recreate? (y/N): " response
-        if [[ "$response" =~ ^[Yy]$ ]]; then
-            run_command rm -rf "$PROJECT_DIR"
-        else
-            log "INFO" "Using existing project directory"
-            return 0
-        fi
-    fi
-    
-    log "INFO" "Creating project directory: $PROJECT_DIR"
-    run_command mkdir -p "$PROJECT_DIR"
-    
-    return 0
-}
-
-# Generate Cubic instructions
-generate_cubic_instructions() {
-    local instructions_file="${PROJECT_DIR}/CUBIC_INSTRUCTIONS.md"
-    
-    log "INFO" "Generating Cubic instructions: $instructions_file"
-    
-    if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would create: $instructions_file"
-        return 0
-    fi
-    
-    # Add cleanup mode instructions if flag is set
-    local cleanup_instructions=""
-    if [ $CLEANUP_EMBEDDED_ISO -eq 1 ]; then
-        cleanup_instructions="
-### 5.8 Remove Embedded Ubuntu ISO (Cleanup Mode)
-
-**Note**: Cleanup mode was specified with -c flag.
-
-\`\`\`bash
-# Remove embedded ISO to save space (~3.6 GB)
-rm -f /opt/emcomm-resources/ubuntu-*.iso
-\`\`\`
-"
-    fi
-    
-    cat > "$instructions_file" <<EOF
-# Cubic Build Instructions for ${RELEASE_TAG}
-
-Generated: $(date +'%Y-%m-%d %H:%M:%S')
-
-## Step 1: Launch Cubic
-
-\`\`\`bash
-cubic
-\`\`\`
-
-## Step 2: Select Project Directory
-
-Click the folder icon and select:
-\`${PROJECT_DIR}\`
-
-Click **Next**.
-
-## Step 3: Select Original Disk
-
-Under "Select the original disk", click the folder icon and select:
-\`${DOWNLOADS_DIR}/${UBUNTU_ISO_FILE}\`
-
-## Step 4: Configure Custom Disk
-
-Update the following fields:
-
-- **Version**: \`${DATE_VERSION}.${RELEASE_NUMBER}-final\`
-- **Filename**: \`${RELEASE_TAG}.iso\`
-- **Volume ID**: \`ETC_${RELEASE_NUMBER^^}_FINAL\`
-- **Release**: \`TTP\`
-- **Disk Name**: \`ETC_${RELEASE_NUMBER^^}_FINAL "TTP"\`
-- **Release URL**: \`https://community.emcommtools.com\`
-
-Click **Next** and wait for extraction to complete.
-
-## Step 5: In Cubic Virtual Terminal
-
-### 5.1 Download ETC Installer
-
-\`\`\`bash
-wget https://github.com/${GITHUB_REPO}/releases/download/${RELEASE_TAG}/${TARBALL_FILE}
-\`\`\`
-
-### 5.2 Extract Installer
-
-\`\`\`bash
-tar -xzf ${TARBALL_FILE}
-cd emcomm-tools-os-community/scripts
-\`\`\`
-
-### 5.3 Run Installer
-
-**Note**: This can take 1+ hour depending on your system and internet connection.
-
-\`\`\`bash
-./install.sh
-\`\`\`
-
-### 5.4 Optional: Download State Map
-
-Use arrow keys to select your state, or press ESC to skip.
-
-### 5.5 Run Customizations (KD7DGF)
-
-**Copy customization scripts into Cubic environment:**
-
-From your HOST machine (not Cubic terminal), copy files:
-
-\`\`\`bash
-# From the Cubic GUI, use the copy icon (upper-left corner) to copy:
-# - ${SCRIPT_DIR}/cubic/*.sh
-# - ${SCRIPT_DIR}/secrets.env (if configured)
-# - ${PROJECT_DIR}/private-files/* (if private files specified)
-# - ${PROJECT_DIR}/backups/* (if backups specified)
-\`\`\`
-
-**In Cubic terminal, run customizations:**
-
-\`\`\`bash
-cd /root  # Or wherever you copied the scripts
-
-# Run Cubic customization scripts in order:
-# (Scripts already have execute permissions, just run them directly)
-
-./install-dev-tools.sh
-./install-ham-tools.sh
-./configure-aprs-apps.sh
-./setup-desktop-defaults.sh
-./setup-user-and-hostname.sh
-./configure-wifi.sh
-./configure-radio-defaults.sh
-./restore-backups.sh  # Only if backups were provided
-./install-private-files.sh  # Only if private files were provided
-./embed-ubuntu-iso.sh
-./finalize-build.sh
-\`\`\`
-
-### 5.6 Run Validation Tests
-
-\`\`\`bash
-cd ../tests
-./run-test-suite.sh
-\`\`\`
-
-Review test results and resolve any failures before continuing.
-${cleanup_instructions}
-### 5.7 Exit Virtual Terminal
-
-Click **Next** to continue.
-
-## Step 6: Package Selection
-
-- Do **NOT** change anything on "Select packages to be automatically removed" screen
-- Click **Next**
-
-- Do **NOT** change anything on "Select packages..." screen  
-- Click **Next**
-
-## Step 7: Boot Menu (Optional)
-
-On the Boot tab, optionally change:
-- From: "Try or Install Ubuntu"
-- To: "Try or Install ETC_${RELEASE_NUMBER^^}_Final"
-
-Click **Next**.
-
-## Step 8: Generate ISO
-
-Click **Generate** on the compression options screen.
-
-**Note**: This can take 5 minutes to 1+ hour depending on your machine.
-
-## Step 9: Complete
-
-When finished, your ISO will be at:
-\`${PROJECT_DIR}/${RELEASE_TAG}.iso\`
-
-Click **Close** to finish.
-
-## Step 10: Copy ISO to Ventoy Drive
-
-1. Prepare a Ventoy USB drive once using the official installer (https://www.ventoy.net/en/index.html).
-2. Mount the Ventoy data partition on your build system (usually `/media/$USER/Ventoy`).
-3. Copy the generated ISO onto the Ventoy partition:
-
-```bash
-cp "${PROJECT_DIR}/${RELEASE_TAG}.iso" /media/$USER/Ventoy/
-sync
-```
-
-4. Alternatively, run `${SCRIPT_DIR}/copy-iso-to-ventoy.sh "${PROJECT_DIR}/${RELEASE_TAG}.iso"` to auto-detect the Ventoy mount point and copy the ISO for you.
-5. Safely eject the Ventoy drive. Ventoy will list the new ISO on next boot.
-
----
-
-**Build Information:**
-- Release: ${RELEASE_NAME}
-- Version: ${VERSION}
-- Tag: ${RELEASE_TAG}
-- Published: ${RELEASE_DATE}
-- Build Date: $(date +'%Y-%m-%d %H:%M:%S')
-$(if [ $CLEANUP_EMBEDDED_ISO -eq 1 ]; then echo "- Cleanup Mode: ENABLED (embedded ISO will be removed)"; fi)
-EOF
-
-    log "SUCCESS" "Cubic instructions generated"
-    return 0
-}
-
-# Generate build summary
-generate_build_summary() {
-    local summary_file="${PROJECT_DIR}/BUILD_SUMMARY.txt"
-    
-    log "INFO" "Generating build summary: $summary_file"
-    
-    if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would create: $summary_file"
-        return 0
-    fi
-    
-    cat > "$summary_file" <<EOF
-EmComm Tools Community ISO Build Summary
-Generated: $(date +'%Y-%m-%d %H:%M:%S')
-
-=== RELEASE INFORMATION ===
-Release Name:    ${RELEASE_NAME}
-Release Tag:     ${RELEASE_TAG}
-Version:         ${VERSION}
-Published Date:  ${RELEASE_DATE}
-
-=== BUILD PATHS ===
-Project Directory:  ${PROJECT_DIR}
-Downloads Directory: ${DOWNLOADS_DIR}
-Ubuntu ISO:         ${DOWNLOADS_DIR}/${UBUNTU_ISO_FILE}
-ETC Tarball:        ${DOWNLOADS_DIR}/${TARBALL_FILE}
-Output ISO:         ${PROJECT_DIR}/${RELEASE_TAG}.iso
-
-=== NEXT STEPS ===
-1. Review Cubic instructions: ${PROJECT_DIR}/CUBIC_INSTRUCTIONS.md
-2. Launch Cubic: cubic
-3. Follow the step-by-step instructions
-4. Copy resulting ISO to Ventoy USB (`${SCRIPT_DIR}/copy-iso-to-ventoy.sh ${PROJECT_DIR}/${RELEASE_TAG}.iso` or `cp ${PROJECT_DIR}/${RELEASE_TAG}.iso /media/$USER/Ventoy/ && sync`)
-
-=== CUSTOMIZATION SCRIPTS ===
-Located in: ${SCRIPT_DIR}/cubic/
-
-These scripts should be copied into the Cubic environment and run:
-$(if [ -d "${SCRIPT_DIR}/cubic" ]; then
-    find "${SCRIPT_DIR}/cubic" -name "*.sh" -type f -exec basename {} \; 2>/dev/null | sort | nl -w2 -s'. '
-else
-    echo "  (cubic/ directory not yet created)"
-fi)
-
-Execution order:
-1. install-dev-tools.sh - VS Code, uv, git, build essentials
-2. install-ham-tools.sh - CHIRP, dmrconfig, flrig, LibreOffice
-3. configure-aprs-apps.sh - direwolf/YAAC/Pat config (from secrets.env)
-4. setup-desktop-defaults.sh - GNOME dark mode, accessibility
-5. setup-user-and-hostname.sh - User creation and hostname (ETC-{CALLSIGN})
-6. configure-wifi.sh - WiFi pre-configuration (requires secrets.env)
-7. configure-radio-defaults.sh - Radio presets (BTech/Anytone)
-8. restore-backups.sh - .wine and et-user restore (if provided)
-9. install-private-files.sh - Private files (if provided)
-10. embed-ubuntu-iso.sh - Embed Ubuntu ISO for future builds
-11. finalize-build.sh - Cleanup and manifest generation
-
-Note: If cleanup mode (-c) is used, add this step before creating ISO:
-  12. Remove embedded Ubuntu ISO: rm -f /opt/emcomm-resources/ubuntu-*.iso
-
-=== SECRETS CONFIGURATION ===
-WiFi Configuration: ${SCRIPT_DIR}/secrets.env
-$(if [ -f "${SCRIPT_DIR}/secrets.env" ]; then
-    echo "Status: ✓ Configured"
-else
-    echo "Status: ✗ Not configured (WiFi will not be pre-configured)"
-fi)
-
-=== LOGS ===
-Build log: ${LOG_FILE}
-
----
-Built by: $(whoami)
-Hostname: $(hostname)
-EOF
-
-    log "SUCCESS" "Build summary generated"
-    return 0
-}
-
-# Main execution
-main() {
-    log "INFO" "=== EmComm Tools Community ISO Build Script ==="
-    log "INFO" "Script started at $(date)"
-    
-    # Auto-detect backups if not provided
-    auto_detect_backups
-    
-    # Check prerequisites
-    if ! check_prerequisites; then
-        log "ERROR" "Prerequisites check failed"
-        exit 2
-    fi
-    
-    # Get release information
-    if ! get_release_info; then
-        log "ERROR" "Failed to get release information"
-        exit 1
-    fi
-    
-    # Download Ubuntu ISO
-    if ! download_ubuntu_iso; then
-        log "ERROR" "Failed to download Ubuntu ISO"
-        exit 1
-    fi
-    
-    # Download ETC installer
-    if ! download_etc_installer; then
-        log "ERROR" "Failed to download ETC installer"
-        exit 1
-    fi
-    
-    # Create project directory (needed for tarball extraction)
-    if ! create_project_directory; then
-        log "ERROR" "Failed to create project directory"
-        exit 1
-    fi
-    
-    # Extract ETC installer tarball
-    if ! extract_etc_installer; then
-        log "ERROR" "Failed to extract ETC installer"
-        exit 1
-    fi
-    
-    # Prepare private files
-    if ! prepare_private_files; then
-        log "ERROR" "Failed to prepare private files"
-        exit 1
-    fi
-    
-    # Prepare backups
-    if ! prepare_backups; then
-        log "ERROR" "Failed to prepare backups"
-        exit 1
-    fi
-    
-    # Generate Cubic instructions
-    if ! generate_cubic_instructions; then
-        log "ERROR" "Failed to generate Cubic instructions"
-        exit 1
-    fi
-    
-    # Generate build summary
-    if ! generate_build_summary; then
-        log "ERROR" "Failed to generate build summary"
-        exit 1
-    fi
-    
-    log "SUCCESS" "=== Build preparation complete ==="
-    log "INFO" ""
-    log "INFO" "Next steps:"
-    log "INFO" "1. Review instructions: ${PROJECT_DIR}/CUBIC_INSTRUCTIONS.md"
-    log "INFO" "2. Launch Cubic: cubic"
-    log "INFO" "3. Select project directory: ${PROJECT_DIR}"
-    log "INFO" ""
-    log "INFO" "Build summary: ${PROJECT_DIR}/BUILD_SUMMARY.txt"
-    log "INFO" "Log file: ${LOG_FILE}"
-    
-    if [ ! -f "$SCRIPT_DIR/secrets.env" ]; then
-        log "WARN" ""
-        log "WARN" "⚠️  secrets.env not found!"
-        log "WARN" "WiFi will NOT be pre-configured in the ISO."
-        log "WARN" "Copy secrets.env.template to secrets.env and configure it."
-    fi
-}
-
-# Run main function
+# Run main
 main "$@"

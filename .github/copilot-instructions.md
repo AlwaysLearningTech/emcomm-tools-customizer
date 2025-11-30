@@ -34,15 +34,17 @@ Automated customization of EmComm Tools Community (ETC) ISO images.
 
 ```
 emcomm-tools-customizer/
-├── README.md                    # Main docs with APRS symbol tables
+├── README.md                    # Main documentation
 ├── QUICK_START.md              # Quick reference
-├── build-custom-iso.sh          # Main build script
+├── build-etc-iso.sh            # Main build script (xorriso/squashfs, no Cubic)
 ├── secrets.env.template         # Config template
 ├── secrets.env                  # User config (gitignored)
-├── cache/                       # Downloaded ISOs and backups
-│   ├── ETC-R5.iso              # Cached base ISO
-│   └── wine-backup.tar.gz      # VARA configuration
-├── output/                      # Generated ISOs
+├── cache/                       # Downloaded files (persistent across builds)
+│   ├── ubuntu-22.10-desktop-amd64.iso  # Ubuntu base ISO (drop here to skip download!)
+│   └── emcomm-tools-os-*.tar.gz        # ETC installer tarballs
+├── output/                      # Generated custom ISOs
+├── logs/                        # Build logs
+├── post-install/                # Post-installation scripts
 └── .github/copilot-instructions.md
 ```
 

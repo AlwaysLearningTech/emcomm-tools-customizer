@@ -3,8 +3,8 @@
 ## First Build (New Installation)
 
 ```bash
-# Install dependencies
-sudo apt install -y xorriso squashfs-tools wget curl jq
+# Install dependencies (on Ubuntu/Debian)
+sudo apt install -y xorriso squashfs-tools genisoimage p7zip-full wget curl jq
 
 # Clone and configure
 git clone https://github.com/AlwaysLearningTech/emcomm-tools-customizer.git
@@ -19,67 +19,47 @@ nano secrets.env  # Fill in your values
 sudo ./build-etc-iso.sh -r stable
 ```
 
-## Upgrade Build (From Running ETC)
+## Skip ISO Download
 
 ```bash
-# On your running ETC system
-cd /opt/emcomm-customizer
-
-# Build new ISO from latest development tag
-sudo ./build-etc-iso.sh -r latest
-
-# Copy to Ventoy and boot
-# Settings restore automatically!
+# Drop your Ubuntu ISO in cache/ to skip 3.6GB download
+mkdir -p cache
+cp ~/Downloads/ubuntu-22.10-desktop-amd64.iso cache/
 ```
 
 ## Essential Configuration
 
+Minimum `secrets.env`:
+
 ```bash
-# secrets.env minimum
 CALLSIGN="N0CALL"
+USER_USERNAME="emcomm"
 WIFI_SSID_HOME="network"
 WIFI_PASSWORD_HOME="password"
 ```
 
 ## Release Modes
 
-| Mode | Description | Use Case |
-|------|-------------|----------|
-| `-r stable` | Latest GitHub Release | Production use (recommended) |
-| `-r latest` | Most recent git tag | Development/testing |
-| `-r tag -t <name>` | Specific tag by name | Reproducible builds |
+| Mode | Command | Description |
+|------|---------|-------------|
+| Stable | `-r stable` | Latest GitHub Release (recommended) |
+| Latest | `-r latest` | Most recent git tag |
+| Specific | `-r tag -t <name>` | Exact tag by name |
 
-Use `-l` to list available releases and tags.
+## Output Location
 
-## Common Commands
+ISOs are created in `output/`:
 
 ```bash
-# List available releases/tags
-./build-etc-iso.sh -l
-
-# Standard stable build
-sudo ./build-etc-iso.sh -r stable
-
-# Latest development build
-sudo ./build-etc-iso.sh -r latest
-
-# Specific tag
-sudo ./build-etc-iso.sh -r tag -t emcomm-tools-os-community-20251113-r5-build17
-
-# Preview (dry-run)
-./build-etc-iso.sh -d
-
-# Verbose mode
-sudo ./build-etc-iso.sh -r stable -v
+# Copy to Ventoy USB
+cp output/*.iso /media/$USER/Ventoy/
+sync
 ```
 
-## Troubleshooting
+## Dry Run
 
-| Issue | Fix |
-|-------|-----|
-| Permission denied | Use `sudo` |
-| et-user-backup fails | Not on ETC system |
-| Settings not restored | Check `journalctl -u emcomm-restore` |
+Preview what would happen without making changes:
 
----
-See [README.md](README.md) for full documentation.
+```bash
+./build-etc-iso.sh -d
+```
