@@ -7,6 +7,9 @@ secrets.env
 install-customizations.sh.bak
 
 # Build directories
+cache/
+output/
+.work/
 builds/
 ~/etc-builds/
 

@@ -3,8 +3,13 @@
 ## First Build (New Installation)
 
 ```bash
-# Install dependencies (on Ubuntu/Debian)
-sudo apt install -y xorriso squashfs-tools genisoimage p7zip-full wget curl jq
+# Fix apt sources for EOL Ubuntu 22.10
+sudo sed -i 's/archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+sudo sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+sudo apt update
+
+# Install dependencies
+sudo apt install -y xorriso squashfs-tools wget curl jq
 
 # Clone and configure
 git clone https://github.com/AlwaysLearningTech/emcomm-tools-customizer.git

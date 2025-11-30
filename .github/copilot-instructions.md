@@ -52,11 +52,12 @@ emcomm-tools-customizer/
 
 | Option | Purpose |
 |--------|---------|
-| `--release stable\|latest` | Which ETC release to use |
-| `--source <path>` | Use existing ISO (skip download) |
-| `--output <path>` | Output ISO location |
-| `--create-backup` | Create Wine backup (VARA must be closed!) |
-| `--dry-run` | Preview without changes |
+| `-r stable\|latest\|tag` | Release mode selection |
+| `-t <tag>` | Specific tag name (with `-r tag`) |
+| `-l` | List available releases and tags |
+| `-d` | Dry-run mode (preview changes) |
+| `-v` | Verbose mode (bash debugging) |
+| `-h` | Show help |
 
 ## VARA License Injection
 
@@ -65,14 +66,6 @@ VARA licenses are injected via Wine registry files:
 - `VARA_HF_CALLSIGN` + `VARA_HF_LICENSE_KEY`
 
 Registry entries created in `/etc/skel/.wine/user.reg.d/`
-
-## Wine Backup Safety
-
-**CRITICAL**: The `--create-backup` option checks for running VARA processes:
-```bash
-pgrep -f "VARA\|varafm\|varahf"
-```
-If any are found, backup is refused with error message.
 
 ## APRS Configuration
 
@@ -85,23 +78,41 @@ Common combinations documented in README.md.
 ## Caching
 
 - ISOs cached in `./cache/` for reuse
-- Wine backup stored in `./cache/wine-backup.tar.gz`
-- Use `--source` to skip download
+- ETC tarballs cached after first download
+- Drop `ubuntu-22.10-desktop-amd64.iso` in cache/ to skip download
+
+## Ubuntu 22.10 EOL
+
+Ubuntu 22.10 (Kinetic) is end-of-life. Fix apt sources before installing dependencies:
+
+```bash
+sudo sed -i 's/archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+sudo sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+sudo apt update
+```
+
+## Prerequisites
+
+Minimal dependencies:
+
+```bash
+sudo apt install -y xorriso squashfs-tools wget curl jq
+```
 
 ## When User Requests Changes
 
 ### DO:
-- ✅ Check VARA apps closed before Wine backup
 - ✅ Use dconf for GNOME settings
 - ✅ Cache ISOs in `./cache/`
 - ✅ Output to `./output/`
 - ✅ Include APRS symbol documentation
+- ✅ Run `sudo` for build (squashfs requires root)
 
 ### DON'T:
 - ❌ Create summary files
-- ❌ Reinstall ETC packages
-- ❌ Backup Wine while VARA running
-- ❌ Create USB drive scripts (user has Ventoy)
+- ❌ Reinstall ETC packages (Python, ham tools, Wine)
+- ❌ Create USB drive scripts (user copies ISO to Ventoy manually)
+- ❌ Use genisoimage or p7zip (not needed - xorriso handles everything)
 
 ---
 **73 de KD7DGF** 📻

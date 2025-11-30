@@ -110,7 +110,7 @@ DIRECTORY STRUCTURE:
     logs/     Build logs
 
 PREREQUISITES:
-    sudo apt install xorriso squashfs-tools genisoimage p7zip-full wget curl jq
+    sudo apt install xorriso squashfs-tools wget curl jq
 
 EXAMPLES:
     # List available releases
@@ -247,7 +247,7 @@ check_prerequisites() {
     log "INFO" "Checking prerequisites..."
     
     local missing=0
-    local required_commands=(xorriso unsquashfs mksquashfs genisoimage wget curl jq)
+    local required_commands=(xorriso unsquashfs mksquashfs wget curl jq)
     
     for cmd in "${required_commands[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
@@ -258,7 +258,7 @@ check_prerequisites() {
     
     if [ $missing -eq 1 ]; then
         log "ERROR" "Install missing prerequisites with:"
-        log "ERROR" "  sudo apt install xorriso squashfs-tools genisoimage p7zip-full wget curl jq"
+        log "ERROR" "  sudo apt install xorriso squashfs-tools wget curl jq"
         return 1
     fi
     
@@ -848,35 +848,50 @@ rebuild_iso() {
     
     # Calculate MD5 sums
     log "INFO" "Calculating checksums..."
-    (cd "$ISO_EXTRACT_DIR" && find . -type f -print0 | xargs -0 md5sum > md5sum.txt)
+    (cd "$ISO_EXTRACT_DIR" && find . -type f -print0 | xargs -0 md5sum > md5sum.txt) 2>/dev/null || true
     
-    # Rebuild ISO with xorriso
+    # Rebuild ISO with xorriso (Ventoy handles the booting)
     log "INFO" "Creating ISO image..."
     xorriso -as mkisofs \
         -r -V "ETC_${RELEASE_NUMBER^^}_CUSTOM" \
-        -cache-inodes \
-        -J -l \
-        -b isolinux/isolinux.bin \
-        -c isolinux/boot.cat \
+        -J -joliet-long \
+        -l -cache-inodes \
+        -c boot.catalog \
+        -b boot/grub/i386-pc/eltorito.img \
         -no-emul-boot \
         -boot-load-size 4 \
         -boot-info-table \
+        --grub2-boot-info \
+        --grub2-mbr /usr/lib/grub/i386-pc/boot_hybrid.img \
         -eltorito-alt-boot \
         -e boot/grub/efi.img \
         -no-emul-boot \
-        -isohybrid-gpt-basdat \
+        -append_partition 2 0xef "$ISO_EXTRACT_DIR/boot/grub/efi.img" \
         -o "$OUTPUT_ISO" \
-        "$ISO_EXTRACT_DIR"
+        "$ISO_EXTRACT_DIR" 2>&1 | tee -a "$LOG_FILE"
     
-    # Make ISO hybrid (bootable from USB)
-    if command -v isohybrid &>/dev/null; then
-        isohybrid --uefi "$OUTPUT_ISO" 2>/dev/null || true
+    # If the above fails (missing grub files), try simpler approach
+    if [ ! -f "$OUTPUT_ISO" ]; then
+        log "WARN" "Standard method failed, trying simple ISO creation..."
+        xorriso -as mkisofs \
+            -r -V "ETC_${RELEASE_NUMBER^^}_CUSTOM" \
+            -J -joliet-long \
+            -l -cache-inodes \
+            -o "$OUTPUT_ISO" \
+            "$ISO_EXTRACT_DIR" 2>&1 | tee -a "$LOG_FILE"
+    fi
+    
+    # Check if ISO was created
+    if [ ! -f "$OUTPUT_ISO" ]; then
+        log "ERROR" "ISO creation failed"
+        return 1
     fi
     
     local iso_size
     iso_size=$(du -h "$OUTPUT_ISO" | cut -f1)
     
     log "SUCCESS" "ISO created: $OUTPUT_ISO ($iso_size)"
+    log "INFO" "Copy to Ventoy drive: cp \"$OUTPUT_ISO\" /media/\$USER/Ventoy/"
 }
 
 # ============================================================================

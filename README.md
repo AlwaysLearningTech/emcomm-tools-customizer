@@ -30,7 +30,7 @@ ETC already includes all ham radio tools (Winlink, VARA, JS8Call, fldigi, etc.).
 
 ## Directory Structure
 
-```
+```text
 emcomm-tools-customizer/
 ├── build-etc-iso.sh          # Main build script (fully automated)
 ├── secrets.env.template      # Configuration template
@@ -44,8 +44,16 @@ emcomm-tools-customizer/
 
 ## Prerequisites
 
+Ubuntu 22.10 reached end-of-life, so you must first update apt sources:
+
 ```bash
-sudo apt install -y xorriso squashfs-tools genisoimage p7zip-full wget curl jq
+# Fix apt sources for EOL Ubuntu 22.10
+sudo sed -i 's/archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+sudo sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+sudo apt update
+
+# Install build dependencies
+sudo apt install -y xorriso squashfs-tools wget curl jq
 ```
 
 ## Quick Start
@@ -198,13 +206,14 @@ Full table: [APRS Symbol Codes](http://www.aprs.org/symbols/symbolsX.txt)
 
 The `cache/` directory stores downloaded files to speed up rebuilds:
 
-```
+```text
 cache/
 ├── ubuntu-22.10-desktop-amd64.iso    # Ubuntu base ISO (3.6 GB)
 └── emcomm-tools-os-*.tar.gz          # ETC installer tarballs
 ```
 
 **To skip downloads:**
+
 1. Create `cache/` directory
 2. Copy `ubuntu-22.10-desktop-amd64.iso` into it
 3. Run build - download will be skipped
@@ -215,12 +224,13 @@ ETC tarballs are also cached automatically after first download.
 
 Generated ISOs are placed in `output/`:
 
-```
+```text
 output/
 └── emcomm-tools-os-community-20251128-r5-final-5.0.0-custom.iso
 ```
 
 Copy to Ventoy USB:
+
 ```bash
 cp output/*.iso /media/$USER/Ventoy/
 sync
@@ -229,19 +239,25 @@ sync
 ## Troubleshooting
 
 ### "Permission denied" errors
+
 Run with `sudo`:
+
 ```bash
 sudo ./build-etc-iso.sh -r stable
 ```
 
 ### "Command not found" errors
-Install prerequisites:
+
+Install prerequisites (after fixing apt sources for Ubuntu 22.10):
+
 ```bash
-sudo apt install -y xorriso squashfs-tools genisoimage p7zip-full wget curl jq
+sudo apt install -y xorriso squashfs-tools wget curl jq
 ```
 
 ### Download takes too long
+
 Pre-download and cache:
+
 ```bash
 mkdir -p cache
 wget -O cache/ubuntu-22.10-desktop-amd64.iso \
@@ -249,6 +265,7 @@ wget -O cache/ubuntu-22.10-desktop-amd64.iso \
 ```
 
 ### Build fails during squashfs
+
 - Ensure you have 15+ GB free disk space
 - The squashfs step takes 10-20 minutes on typical hardware
 
