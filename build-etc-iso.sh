@@ -6,6 +6,7 @@
 # Options:
 #   -r MODE   Release mode: stable, latest, or tag (default: latest)
 #   -t TAG    Specify release tag (required when -r tag)
+#   -l        List available tags from GitHub and exit
 #   -u PATH   Path to existing Ubuntu ISO (default: auto-download)
 #   -b PATH   Path to .wine backup (default: ~/etc-wine-backup*.tar.gz)
 #   -e PATH   Path to et-user backup (default: ~/etc-user-backup*.tar.gz)
@@ -46,7 +47,9 @@ fi
 UBUNTU_ISO_URL="https://old-releases.ubuntu.com/releases/kinetic/ubuntu-22.10-desktop-amd64.iso"
 UBUNTU_ISO_FILE="ubuntu-22.10-desktop-amd64.iso"
 GITHUB_REPO="thetechprepper/emcomm-tools-os-community"
-GITHUB_API_URL="https://api.github.com/repos/${GITHUB_REPO}/releases"
+GITHUB_API_BASE="https://api.github.com/repos/${GITHUB_REPO}"
+GITHUB_RELEASES_URL="${GITHUB_API_BASE}/releases"
+GITHUB_TAGS_URL="${GITHUB_API_BASE}/tags"
 BACKUPS_AND_ISO_DIR="/home/${USER_USERNAME}/etc-customizer-backups"
 BUILD_BASE_DIR="/home/${USER_USERNAME}/etc-builds"
 DOWNLOADS_DIR="${BACKUPS_AND_ISO_DIR}"
@@ -78,11 +81,14 @@ Automated wrapper for building EmComm Tools Community ISO with Cubic.
 
 OPTIONS:
     -r MODE   Release mode (default: latest)
-              - stable: Use latest stable release from GitHub Releases
-              - latest: Use latest tag (including pre-releases)
-              - tag:    Use specific tag (requires -t)
-    -t TAG    Specify release tag (e.g., emcomm-tools-os-community-20250401-r4-final-4.0.0)
-              Required when -r tag
+              - stable: Latest formal GitHub Release (e.g., R5 final 5.0.0)
+                        These are fully tested, production-ready releases
+              - latest: Most recent git tag (includes development builds)
+                        Tags like 'emcomm-tools-os-community-20251113-r5-build17'
+              - tag:    Use a specific tag by name (requires -t)
+    -t TAG    Specify exact tag name (e.g., emcomm-tools-os-community-20251113-r5-build17)
+              Required when -r tag. Use -l to list available tags.
+    -l        List available tags and releases from GitHub, then exit
     -u PATH   Path to existing Ubuntu ISO file (skips download if provided)
     -b PATH   Path to .wine backup (tar.gz from et-user-backup or directory)
               Default: Auto-detect ~/etc-wine-backup-*.tar.gz
@@ -96,16 +102,33 @@ OPTIONS:
     -v        Verbose mode (enable bash debugging)
     -h        Show this help message
 
+RELEASE MODES EXPLAINED:
+    The ETC project uses two types of versioning on GitHub:
+
+    stable (-r stable):
+        - Official GitHub Releases with semantic versions (e.g., 5.0.0)
+        - Tested and production-ready
+        - Example: emcomm-tools-os-community-20251128-r5-final-5.0.0
+        - Found at: https://github.com/thetechprepper/emcomm-tools-os-community/releases
+
+    latest (-r latest):
+        - Development/build tags pushed between releases
+        - May contain new features or fixes not yet in stable
+        - Example: emcomm-tools-os-community-20251113-r5-build17
+        - Found at: https://github.com/thetechprepper/emcomm-tools-os-community/tags
+
 EXAMPLES:
-    # Build latest stable release (from GitHub Releases)
+    # List available releases and tags
+    ./build-etc-iso.sh -l
+
+    # Build latest stable release (recommended for most users)
     ./build-etc-iso.sh -r stable
 
-    # Build latest tag (including pre-releases)
+    # Build bleeding-edge development version
     ./build-etc-iso.sh -r latest
 
-    # Build specific release with existing Ubuntu ISO
-    ./build-etc-iso.sh -r tag -t emcomm-tools-os-community-20250401-r4-final-4.0.0 \\
-        -u ~/Downloads/ubuntu-22.10-desktop-amd64.iso
+    # Build a specific development build by tag name
+    ./build-etc-iso.sh -r tag -t emcomm-tools-os-community-20251113-r5-build17
 
     # Full build with backups and private files
     ./build-etc-iso.sh -r stable \\
@@ -113,37 +136,63 @@ EXAMPLES:
         -e ~/etc-user-backup-ETC-FZG1-20251015.tar.gz \\
         -p ~/private-emcomm-files
 
-    # Using private GitHub repo
-    ./build-etc-iso.sh -r stable \\
-        -p https://github.com/username/private-emcomm-configs
-
-    # Build with auto-detected backups from home directory
-    ./build-etc-iso.sh -r stable
-
-    # Cleanup mode (remove embedded Ubuntu ISO to save space)
-    ./build-etc-iso.sh -r stable -c
-
     # Dry-run to see what would happen
     ./build-etc-iso.sh -d
 
 PREREQUISITES:
     - Cubic installed (sudo apt install cubic)
-    - Internet connection
+    - Internet connection (to fetch release info from GitHub)
     - Sufficient disk space (~10GB for ISO + build artifacts)
     - secrets.env file configured in $(dirname "$0")
     - git (if using private GitHub repos)
 
 NOTES:
+    - Release URLs are dynamically fetched from GitHub API (no hardcoded URLs)
     - Ubuntu ISO will be downloaded if not provided with -u
-    - ETC installer tarball will be automatically downloaded
+    - ETC installer tarball will be automatically downloaded from GitHub
     - Project directory created at: ${BUILD_BASE_DIR}/<release-name>
     - Logs saved to: ${LOG_DIR}
-    - Private files can be local directory or GitHub repo (public or private)
 EOF
 }
 
+# List available tags and releases from GitHub
+list_available_versions() {
+    echo ""
+    echo "Fetching available versions from GitHub..."
+    echo ""
+    
+    # Fetch latest stable release
+    echo "=== STABLE RELEASES (GitHub Releases) ==="
+    echo "Use with: ./build-etc-iso.sh -r stable"
+    echo ""
+    
+    if RELEASES_JSON=$(curl -s -f "${GITHUB_RELEASES_URL}?per_page=5" 2>/dev/null); then
+        echo "$RELEASES_JSON" | jq -r '.[] | "  \(.tag_name)  (\(.name // "unnamed") - \(.published_at | split("T")[0]))"' 2>/dev/null || echo "  (unable to parse releases)"
+    else
+        echo "  (unable to fetch releases)"
+    fi
+    
+    echo ""
+    echo "=== DEVELOPMENT TAGS (All Git Tags) ==="
+    echo "Use with: ./build-etc-iso.sh -r latest  (for most recent)"
+    echo "      or: ./build-etc-iso.sh -r tag -t <tag-name>"
+    echo ""
+    
+    if TAGS_JSON=$(curl -s -f "${GITHUB_TAGS_URL}?per_page=15" 2>/dev/null); then
+        echo "$TAGS_JSON" | jq -r '.[].name' 2>/dev/null | while read -r tag; do
+            echo "  $tag"
+        done
+    else
+        echo "  (unable to fetch tags)"
+    fi
+    
+    echo ""
+    echo "For more tags, visit: https://github.com/thetechprepper/emcomm-tools-os-community/tags"
+    echo ""
+}
+
 # Parse command-line options
-while getopts ":r:t:u:b:e:p:cdvh" opt; do
+while getopts ":r:t:u:b:e:p:lcdvh" opt; do
     case $opt in
         r)
             RELEASE_MODE="$OPTARG"
@@ -168,6 +217,10 @@ while getopts ":r:t:u:b:e:p:cdvh" opt; do
             ;;
         p)
             PRIVATE_FILES_PATH="$OPTARG"
+            ;;
+        l)
+            list_available_versions
+            exit 0
             ;;
         c)
             CLEANUP_EMBEDDED_ISO=1
@@ -310,49 +363,96 @@ auto_detect_backups() {
 }
 
 # Fetch release info based on mode
-# Note: The ETC project publishes source code archives via GitHub's API (tarball_url)
-# These contain the install.sh scripts needed to build the ISO via Cubic
+# Note: The ETC project has two types of versioning:
+#   - "stable" releases: Full GitHub Releases with version numbers (e.g., R5 final 5.0.0)
+#   - "latest" tags: Development builds with date-based tags (e.g., 20251113-r5-build17)
+#
+# GitHub API structure:
+#   - /releases/latest: Returns most recent non-prerelease GitHub Release
+#   - /tags: Returns ALL tags (including development builds not in Releases)
+#
+# The tarball_url from either API provides source code archives containing install.sh scripts
 get_release_info() {
     log "INFO" "Fetching release information from GitHub..."
     log "INFO" "Release mode: $RELEASE_MODE"
     
     case "$RELEASE_MODE" in
         stable)
+            # Stable = latest GitHub Release (non-prerelease)
+            # These are formal releases like "2025.11.28.R5" with version X.X.X
             log "INFO" "Fetching latest stable release from GitHub Releases..."
-            if ! RELEASE_JSON=$(curl -s -f "${GITHUB_API_URL}/latest"); then
+            if ! RELEASE_JSON=$(curl -s -f "${GITHUB_RELEASES_URL}/latest"); then
                 log "ERROR" "Failed to fetch latest stable release"
+                log "ERROR" "Check network connection and try again"
                 return 1
             fi
+            
+            # Extract from releases API response
+            RELEASE_TAG=$(echo "$RELEASE_JSON" | jq -r '.tag_name // empty')
+            RELEASE_NAME=$(echo "$RELEASE_JSON" | jq -r '.name // .tag_name // "unknown"')
+            RELEASE_DATE=$(echo "$RELEASE_JSON" | jq -r '.published_at // .created_at // "unknown"' | cut -d'T' -f1)
+            TARBALL_URL=$(echo "$RELEASE_JSON" | jq -r '.tarball_url // empty')
             ;;
+            
         latest)
-            log "INFO" "Fetching latest release (most recent tag)..."
-            # Fetch all releases and use the first one (most recent)
-            if ! ALL_RELEASES=$(curl -s -f "${GITHUB_API_URL}?per_page=1"); then
-                log "ERROR" "Failed to fetch latest release"
+            # Latest = most recent git tag (including development/build tags)
+            # These are tags like "emcomm-tools-os-community-20251113-r5-build17"
+            # that may not have a corresponding GitHub Release
+            log "INFO" "Fetching latest tag from GitHub Tags API..."
+            if ! TAGS_JSON=$(curl -s -f "${GITHUB_TAGS_URL}?per_page=1"); then
+                log "ERROR" "Failed to fetch tags from GitHub"
+                log "ERROR" "Check network connection and try again"
                 return 1
             fi
-            RELEASE_JSON=$(echo "$ALL_RELEASES" | jq '.[0]')
+            
+            # Extract the most recent tag
+            RELEASE_TAG=$(echo "$TAGS_JSON" | jq -r '.[0].name // empty')
+            TARBALL_URL=$(echo "$TAGS_JSON" | jq -r '.[0].tarball_url // empty')
+            
+            if [ -z "$RELEASE_TAG" ] || [ "$RELEASE_TAG" = "null" ]; then
+                log "ERROR" "No tags found in repository"
+                return 1
+            fi
+            
+            # For tags, we don't have release metadata, construct from tag name
+            RELEASE_NAME="$RELEASE_TAG"
+            RELEASE_DATE=$(date +%Y-%m-%d)  # Use current date as we don't have publish date
             ;;
+            
         tag)
-            log "INFO" "Using specified tag: $SPECIFIED_TAG"
-            if ! RELEASE_JSON=$(curl -s -f "${GITHUB_API_URL}/tags/${SPECIFIED_TAG}"); then
-                log "ERROR" "Failed to fetch release info for tag: $SPECIFIED_TAG"
+            # Specific tag requested - fetch from tags API
+            log "INFO" "Looking up specific tag: $SPECIFIED_TAG"
+            if ! TAGS_JSON=$(curl -s -f "${GITHUB_TAGS_URL}?per_page=100"); then
+                log "ERROR" "Failed to fetch tags from GitHub"
                 return 1
             fi
+            
+            # Find the specific tag
+            RELEASE_TAG=$(echo "$TAGS_JSON" | jq -r --arg tag "$SPECIFIED_TAG" '.[] | select(.name == $tag) | .name // empty')
+            TARBALL_URL=$(echo "$TAGS_JSON" | jq -r --arg tag "$SPECIFIED_TAG" '.[] | select(.name == $tag) | .tarball_url // empty')
+            
+            if [ -z "$RELEASE_TAG" ] || [ "$RELEASE_TAG" = "null" ]; then
+                log "ERROR" "Tag not found: $SPECIFIED_TAG"
+                log "INFO" "Available recent tags:"
+                echo "$TAGS_JSON" | jq -r '.[].name' | head -10 | while read -r t; do
+                    log "INFO" "  - $t"
+                done
+                return 1
+            fi
+            
+            RELEASE_NAME="$RELEASE_TAG"
+            RELEASE_DATE=$(date +%Y-%m-%d)
             ;;
     esac
     
-    # Extract release details from GitHub API response
-    RELEASE_TAG=$(echo "$RELEASE_JSON" | jq -r '.tag_name // "unknown"')
-    RELEASE_NAME=$(echo "$RELEASE_JSON" | jq -r '.name // .tag_name // "unknown"')
-    RELEASE_DATE=$(echo "$RELEASE_JSON" | jq -r '.published_at // .created_at // "unknown"' | cut -d'T' -f1)
-    
-    # GitHub automatically provides tarball_url for every release
-    # This is the source code archive containing the install.sh scripts
-    TARBALL_URL=$(echo "$RELEASE_JSON" | jq -r '.tarball_url // "null"')
+    # Validate we got the required data
+    if [ -z "$RELEASE_TAG" ] || [ "$RELEASE_TAG" = "null" ]; then
+        log "ERROR" "Failed to determine release tag"
+        return 1
+    fi
     
     if [ -z "$TARBALL_URL" ] || [ "$TARBALL_URL" = "null" ]; then
-        log "ERROR" "Failed to get tarball URL from GitHub API for release: $RELEASE_TAG"
+        log "ERROR" "Failed to get tarball URL for tag: $RELEASE_TAG"
         return 1
     fi
     
@@ -361,11 +461,12 @@ get_release_info() {
     TARBALL_FILE="${RELEASE_TAG}.tar.gz"
     
     # Parse version info from tag
-    # Tag format: emcomm-tools-os-community-YYYYMMDD-rX-final-X.X.X
-    # Example: emcomm-tools-os-community-20250401-r4-final-4.0.0
-    VERSION=$(echo "$RELEASE_TAG" | grep -oP '\d+\.\d+\.\d+$' || echo "unknown")
-    DATE_VERSION=$(echo "$RELEASE_TAG" | grep -oP '\d{8}' || echo "unknown")
-    RELEASE_NUMBER=$(echo "$RELEASE_TAG" | grep -oP 'r\d+' || echo "r0")
+    # Stable tag format: emcomm-tools-os-community-YYYYMMDD-rX-final-X.X.X
+    # Build tag format: emcomm-tools-os-community-YYYYMMDD-rX-buildNN
+    VERSION=$(echo "$RELEASE_TAG" | grep -oP '\d+\.\d+\.\d+$' || echo "dev")
+    DATE_VERSION=$(echo "$RELEASE_TAG" | grep -oP '\d{8}' | head -1 || echo "unknown")
+    RELEASE_NUMBER=$(echo "$RELEASE_TAG" | grep -oP 'r\d+' | head -1 || echo "r0")
+    BUILD_NUMBER=$(echo "$RELEASE_TAG" | grep -oP 'build\d+' || echo "")
     
     # Construct project directory name
     PROJECT_DIR="${BUILD_BASE_DIR}/${RELEASE_TAG}"
@@ -373,8 +474,12 @@ get_release_info() {
     log "SUCCESS" "Release found: $RELEASE_NAME"
     log "INFO" "Tag: $RELEASE_TAG"
     log "INFO" "Version: $VERSION"
-    log "INFO" "Published: $RELEASE_DATE"
+    if [ -n "$BUILD_NUMBER" ]; then
+        log "INFO" "Build: $BUILD_NUMBER"
+    fi
+    log "INFO" "Date: $DATE_VERSION"
     log "INFO" "Tarball: $TARBALL_FILE"
+    log "INFO" "URL: $TARBALL_URL"
     
     return 0
 }
