@@ -15,7 +15,7 @@ ETC already includes all ham radio tools (Winlink, VARA, JS8Call, fldigi, etc.).
 - ✅ Personal callsign and grid square (pre-populated for `et-user`)
 - ✅ Hostname set to `ETC-{CALLSIGN}`
 - ✅ Desktop preferences (dark mode, scaling)
-- ✅ VARA FM/HF license key injection (if you have a license)
+- ✅ VARA FM/HF license `.reg` files + import script (run post-install after VARA installation)
 - ✅ Disabled accessibility features (screen reader, on-screen keyboard)
 - ✅ Git configuration
 - ✅ Embedded cache files for faster rebuilds (use `-m` for minimal)
@@ -27,6 +27,7 @@ This customizer **respects upstream ETC architecture**. We:
 - Keep ETC's runtime template system (et-direwolf, et-yaac, etc.)
 - Modify templates in-place, keeping `{{ET_*}}` placeholders
 - Don't change package selections or install additional software
+- Don't pre-install VARA or Wine prefix (these require a desktop session post-install)
 
 **ETC Architecture**: ETC uses runtime template processing. When you run `et-direwolf`, `et-yaac`, or `et-winlink`, these wrapper scripts read from `~/.config/emcomm-tools/user.json` and generate configs dynamically. We pre-populate `user.json` so you skip the `et-user` prompt on first boot.
 
@@ -243,6 +244,23 @@ VARA is commercial software with **two separate products**:
 | **VARA HF** | ~$69 | HF Winlink for long-distance |
 
 Purchase at [rosmodem.wordpress.com](https://rosmodem.wordpress.com/)
+
+**Important:** VARA licenses are applied **after** VARA installation, not during ISO build:
+
+1. **Install VARA** (post-install, requires desktop session):
+   ```bash
+   cd ~/add-ons/wine
+   ./01-install-wine-deps.sh
+   ./02-install-vara-hf.sh    # If you use HF
+   ./03-install-vara-fm.sh    # If you use FM
+   ```
+
+2. **Import license keys** (if configured in secrets.env):
+   ```bash
+   ./99-import-vara-licenses.sh
+   ```
+
+The build script creates `.reg` files and an import script in `~/add-ons/wine/`. This is because Wine's prefix (`~/.wine32`) doesn't exist until you run the VARA installers.
 
 ### Pat Winlink Aliases
 

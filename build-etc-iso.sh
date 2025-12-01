@@ -425,7 +425,107 @@ extract_iso() {
 }
 
 # ============================================================================
-# Customization Functions (from cubic scripts)
+# ETC Installation (chroot)
+# ============================================================================
+
+setup_chroot_mounts() {
+    # Set up bind mounts for chroot environment
+    log "DEBUG" "Setting up chroot bind mounts..."
+    
+    mount --bind /dev "${SQUASHFS_DIR}/dev"
+    mount --bind /dev/pts "${SQUASHFS_DIR}/dev/pts"
+    mount --bind /proc "${SQUASHFS_DIR}/proc"
+    mount --bind /sys "${SQUASHFS_DIR}/sys"
+    mount --bind /run "${SQUASHFS_DIR}/run"
+    
+    # Copy resolv.conf for network access
+    cp /etc/resolv.conf "${SQUASHFS_DIR}/etc/resolv.conf"
+    
+    log "DEBUG" "Chroot mounts configured"
+}
+
+cleanup_chroot_mounts() {
+    # Unmount in reverse order
+    log "DEBUG" "Cleaning up chroot bind mounts..."
+    
+    umount -l "${SQUASHFS_DIR}/run" 2>/dev/null || true
+    umount -l "${SQUASHFS_DIR}/sys" 2>/dev/null || true
+    umount -l "${SQUASHFS_DIR}/proc" 2>/dev/null || true
+    umount -l "${SQUASHFS_DIR}/dev/pts" 2>/dev/null || true
+    umount -l "${SQUASHFS_DIR}/dev" 2>/dev/null || true
+    
+    log "DEBUG" "Chroot mounts cleaned up"
+}
+
+install_etc_in_chroot() {
+    log "INFO" ""
+    log "INFO" "=== Installing EmComm Tools Community ==="
+    log "INFO" "This will take 30-60 minutes depending on your internet connection..."
+    
+    if [ $DRY_RUN -eq 1 ]; then
+        log "DRY-RUN" "Would install ETC in chroot from: $ETC_TARBALL_PATH"
+        return 0
+    fi
+    
+    # Extract ETC tarball to a temp location in the chroot
+    local etc_install_dir="${SQUASHFS_DIR}/tmp/etc-installer"
+    log "DEBUG" "Extracting ETC installer to: $etc_install_dir"
+    
+    mkdir -p "$etc_install_dir"
+    tar -xzf "$ETC_TARBALL_PATH" -C "$etc_install_dir" --strip-components=1
+    
+    # Set up chroot environment
+    setup_chroot_mounts
+    
+    # Trap to ensure cleanup on error
+    trap 'cleanup_chroot_mounts' EXIT
+    
+    # Fix apt sources for Ubuntu 22.10 EOL
+    log "INFO" "Fixing apt sources for Ubuntu 22.10 (EOL)..."
+    chroot "${SQUASHFS_DIR}" /bin/bash -c "
+        sed -i 's/archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+        sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+    "
+    
+    # Run the ETC installer inside chroot
+    # Note: The installer uses dialog for interactive menus (OSM maps, Wikipedia, etc.)
+    # We redirect stdin from /dev/null to make dialog exit immediately (simulating ESC)
+    # This causes the interactive scripts to skip their downloads
+    log "INFO" "Running ETC installer (this takes a while)..."
+    log "INFO" "Note: Interactive map/Wikipedia downloads will be skipped (run post-install if needed)"
+    
+    # Set DEBIAN_FRONTEND to avoid interactive prompts
+    # Redirect stdin from /dev/null to skip dialog prompts
+    chroot "${SQUASHFS_DIR}" /bin/bash -c "
+        export DEBIAN_FRONTEND=noninteractive
+        export NEEDRESTART_MODE=a
+        cd /tmp/etc-installer/scripts
+        ./install.sh
+    " </dev/null 2>&1 | while IFS= read -r line; do
+        log "ETC" "$line"
+    done
+    
+    local exit_code=${PIPESTATUS[0]}
+    
+    # Clean up
+    cleanup_chroot_mounts
+    trap - EXIT
+    
+    # Remove installer files
+    log "DEBUG" "Cleaning up installer files..."
+    rm -rf "$etc_install_dir"
+    
+    if [ $exit_code -ne 0 ]; then
+        log "ERROR" "ETC installation failed with exit code: $exit_code"
+        return 1
+    fi
+    
+    log "SUCCESS" "EmComm Tools Community installed successfully"
+    return 0
+}
+
+# ============================================================================
+# Customization Functions (apply AFTER ETC is installed)
 # ============================================================================
 
 customize_hostname() {
@@ -579,19 +679,28 @@ customize_desktop() {
     
     log "DEBUG" "Desktop config: color_scheme=$color_scheme, scaling=$scaling"
     
-    local skel_dconf="${SQUASHFS_DIR}/etc/skel/.config/dconf"
-    log "DEBUG" "dconf directory: $skel_dconf"
-    mkdir -p "$skel_dconf"
-    log "DEBUG" "Created dconf directory"
-    
     if [ $DRY_RUN -eq 1 ]; then
         log "DRY-RUN" "Would configure: $color_scheme mode, ${scaling}x scaling"
         return 0
     fi
     
-    # Create dconf user database directory
-    log "DEBUG" "Creating dconf user.d directory"
-    mkdir -p "${skel_dconf}/user.d"
+    # GNOME dconf uses a binary database, not plain text files in user.d
+    # To set system-wide defaults, we use:
+    #   1. /etc/dconf/profile/user - defines database cascade order
+    #   2. /etc/dconf/db/local.d/* - settings files (keyfile format)
+    #   3. Run 'dconf update' to compile the database
+    
+    # Create dconf profile to include local database
+    local dconf_profile_dir="${SQUASHFS_DIR}/etc/dconf/profile"
+    local dconf_db_dir="${SQUASHFS_DIR}/etc/dconf/db/local.d"
+    mkdir -p "$dconf_profile_dir" "$dconf_db_dir"
+    
+    # Create profile that includes local database before user settings
+    cat > "${dconf_profile_dir}/user" <<'EOF'
+user-db:user
+system-db:local
+EOF
+    log "DEBUG" "Created dconf profile"
     
     # Determine theme based on color scheme
     local gtk_theme="Yaru"
@@ -601,10 +710,11 @@ customize_desktop() {
         icon_theme="Yaru-dark"
     fi
     
-    # Create dconf settings file
-    local dconf_file="${skel_dconf}/user.d/00-emcomm-defaults"
+    # Create dconf settings file (keyfile format)
+    local dconf_file="${dconf_db_dir}/00-emcomm-defaults"
     log "DEBUG" "Writing dconf settings to: $dconf_file"
     cat > "$dconf_file" <<EOF
+# EmComm Tools Customizer - Desktop Preferences
 # Color scheme and theme
 [org/gnome/desktop/interface]
 color-scheme='${color_scheme}'
@@ -640,7 +750,19 @@ ambient-enabled=false
 EOF
     fi
 
-    log "DEBUG" "dconf settings file written successfully"
+    # Compile dconf database using chroot
+    log "DEBUG" "Compiling dconf database..."
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+    
+    chroot "${SQUASHFS_DIR}" /usr/bin/dconf update 2>/dev/null || {
+        log "WARN" "dconf update failed - settings may not apply correctly"
+    }
+    
+    cleanup_chroot_mounts
+    trap - EXIT
+
+    log "DEBUG" "dconf database compiled"
     log "SUCCESS" "Desktop preferences configured (${color_scheme}, ${scaling}x)"
 }
 
@@ -860,10 +982,32 @@ EOF
         fi
     fi
     
-    # Note: User password must be set post-install or via preseed/autoinstall
-    # We can't easily set it in the squashfs without chroot and passwd command
+    # Set user password via chroot if provided
+    # We need chroot because passwd requires proper system context
     if [ -n "$password" ]; then
-        log "WARN" "USER_PASSWORD is set but password hashing requires chroot - use post-install script"
+        log "INFO" "Setting user password via chroot..."
+        
+        # Set up chroot mounts
+        setup_chroot_mounts
+        trap 'cleanup_chroot_mounts' EXIT
+        
+        # Use chpasswd to set password (more script-friendly than passwd)
+        # Format: username:password
+        echo "${username}:${password}" | chroot "${SQUASHFS_DIR}" /usr/sbin/chpasswd
+        local chpasswd_exit=$?
+        
+        # Clean up
+        cleanup_chroot_mounts
+        trap - EXIT
+        
+        if [ $chpasswd_exit -eq 0 ]; then
+            log "SUCCESS" "Password set for user: $username"
+        else
+            log "WARN" "Failed to set password (exit code: $chpasswd_exit)"
+            log "WARN" "User may need to set password on first boot"
+        fi
+    else
+        log "INFO" "No password configured - user will use ETC default or must set on first boot"
     fi
     
     log "SUCCESS" "User account configuration complete"
@@ -890,19 +1034,54 @@ customize_vara_license() {
     fi
     
     if [ $DRY_RUN -eq 1 ]; then
-        [ -n "$vara_fm_key" ] && log "DRY-RUN" "Would inject VARA FM license"
-        [ -n "$vara_hf_key" ] && log "DRY-RUN" "Would inject VARA HF license"
+        [ -n "$vara_fm_key" ] && log "DRY-RUN" "Would create VARA FM license .reg file"
+        [ -n "$vara_hf_key" ] && log "DRY-RUN" "Would create VARA HF license .reg file"
         return 0
     fi
     
-    # Create Wine registry snippet directory
-    # NOTE: ETC uses .wine32 (32-bit prefix), not .wine!
-    local wine_reg_dir="${SQUASHFS_DIR}/etc/skel/.wine32/user.reg.d"
-    log "DEBUG" "Creating Wine registry dir: $wine_reg_dir"
-    mkdir -p "$wine_reg_dir"
+    # IMPORTANT: Wine doesn't exist until VARA is installed post-install!
+    # ETC workflow:
+    #   1. ISO build: install-wine.sh installs Wine packages only
+    #   2. Post-install (desktop session): user runs ~/add-ons/wine/*.sh to install VARA
+    #   3. Wine prefix (~/.wine32) is created during VARA installation
+    #
+    # We create .reg files in add-ons for the user to import after VARA installation
+    # using: wine regedit /path/to/vara-license.reg
+    
+    local addon_dir="${SQUASHFS_DIR}/etc/skel/add-ons/wine"
+    log "DEBUG" "Creating Wine add-ons dir: $addon_dir"
+    mkdir -p "$addon_dir"
+    
+    # Create a script to import all license registry files
+    local import_script="${addon_dir}/99-import-vara-licenses.sh"
+    
+    cat > "$import_script" <<'SCRIPT_HEADER'
+#!/bin/bash
+# Auto-generated by build-etc-iso.sh
+# Run this AFTER completing VARA installation to register your licenses
+# Usage: ./99-import-vara-licenses.sh
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [ ! -d "$HOME/.wine32" ]; then
+    echo "ERROR: Wine prefix ~/.wine32 not found!"
+    echo "Please install VARA first using the scripts in this directory:"
+    echo "  1. ./01-install-wine-deps.sh"
+    echo "  2. ./02-install-vara-hf.sh"
+    echo "  3. ./03-install-vara-fm.sh"
+    exit 1
+fi
+
+export WINEPREFIX="$HOME/.wine32"
+
+echo "Importing VARA license registry files..."
+
+SCRIPT_HEADER
     
     if [ -n "$vara_fm_key" ]; then
-        local fm_reg="${wine_reg_dir}/vara-fm-license.reg"
+        local fm_reg="${addon_dir}/vara-fm-license.reg"
         log "DEBUG" "Writing VARA FM registry: $fm_reg"
         cat > "$fm_reg" <<EOF
 REGEDIT4
@@ -911,12 +1090,23 @@ REGEDIT4
 "Callsign"="${vara_fm_callsign}"
 "License"="${vara_fm_key}"
 EOF
+        chmod 644 "$fm_reg"
         log "DEBUG" "VARA FM registry written"
-        log "SUCCESS" "VARA FM license configured"
+        
+        # Add to import script
+        cat >> "$import_script" <<'EOF'
+
+if [ -f "$SCRIPT_DIR/vara-fm-license.reg" ]; then
+    echo "Importing VARA FM license..."
+    wine regedit "$SCRIPT_DIR/vara-fm-license.reg"
+    echo "VARA FM license imported successfully"
+fi
+EOF
+        log "SUCCESS" "VARA FM license registry file created"
     fi
     
     if [ -n "$vara_hf_key" ]; then
-        local hf_reg="${wine_reg_dir}/vara-hf-license.reg"
+        local hf_reg="${addon_dir}/vara-hf-license.reg"
         log "DEBUG" "Writing VARA HF registry: $hf_reg"
         cat > "$hf_reg" <<EOF
 REGEDIT4
@@ -925,9 +1115,32 @@ REGEDIT4
 "Callsign"="${vara_hf_callsign}"
 "License"="${vara_hf_key}"
 EOF
+        chmod 644 "$hf_reg"
         log "DEBUG" "VARA HF registry written"
-        log "SUCCESS" "VARA HF license configured"
+        
+        # Add to import script
+        cat >> "$import_script" <<'EOF'
+
+if [ -f "$SCRIPT_DIR/vara-hf-license.reg" ]; then
+    echo "Importing VARA HF license..."
+    wine regedit "$SCRIPT_DIR/vara-hf-license.reg"
+    echo "VARA HF license imported successfully"
+fi
+EOF
+        log "SUCCESS" "VARA HF license registry file created"
     fi
+    
+    # Finish the import script
+    cat >> "$import_script" <<'EOF'
+
+echo ""
+echo "License import complete!"
+echo "Restart VARA to verify registration."
+EOF
+    
+    chmod +x "$import_script"
+    log "SUCCESS" "VARA license import script created: ~/add-ons/wine/99-import-vara-licenses.sh"
+    log "INFO" "User must run this script AFTER installing VARA"
 }
 
 customize_git_config() {
@@ -990,12 +1203,13 @@ customize_power() {
         return 0
     fi
     
-    # Power management uses dconf settings under org/gnome/settings-daemon/plugins/power
-    local dconf_dir="${SQUASHFS_DIR}/etc/skel/.config/dconf/user.d"
-    local dconf_file="${dconf_dir}/01-power-settings"
+    # Power management uses dconf - add to the same system-wide database
+    # as the desktop settings (created by customize_desktop)
+    local dconf_db_dir="${SQUASHFS_DIR}/etc/dconf/db/local.d"
+    local dconf_file="${dconf_db_dir}/01-power-settings"
     
-    # Ensure directory exists
-    mkdir -p "$dconf_dir"
+    # Ensure directory exists (should already exist from customize_desktop)
+    mkdir -p "$dconf_db_dir"
     log "DEBUG" "Writing power dconf settings: $dconf_file"
     
     cat > "$dconf_file" <<EOF
@@ -1010,8 +1224,19 @@ sleep-inactive-ac-type='${idle_ac}'
 sleep-inactive-battery-type='${idle_battery}'
 sleep-inactive-ac-timeout=${idle_timeout}
 sleep-inactive-battery-timeout=${idle_timeout}
-
 EOF
+    
+    # Recompile dconf database
+    log "DEBUG" "Recompiling dconf database..."
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+    
+    chroot "${SQUASHFS_DIR}" /usr/bin/dconf update 2>/dev/null || {
+        log "WARN" "dconf update failed - power settings may not apply correctly"
+    }
+    
+    cleanup_chroot_mounts
+    trap - EXIT
     
     log "SUCCESS" "Power management configured"
 }
@@ -1401,7 +1626,13 @@ main() {
         exit 1
     fi
     
-    # Apply customizations
+    # Install ETC in chroot (this is the main installation)
+    if ! install_etc_in_chroot; then
+        cleanup_work_dir
+        exit 1
+    fi
+    
+    # Apply customizations (AFTER ETC is installed)
     log "INFO" ""
     log "INFO" "=== Applying Customizations ==="
     log "DEBUG" "Starting customization phase..."

@@ -50,7 +50,7 @@ Automated customization of EmComm Tools Community (ETC) ISO images.
 - Hostname (ETC-{CALLSIGN})
 - Desktop preferences (dark mode, scaling)
 - Accessibility disabled (screen reader, on-screen keyboard, auto-brightness)
-- VARA license injection via secrets.env (into ~/.wine32 registry)
+- VARA license `.reg` files + import script (for post-install use)
 - APRS configuration (iGate, beaconing) - modifies ETC's direwolf templates
 - Git configuration
 - User account with password (NO autologin by default)
@@ -102,13 +102,19 @@ emcomm-tools-customizer/
 - `ENABLE_AUTOLOGIN` - "yes" or "no" (default: "no")
 - User gets password prompt by default, NOT autologin
 
-## VARA License Injection
+## VARA License (Post-Install)
 
-VARA licenses are injected into Wine 32-bit registry:
-- `VARA_FM_CALLSIGN` + `VARA_FM_LICENSE_KEY`
-- `VARA_HF_CALLSIGN` + `VARA_HF_LICENSE_KEY`
+VARA requires a desktop session to install. We create `.reg` files and an import script:
+- `VARA_FM_CALLSIGN` + `VARA_FM_LICENSE_KEY` → `~/add-ons/wine/vara-fm-license.reg`
+- `VARA_HF_CALLSIGN` + `VARA_HF_LICENSE_KEY` → `~/add-ons/wine/vara-hf-license.reg`
+- Import script: `~/add-ons/wine/99-import-vara-licenses.sh`
 
-Registry entries go in `/etc/skel/.wine32/` (NOT .wine!)
+**Workflow (post-install on hardware):**
+1. User runs `~/add-ons/wine/01-install-wine-deps.sh`
+2. User runs VARA installers (`02-install-vara-hf.sh`, `03-install-vara-fm.sh`)
+3. User runs `99-import-vara-licenses.sh` to register licenses
+
+Note: Wine prefix `~/.wine32` doesn't exist until VARA installation. We can NOT inject licenses during ISO build.
 
 ## APRS Configuration
 
