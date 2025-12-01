@@ -12,21 +12,25 @@ Fully automated customization of EmComm Tools Community (ETC) ISO images using x
 ETC already includes all ham radio tools (Winlink, VARA, JS8Call, fldigi, etc.). This customizer adds:
 
 - ✅ Pre-configured WiFi networks (auto-connect on boot)
-- ✅ Personal callsign and grid square
+- ✅ Personal callsign and grid square (pre-populated for `et-user`)
 - ✅ Hostname set to `ETC-{CALLSIGN}`
 - ✅ Desktop preferences (dark mode, scaling)
 - ✅ VARA FM/HF license key injection (if you have a license)
 - ✅ Disabled accessibility features (screen reader, on-screen keyboard)
-- ✅ APRS configuration (direwolf, YAAC)
 - ✅ Git configuration
-- ✅ Autologin for emergency deployment
+- ✅ Embedded cache files for faster rebuilds (use `-m` for minimal)
 
 ### What's NOT Changed
 
-- Python installation (ETC handles this)
-- Ham radio software (already in ETC)
-- Wine/VARA installation (already in ETC)
-- System packages (already optimized)
+This customizer **respects upstream ETC architecture**. We:
+
+- Keep ETC's runtime template system (et-direwolf, et-yaac, etc.)
+- Modify templates in-place, keeping `{{ET_*}}` placeholders
+- Don't change package selections or install additional software
+
+**ETC Architecture**: ETC uses runtime template processing. When you run `et-direwolf`, `et-yaac`, or `et-winlink`, these wrapper scripts read from `~/.config/emcomm-tools/user.json` and generate configs dynamically. We pre-populate `user.json` so you skip the `et-user` prompt on first boot.
+
+**APRS Customization**: We modify ETC's direwolf template at `/opt/emcomm-tools/conf/template.d/packet/direwolf.aprs-digipeater.conf` to add iGate and beacon settings while preserving the `{{ET_CALLSIGN}}` and `{{ET_AUDIO_DEVICE}}` placeholders that ETC substitutes at runtime.
 
 ### Future Enhancements (TODO)
 
@@ -96,8 +100,6 @@ sudo ./build-etc-iso.sh -r stable
 
 The script checks `cache/ubuntu-22.10-desktop-amd64.iso` before downloading.
 
-See [QUICK_START.md](QUICK_START.md) for a condensed reference.
-
 ## Build Options
 
 ```bash
@@ -113,6 +115,9 @@ sudo ./build-etc-iso.sh -r latest
 # Build a specific tag by name
 sudo ./build-etc-iso.sh -r tag -t emcomm-tools-os-community-20251113-r5-build17
 
+# Minimal build (smaller ISO, no embedded cache files)
+sudo ./build-etc-iso.sh -r stable -m
+
 # Dry run (show what would happen without making changes)
 ./build-etc-iso.sh -d
 
@@ -127,8 +132,10 @@ sudo ./build-etc-iso.sh -r stable -v
 | `-r <stable\|latest\|tag>` | Release mode |
 | `-t <tag>` | Specific tag name (required with `-r tag`) |
 | `-l` | List available releases and tags |
+| `-m` | Minimal build (exclude cache files, saves ~4GB) |
 | `-d` | Dry-run mode |
 | `-v` | Verbose mode |
+| `-D` | Debug mode (show DEBUG log messages) |
 | `-h` | Show help |
 
 ### Release Modes
@@ -139,6 +146,14 @@ sudo ./build-etc-iso.sh -r stable -v
 | `latest` | Most recent git tag (development) | [Tags](https://github.com/thetechprepper/emcomm-tools-os-community/tags) |
 | `tag` | Specific tag by name | Use with `-t` |
 
+### Build Size
+
+By default, cache files (Ubuntu ISO, ETC tarballs) are embedded in `/opt/emcomm-customizer-cache/`
+so they're available for the next build on the installed system. This is useful when building
+on the same machine you install to.
+
+Use `-m` for a minimal build that excludes these files (saves ~4GB).
+
 ## Configuration Reference
 
 ### secrets.env Variables
@@ -148,10 +163,21 @@ sudo ./build-etc-iso.sh -r stable -v
 CALLSIGN="N0CALL"              # Your amateur radio callsign
 USER_FULLNAME="Your Name"       # Full name for git commits
 USER_EMAIL="you@example.com"    # Email for git commits
-USER_USERNAME="emcomm"          # Linux username
+GRID_SQUARE="CN87"             # Maidenhead grid locator
+
+# === User Account ===
+USER_USERNAME="emcomm"          # Linux username (default: emcomm)
+USER_PASSWORD=""                # Password (leave blank to keep ETC default)
+ENABLE_AUTOLOGIN="no"          # "yes" or "no" - default is NO
 
 # === System ===
 MACHINE_NAME=""                 # Hostname (defaults to ETC-{CALLSIGN})
+
+# === Desktop Preferences ===
+DESKTOP_COLOR_SCHEME="prefer-dark"  # prefer-dark or prefer-light
+DESKTOP_SCALING_FACTOR="1.0"        # 1.0, 1.25, 1.5, or 2.0
+DISABLE_ACCESSIBILITY="yes"         # Disable screen reader, on-screen keyboard
+DISABLE_AUTO_BRIGHTNESS="yes"       # Disable automatic backlight
 
 # === WiFi Networks ===
 # Add as many networks as needed with unique suffixes
@@ -163,24 +189,48 @@ WIFI_SSID_MOBILE="YourHotspot"
 WIFI_PASSWORD_MOBILE="HotspotPassword"
 WIFI_AUTOCONNECT_MOBILE="yes"
 
+# === Winlink ===
+WINLINK_PASSWORD=""            # Your Winlink password
+
+# === APRS Configuration ===
+APRS_SSID="10"                 # SSID (0-15, 10=iGate)
+APRS_PASSCODE="-1"             # APRS-IS passcode (-1=RX only)
+APRS_SYMBOL="/r"               # Symbol: table+code (/r=antenna)
+APRS_COMMENT="EmComm iGate"    # Beacon comment
+
+# APRS Beacon (position beaconing)
+ENABLE_APRS_BEACON="no"        # Enable position beaconing
+APRS_BEACON_INTERVAL="300"     # Seconds between beacons
+APRS_BEACON_VIA="WIDE1-1"      # Digipeater path
+APRS_BEACON_POWER="10"         # PHG: Power in watts
+APRS_BEACON_HEIGHT="20"        # PHG: Antenna height (feet)
+APRS_BEACON_GAIN="3"           # PHG: Antenna gain (dBi)
+
+# APRS iGate (RF to Internet gateway)
+ENABLE_APRS_IGATE="yes"        # Enable iGate
+APRS_SERVER="noam.aprs2.net"   # APRS-IS server
+
+# Direwolf Audio
+DIREWOLF_ADEVICE="plughw:1,0"  # Audio device (Digirig)
+DIREWOLF_PTT="CM108"           # PTT method
+
 # === VARA License (Optional) ===
 VARA_FM_CALLSIGN=""            # Callsign registered with VARA FM license
 VARA_FM_LICENSE_KEY=""         # Your VARA FM license key
 VARA_HF_CALLSIGN=""            # Callsign registered with VARA HF license  
 VARA_HF_LICENSE_KEY=""         # Your VARA HF license key
 
-# === APRS Configuration ===
-APRS_SSID="10"                 # SSID for APRS
-APRS_PASSCODE=""               # APRS-IS passcode (generate at aprs.fi)
-APRS_SYMBOL="r/"               # Primary table symbol
-APRS_COMMENT="EmComm Station"  # Status text
-APRS_SERVER="noam.aprs2.net"   # APRS-IS server
-ENABLE_APRS_IGATE="yes"        # Enable iGate functionality
-ENABLE_APRS_BEACON="no"        # Enable beacon (needs GPS)
+# === Pat Winlink Aliases ===
+PAT_EMCOMM_ALIAS="yes"         # Create "emcomm" quick-connect alias
+PAT_EMCOMM_GATEWAY=""          # Gateway callsign (e.g., "W7ACS-10")
 
-# === Direwolf Audio ===
-DIREWOLF_ADEVICE="plughw:1,0"  # Audio device
-DIREWOLF_PTT="CM108"           # PTT method
+# === Power Management ===
+POWER_LID_CLOSE_AC="suspend"      # Lid close on AC power
+POWER_LID_CLOSE_BATTERY="suspend" # Lid close on battery
+POWER_BUTTON_ACTION="interactive" # Power button action
+POWER_IDLE_AC="nothing"           # Idle action on AC
+POWER_IDLE_BATTERY="suspend"      # Idle action on battery
+POWER_IDLE_TIMEOUT="900"          # Idle timeout (seconds)
 ```
 
 ### About VARA Licenses
@@ -194,17 +244,96 @@ VARA is commercial software with **two separate products**:
 
 Purchase at [rosmodem.wordpress.com](https://rosmodem.wordpress.com/)
 
+### Pat Winlink Aliases
+
+Pat is the Winlink client on ETC. The `emcomm` alias adds a quick-connect shortcut to your standard Pat config:
+
+```bash
+pat connect emcomm    # Quick connect to your configured gateway
+```
+
+After first boot, run `~/.config/pat/add-emcomm-alias.sh` to add the alias to your Pat config.
+
+### Power Management Options
+
+| Setting | Options | Description |
+|---------|---------|-------------|
+| Lid Close | `nothing`, `suspend`, `hibernate`, `logout` | What happens when laptop lid closes |
+| Power Button | `interactive`, `suspend`, `hibernate`, `poweroff` | Power button behavior |
+| Idle Action | `nothing`, `suspend`, `hibernate` | Action after idle timeout |
+| Idle Timeout | Seconds (e.g., `900` = 15 min) | Time before idle action triggers |
+
+### APRS SSID Reference
+
+| SSID | Usage |
+|------|-------|
+| 0 | Primary station (home, fixed) |
+| 1 | Digipeater, fill-in digi |
+| 2 | Digipeater (alternate) |
+| 3 | Portable station |
+| 4 | HF to VHF gateway |
+| 5 | Smartphone, mobile app |
+| 6 | Satellite ops, special |
+| 7 | Handheld, walkie-talkie |
+| 8 | Boat, maritime mobile |
+| 9 | Mobile (car, truck, RV) |
+| 10 | Internet, APRS-IS only |
+| 11 | Balloon, aircraft, spacecraft |
+| 12 | APRStt, DTMF, touchstone |
+| 13 | Weather station |
+| 14 | Trucking |
+| 15 | Generic, other |
+
 ### APRS Symbol Reference
 
-Common symbols for APRS_SYMBOL:
+Symbols are specified with a two-character code: **table + symbol**.
 
-| Symbol | Code | Description |
-|--------|------|-------------|
-| Car | `>/` | Mobile station |
-| House | `-/` | Home/QTH |
-| Portable | `r/` | Portable station |
-| Emergency | `!/` | Emergency |
-| Digipeater | `#/` | Digipeater |
+**Primary Table Symbols (table = `/`)**
+
+| Symbol Code | Icon | Description |
+|-------------|------|-------------|
+| `/>` | 🚗 | Car |
+| `/y` | 🏠 | House with antenna |
+| `/[` | 🚶 | Jogger/Walker (portable) |
+| `/_` | 🌤️ | Weather station |
+| `/!` | 🚔 | Police station |
+| `/#` | 📍 | Digipeater |
+| `/$` | 📞 | Phone |
+| `/-` | 🏠 | House (QTH) |
+| `/.` | ❌ | X / Unknown |
+| `//` | 🔴 | Red Dot |
+| `/?` | ❓ | Question mark |
+| `/K` | 🏫 | School |
+| `/R` | 🍽️ | Restaurant |
+| `/Y` | ⛵ | Yacht/Sailboat |
+| `/^` | ✈️ | Large aircraft |
+| `/a` | 🚑 | Ambulance |
+| `/b` | 🚲 | Bicycle |
+| `/f` | 🚒 | Fire truck |
+| `/k` | 🚚 | Truck |
+| `/n` | 📡 | Node (packet) |
+| `/r` | 📻 | Antenna/Portable |
+| `/s` | 🚢 | Ship (power) |
+| `/u` | 🚌 | Bus |
+| `/v` | 🚐 | Van |
+
+**Alternate Table Symbols (table = `\`)**
+
+| Symbol Code | Icon | Description |
+|-------------|------|-------------|
+| `\>` | 🚗 | Car (overlay capable) |
+| `\a` | 🎪 | ARES/RACES |
+| `\#` | 📍 | Digipeater (overlay) |
+| `\&` | 🔷 | Diamond (overlay) |
+| `\-` | 🏠 | House (HF) |
+| `\0` | ⭕ | Circle (numbered) |
+| `\K` | 🚁 | Helicopter |
+| `\^` | ✈️ | Small aircraft |
+| `\j` | 🏕️ | Camping |
+| `\k` | 🏍️ | ATV/Motorcycle |
+| `\n` | 🔺 | Triangle (overlay) |
+| `\s` | 🛥️ | Small boat |
+| `\v` | 📺 | ATV (overlay) |
 
 Full table: [APRS Symbol Codes](http://www.aprs.org/symbols/symbolsX.txt)
 

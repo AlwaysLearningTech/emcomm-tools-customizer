@@ -43,6 +43,7 @@ WORK_DIR="${SCRIPT_DIR}/.work"            # Temporary build directory (cleaned e
 DRY_RUN=0
 RELEASE_MODE="latest"
 SPECIFIED_TAG=""
+MINIMAL_BUILD=0                           # When 1, omit cache files from ISO to reduce size
 
 # Colors for output
 RED='\033[0;31m'
@@ -108,6 +109,7 @@ RELEASE OPTIONS:
 
 BUILD OPTIONS:
     -d        Dry-run mode (show what would be done without making changes)
+    -m        Minimal build (omit cache files from ISO to reduce size)
     -v        Verbose mode (enable bash -x debugging)
     -D        Debug mode (show DEBUG log messages on console)
     -h        Show this help message
@@ -118,6 +120,11 @@ DIRECTORY STRUCTURE:
               - ETC tarballs are cached here too
     output/   Generated custom ISOs
     logs/     Build logs (DEBUG messages always written here)
+
+BUILD SIZE:
+    By default, cache files (Ubuntu ISO, ETC tarballs) are embedded in the
+    output ISO so they're available for the next build on the installed system.
+    Use -m for a minimal build that excludes these files (saves ~4GB).
 
 PREREQUISITES:
     sudo apt install xorriso squashfs-tools wget curl jq
@@ -137,6 +144,9 @@ EXAMPLES:
 
     # Build with debug output for troubleshooting
     sudo ./build-etc-iso.sh -r stable -D
+
+    # Minimal build (smaller ISO, no embedded cache)
+    sudo ./build-etc-iso.sh -r stable -m
 
 EOF
 }
@@ -423,9 +433,11 @@ customize_hostname() {
     
     # shellcheck source=/dev/null
     source "$SECRETS_FILE"
+    log "DEBUG" "Sourced secrets file: $SECRETS_FILE"
     
     local callsign="${CALLSIGN:-N0CALL}"
     local machine_name="${MACHINE_NAME:-ETC-${callsign}}"
+    log "DEBUG" "CALLSIGN=$callsign, MACHINE_NAME=$machine_name"
     
     if [ $DRY_RUN -eq 1 ]; then
         log "DRY-RUN" "Would set hostname to: $machine_name"
@@ -433,10 +445,15 @@ customize_hostname() {
     fi
     
     # Set hostname
-    echo "$machine_name" > "${SQUASHFS_DIR}/etc/hostname"
+    local hostname_file="${SQUASHFS_DIR}/etc/hostname"
+    log "DEBUG" "Writing hostname to: $hostname_file"
+    echo "$machine_name" > "$hostname_file"
+    log "DEBUG" "Hostname file written successfully"
     
     # Update /etc/hosts
-    cat > "${SQUASHFS_DIR}/etc/hosts" <<EOF
+    local hosts_file="${SQUASHFS_DIR}/etc/hosts"
+    log "DEBUG" "Writing hosts file: $hosts_file"
+    cat > "$hosts_file" <<EOF
 127.0.0.1       localhost
 127.0.1.1       $machine_name
 
@@ -446,6 +463,7 @@ ff00::0 ip6-mcastprefix
 ff02::1 ip6-allnodes
 ff02::2 ip6-allrouters
 EOF
+    log "DEBUG" "Hosts file written successfully"
     
     log "SUCCESS" "Hostname set to: $machine_name"
 }
@@ -550,24 +568,54 @@ EOF
 customize_desktop() {
     log "INFO" "Configuring desktop preferences..."
     
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    log "DEBUG" "Sourced secrets file for desktop config"
+    
+    local color_scheme="${DESKTOP_COLOR_SCHEME:-prefer-dark}"
+    local scaling="${DESKTOP_SCALING_FACTOR:-1.0}"
+    local disable_a11y="${DISABLE_ACCESSIBILITY:-yes}"
+    local disable_auto_bright="${DISABLE_AUTO_BRIGHTNESS:-yes}"
+    
+    log "DEBUG" "Desktop config: color_scheme=$color_scheme, scaling=$scaling"
+    
     local skel_dconf="${SQUASHFS_DIR}/etc/skel/.config/dconf"
+    log "DEBUG" "dconf directory: $skel_dconf"
     mkdir -p "$skel_dconf"
+    log "DEBUG" "Created dconf directory"
     
     if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would configure: dark mode, scaling, accessibility disabled"
+        log "DRY-RUN" "Would configure: $color_scheme mode, ${scaling}x scaling"
         return 0
     fi
     
     # Create dconf user database directory
+    log "DEBUG" "Creating dconf user.d directory"
     mkdir -p "${skel_dconf}/user.d"
     
+    # Determine theme based on color scheme
+    local gtk_theme="Yaru"
+    local icon_theme="Yaru"
+    if [[ "$color_scheme" == "prefer-dark" ]]; then
+        gtk_theme="Yaru-dark"
+        icon_theme="Yaru-dark"
+    fi
+    
     # Create dconf settings file
-    cat > "${skel_dconf}/user.d/00-emcomm-defaults" <<'EOF'
-# Dark mode
+    local dconf_file="${skel_dconf}/user.d/00-emcomm-defaults"
+    log "DEBUG" "Writing dconf settings to: $dconf_file"
+    cat > "$dconf_file" <<EOF
+# Color scheme and theme
 [org/gnome/desktop/interface]
-color-scheme='prefer-dark'
-gtk-theme='Yaru-dark'
-icon-theme='Yaru-dark'
+color-scheme='${color_scheme}'
+gtk-theme='${gtk_theme}'
+icon-theme='${icon_theme}'
+text-scaling-factor=${scaling}
+EOF
+
+    # Add accessibility settings if disabled
+    if [[ "$disable_a11y" == "yes" ]]; then
+        cat >> "$dconf_file" <<'EOF'
 
 # Disable accessibility features
 [org/gnome/desktop/a11y]
@@ -579,131 +627,246 @@ screen-reader-enabled=false
 
 [org/gnome/desktop/a11y/interface]
 high-contrast=false
+EOF
+    fi
+
+    # Add auto-brightness setting if disabled
+    if [[ "$disable_auto_bright" == "yes" ]]; then
+        cat >> "$dconf_file" <<'EOF'
 
 # Disable automatic brightness
 [org/gnome/settings-daemon/plugins/power]
 ambient-enabled=false
-
-# Desktop scaling (1x by default, user can adjust)
-[org/gnome/desktop/interface]
-text-scaling-factor=1.0
 EOF
-    
-    log "SUCCESS" "Desktop preferences configured"
+    fi
+
+    log "DEBUG" "dconf settings file written successfully"
+    log "SUCCESS" "Desktop preferences configured (${color_scheme}, ${scaling}x)"
 }
 
 customize_aprs() {
-    log "INFO" "Configuring APRS applications (direwolf, YAAC)..."
+    log "INFO" "Configuring APRS/Direwolf settings..."
     
     # shellcheck source=/dev/null
     source "$SECRETS_FILE"
+    log "DEBUG" "Sourced secrets file for APRS config"
     
     local callsign="${CALLSIGN:-N0CALL}"
+    local grid="${GRID_SQUARE:-}"
+    local winlink_passwd="${WINLINK_PASSWORD:-}"
+    
+    # APRS-specific settings
     local aprs_ssid="${APRS_SSID:-10}"
     local aprs_passcode="${APRS_PASSCODE:--1}"
-    local aprs_symbol="${APRS_SYMBOL:-r/}"
+    local aprs_symbol="${APRS_SYMBOL:-/r}"
     local aprs_comment="${APRS_COMMENT:-EmComm iGate}"
-    local digipeater_path="${DIGIPEATER_PATH:-WIDE1-1}"
     local enable_beacon="${ENABLE_APRS_BEACON:-no}"
     local beacon_interval="${APRS_BEACON_INTERVAL:-300}"
+    local beacon_via="${APRS_BEACON_VIA:-WIDE1-1}"
+    local beacon_power="${APRS_BEACON_POWER:-10}"
+    local beacon_height="${APRS_BEACON_HEIGHT:-20}"
+    local beacon_gain="${APRS_BEACON_GAIN:-3}"
+    local beacon_dir="${APRS_BEACON_DIR:-}"
     local enable_igate="${ENABLE_APRS_IGATE:-yes}"
     local aprs_server="${APRS_SERVER:-noam.aprs2.net}"
     local direwolf_adevice="${DIREWOLF_ADEVICE:-plughw:1,0}"
     local direwolf_ptt="${DIREWOLF_PTT:-CM108}"
     
-    if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would configure APRS for: ${callsign}-${aprs_ssid}"
+    log "DEBUG" "User config: callsign=$callsign, grid=$grid"
+    log "DEBUG" "APRS config: ssid=$aprs_ssid, igate=$enable_igate, beacon=$enable_beacon"
+    
+    if [[ "$callsign" == "N0CALL" ]]; then
+        log "WARN" "APRS not configured - callsign is N0CALL"
         return 0
     fi
     
-    # Configure direwolf
-    local direwolf_dir="${SQUASHFS_DIR}/etc/skel/.config/direwolf"
-    mkdir -p "$direwolf_dir"
+    if [ $DRY_RUN -eq 1 ]; then
+        log "DRY-RUN" "Would pre-configure user.json for: ${callsign}"
+        log "DRY-RUN" "Would modify ETC direwolf templates with iGate/beacon settings"
+        return 0
+    fi
     
-    cat > "${direwolf_dir}/direwolf.conf" <<EOF
-# Direwolf Configuration - Internet iGate
-# Generated by build-etc-iso.sh
+    # === 1. Pre-populate ETC's user.json ===
+    # ETC uses ~/.config/emcomm-tools/user.json for user settings
+    # This is read by et-user, et-direwolf, et-yaac, et-winlink at runtime
+    local etc_config_dir="${SQUASHFS_DIR}/etc/skel/.config/emcomm-tools"
+    log "DEBUG" "Creating ETC config dir: $etc_config_dir"
+    mkdir -p "$etc_config_dir"
+    
+    local user_json="${etc_config_dir}/user.json"
+    log "DEBUG" "Writing user.json: $user_json"
+    
+    cat > "$user_json" <<EOF
+{
+  "callsign": "${callsign}",
+  "grid": "${grid}",
+  "winlinkPasswd": "${winlink_passwd}"
+}
+EOF
+    chmod 644 "$user_json"
+    log "DEBUG" "user.json written"
+    
+    # === 2. Modify ETC's direwolf template with iGate/beacon settings ===
+    # ETC's et-direwolf substitutes {{ET_CALLSIGN}} and {{ET_AUDIO_DEVICE}} at runtime
+    # We add our iGate/beacon settings to the template, keeping those placeholders
+    
+    local template_dir="${SQUASHFS_DIR}/opt/emcomm-tools/conf/template.d/packet"
+    local aprs_template="${template_dir}/direwolf.aprs-digipeater.conf"
+    
+    if [ ! -d "$template_dir" ]; then
+        log "WARN" "ETC template directory not found: $template_dir"
+        log "WARN" "Skipping direwolf template modification"
+        return 0
+    fi
+    
+    # Backup original template
+    if [ -f "$aprs_template" ]; then
+        cp "$aprs_template" "${aprs_template}.orig"
+        log "DEBUG" "Backed up original template"
+    fi
+    
+    # Extract symbol table and code (e.g., "/r" -> table="/", code="r")
+    local symbol_table="${aprs_symbol:0:1}"
+    local symbol_code="${aprs_symbol:1:1}"
+    
+    # Create modified template with iGate/beacon settings
+    # Keep {{ET_CALLSIGN}} and {{ET_AUDIO_DEVICE}} for ETC's runtime substitution
+    cat > "$aprs_template" <<EOF
+# Direwolf APRS Digipeater/iGate Configuration
+# Template modified by EmComm Tools Customizer
+# ETC substitutes {{ET_CALLSIGN}} and {{ET_AUDIO_DEVICE}} at runtime
 
-ADEVICE ${direwolf_adevice}
-ACHANNELS 1
+# Audio device (substituted by et-direwolf at runtime)
+ADEVICE {{ET_AUDIO_DEVICE}}
+CHANNEL 0
 
-MYCALL ${callsign}-${aprs_ssid}
+# Callsign with SSID (substituted by et-direwolf, we append SSID)
+MYCALL {{ET_CALLSIGN}}-${aprs_ssid}
 
-IGSERVER ${aprs_server}
-IGLOGIN ${callsign}-${aprs_ssid} ${aprs_passcode}
-
-$(if [ "$enable_igate" = "yes" ]; then
-    echo "IGTXVIA 0 ${digipeater_path}"
-    echo "IGFILTER m/500"
-else
-    echo "# iGate DISABLED"
-fi)
-
+# PTT configuration
 PTT ${direwolf_ptt}
 
-$(if [ "$enable_beacon" = "yes" ]; then
-    echo "PBEACON delay=1 every=${beacon_interval} overlay=S symbol=\"${aprs_symbol}\" comment=\"${aprs_comment}\" via=${digipeater_path}"
-else
-    echo "# Beacon DISABLED - enable after GPS connection"
-fi)
+# Modem settings for APRS (1200 baud)
+MODEM 1200
 
-LOGDIR /var/log/direwolf
 EOF
-    
-    chmod 644 "${direwolf_dir}/direwolf.conf"
-    
-    # Configure YAAC
-    local yaac_dir="${SQUASHFS_DIR}/etc/skel/.config/YAAC"
-    mkdir -p "$yaac_dir"
-    
-    cat > "${yaac_dir}/YAAC.properties" <<EOF
-# YAAC Configuration
-# Generated by build-etc-iso.sh
 
-callsign=${callsign}
-ssid=${aprs_ssid}
-aprsIsEnabled=true
-aprsIsServer=${aprs_server}
-aprsIsPort=14580
-aprsIsPasscode=${aprs_passcode}
-digipeaterEnabled=true
-digipeaterAlias=${digipeater_path}
-mapEnabled=true
-onlineMapEnabled=false
-comment=${aprs_comment}
+    # Add iGate configuration if enabled
+    if [[ "$enable_igate" == "yes" ]]; then
+        cat >> "$aprs_template" <<EOF
+# ============================================
+# iGate Configuration (RF to Internet gateway)
+# ============================================
+IGSERVER ${aprs_server}
+IGLOGIN {{ET_CALLSIGN}} ${aprs_passcode}
+
 EOF
-    
-    chmod 644 "${yaac_dir}/YAAC.properties"
-    
-    log "SUCCESS" "APRS configured for ${callsign}-${aprs_ssid}"
+        log "DEBUG" "Added iGate settings to template"
+    fi
+
+    # Add beacon configuration if enabled
+    if [[ "$enable_beacon" == "yes" ]]; then
+        # Build PHG string if we have the values
+        local phg_string=""
+        if [[ -n "$beacon_power" && -n "$beacon_height" && -n "$beacon_gain" ]]; then
+            phg_string="power=${beacon_power} height=${beacon_height} gain=${beacon_gain}"
+            if [[ -n "$beacon_dir" ]]; then
+                phg_string="${phg_string} dir=${beacon_dir}"
+            fi
+        fi
+        
+        cat >> "$aprs_template" <<EOF
+# ============================================
+# Position Beacon Configuration
+# ============================================
+# Use GPS for position (requires gpsd running)
+GPSD
+
+# Smart beaconing: adjusts rate based on speed/heading
+# fast_speed mph, fast_rate sec, slow_speed mph, slow_rate sec, turn_angle, turn_time sec, turn_slope
+SMARTBEACONING 30 60 2 1800 15 15 255
+
+# Fallback fixed beacon if no GPS
+PBEACON delay=1 every=${beacon_interval} symbol="${symbol_table}${symbol_code}" ${phg_string} \\
+    comment="${aprs_comment}" via=${beacon_via}
+
+EOF
+        log "DEBUG" "Added beacon settings to template (PHG: ${phg_string:-none})"
+    fi
+
+    # Add digipeater configuration
+    cat >> "$aprs_template" <<EOF
+# ============================================
+# Digipeater Configuration
+# ============================================
+# Standard APRS digipeating with path tracing
+DIGIPEAT 0 0 ^WIDE[3-7]-[1-7]$|^TEST$ ^WIDE[12]-[12]$ TRACE
+DIGIPEAT 0 0 ^WIDE[12]-[12]$ ^WIDE[12]-[12]$ TRACE
+
+EOF
+
+    chmod 644 "$aprs_template"
+    log "SUCCESS" "Modified ETC direwolf template: direwolf.aprs-digipeater.conf"
+    log "SUCCESS" "APRS configured for ${callsign}-${aprs_ssid} (igate=${enable_igate}, beacon=${enable_beacon})"
 }
 
 customize_user_and_autologin() {
-    log "INFO" "Configuring user and autologin..."
+    log "INFO" "Configuring user account..."
     
     # shellcheck source=/dev/null
     source "$SECRETS_FILE"
+    log "DEBUG" "Sourced secrets file for user config"
     
     local fullname="${USER_FULLNAME:-EmComm User}"
     local username="${USER_USERNAME:-emcomm}"
+    local password="${USER_PASSWORD:-}"
+    local enable_autologin="${ENABLE_AUTOLOGIN:-no}"
+    
+    log "DEBUG" "User config: fullname='$fullname', username='$username'"
+    log "DEBUG" "Autologin: $enable_autologin, password_set: $([ -n "$password" ] && echo 'yes' || echo 'no')"
     
     if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would configure autologin for: $username"
+        if [ "$enable_autologin" = "yes" ]; then
+            log "DRY-RUN" "Would configure autologin for: $username"
+        else
+            log "DRY-RUN" "Would configure password login for: $username"
+        fi
         return 0
     fi
     
-    # Configure LightDM autologin
-    local lightdm_dir="${SQUASHFS_DIR}/etc/lightdm/lightdm.conf.d"
-    mkdir -p "$lightdm_dir"
-    
-    cat > "${lightdm_dir}/50-autologin.conf" <<EOF
+    # Only configure autologin if explicitly enabled
+    if [ "$enable_autologin" = "yes" ]; then
+        local lightdm_dir="${SQUASHFS_DIR}/etc/lightdm/lightdm.conf.d"
+        log "DEBUG" "Creating LightDM config dir: $lightdm_dir"
+        mkdir -p "$lightdm_dir"
+        
+        local autologin_conf="${lightdm_dir}/50-autologin.conf"
+        log "DEBUG" "Writing autologin config: $autologin_conf"
+        cat > "$autologin_conf" <<EOF
 [Seat:*]
 autologin-user=$username
 autologin-user-timeout=0
 user-session=ubuntu
 EOF
+        log "DEBUG" "Autologin config written successfully"
+        log "SUCCESS" "Autologin configured for: $username"
+    else
+        log "INFO" "Autologin disabled - user will be prompted for password"
+        # Remove any existing autologin configuration (if ETC has one)
+        local autologin_conf="${SQUASHFS_DIR}/etc/lightdm/lightdm.conf.d/50-autologin.conf"
+        if [ -f "$autologin_conf" ]; then
+            log "DEBUG" "Removing existing autologin config: $autologin_conf"
+            rm -f "$autologin_conf"
+        fi
+    fi
     
-    log "SUCCESS" "Autologin configured for: $username"
+    # Note: User password must be set post-install or via preseed/autoinstall
+    # We can't easily set it in the squashfs without chroot and passwd command
+    if [ -n "$password" ]; then
+        log "WARN" "USER_PASSWORD is set but password hashing requires chroot - use post-install script"
+    fi
+    
+    log "SUCCESS" "User account configuration complete"
 }
 
 customize_vara_license() {
@@ -711,11 +874,15 @@ customize_vara_license() {
     
     # shellcheck source=/dev/null
     source "$SECRETS_FILE"
+    log "DEBUG" "Sourced secrets file for VARA config"
     
     local vara_fm_callsign="${VARA_FM_CALLSIGN:-}"
     local vara_fm_key="${VARA_FM_LICENSE_KEY:-}"
     local vara_hf_callsign="${VARA_HF_CALLSIGN:-}"
     local vara_hf_key="${VARA_HF_LICENSE_KEY:-}"
+    
+    log "DEBUG" "VARA FM: callsign='$vara_fm_callsign', key_present=$([ -n "$vara_fm_key" ] && echo 'yes' || echo 'no')"
+    log "DEBUG" "VARA HF: callsign='$vara_hf_callsign', key_present=$([ -n "$vara_hf_key" ] && echo 'yes' || echo 'no')"
     
     if [ -z "$vara_fm_key" ] && [ -z "$vara_hf_key" ]; then
         log "INFO" "No VARA license keys configured, skipping"
@@ -729,28 +896,36 @@ customize_vara_license() {
     fi
     
     # Create Wine registry snippet directory
-    local wine_reg_dir="${SQUASHFS_DIR}/etc/skel/.wine/user.reg.d"
+    # NOTE: ETC uses .wine32 (32-bit prefix), not .wine!
+    local wine_reg_dir="${SQUASHFS_DIR}/etc/skel/.wine32/user.reg.d"
+    log "DEBUG" "Creating Wine registry dir: $wine_reg_dir"
     mkdir -p "$wine_reg_dir"
     
     if [ -n "$vara_fm_key" ]; then
-        cat > "${wine_reg_dir}/vara-fm-license.reg" <<EOF
+        local fm_reg="${wine_reg_dir}/vara-fm-license.reg"
+        log "DEBUG" "Writing VARA FM registry: $fm_reg"
+        cat > "$fm_reg" <<EOF
 REGEDIT4
 
 [HKEY_CURRENT_USER\\Software\\VARA FM]
 "Callsign"="${vara_fm_callsign}"
 "License"="${vara_fm_key}"
 EOF
+        log "DEBUG" "VARA FM registry written"
         log "SUCCESS" "VARA FM license configured"
     fi
     
     if [ -n "$vara_hf_key" ]; then
-        cat > "${wine_reg_dir}/vara-hf-license.reg" <<EOF
+        local hf_reg="${wine_reg_dir}/vara-hf-license.reg"
+        log "DEBUG" "Writing VARA HF registry: $hf_reg"
+        cat > "$hf_reg" <<EOF
 REGEDIT4
 
 [HKEY_CURRENT_USER\\Software\\VARA]
 "Callsign"="${vara_hf_callsign}"
 "License"="${vara_hf_key}"
 EOF
+        log "DEBUG" "VARA HF registry written"
         log "SUCCESS" "VARA HF license configured"
     fi
 }
@@ -760,9 +935,11 @@ customize_git_config() {
     
     # shellcheck source=/dev/null
     source "$SECRETS_FILE"
+    log "DEBUG" "Sourced secrets file for Git config"
     
     local git_name="${USER_FULLNAME:-User}"
     local git_email="${USER_EMAIL:-user@localhost}"
+    log "DEBUG" "Git config: name='$git_name', email='$git_email'"
     
     if [[ "$git_name" == "Your Full Name" ]] || [[ "$git_email" == "your.email@example.com" ]]; then
         log "WARN" "Git not configured - template values in secrets.env"
@@ -774,7 +951,9 @@ customize_git_config() {
         return 0
     fi
     
-    cat > "${SQUASHFS_DIR}/etc/skel/.gitconfig" <<EOF
+    local gitconfig="${SQUASHFS_DIR}/etc/skel/.gitconfig"
+    log "DEBUG" "Writing git config: $gitconfig"
+    cat > "$gitconfig" <<EOF
 [user]
     name = $git_name
     email = $git_email
@@ -783,8 +962,233 @@ customize_git_config() {
 [pull]
     rebase = false
 EOF
+    log "DEBUG" "Git config written successfully"
     
     log "SUCCESS" "Git configured for: $git_name"
+}
+
+customize_power() {
+    log "INFO" "Configuring power management..."
+    
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    log "DEBUG" "Sourced secrets file for power config"
+    
+    # Read power settings with defaults
+    local lid_close_ac="${POWER_LID_CLOSE_AC:-suspend}"
+    local lid_close_battery="${POWER_LID_CLOSE_BATTERY:-suspend}"
+    local power_button="${POWER_BUTTON_ACTION:-interactive}"
+    local idle_ac="${POWER_IDLE_AC:-nothing}"
+    local idle_battery="${POWER_IDLE_BATTERY:-suspend}"
+    local idle_timeout="${POWER_IDLE_TIMEOUT:-900}"
+    
+    log "DEBUG" "Power settings: lid_ac=$lid_close_ac, lid_battery=$lid_close_battery, button=$power_button"
+    log "DEBUG" "Idle settings: ac=$idle_ac, battery=$idle_battery, timeout=$idle_timeout"
+    
+    if [ $DRY_RUN -eq 1 ]; then
+        log "DRY-RUN" "Would configure power management via dconf"
+        return 0
+    fi
+    
+    # Power management uses dconf settings under org/gnome/settings-daemon/plugins/power
+    local dconf_dir="${SQUASHFS_DIR}/etc/skel/.config/dconf/user.d"
+    local dconf_file="${dconf_dir}/01-power-settings"
+    
+    # Ensure directory exists
+    mkdir -p "$dconf_dir"
+    log "DEBUG" "Writing power dconf settings: $dconf_file"
+    
+    cat > "$dconf_file" <<EOF
+# Power management settings
+# Generated by emcomm-tools-customizer
+
+[org/gnome/settings-daemon/plugins/power]
+lid-close-ac-action='${lid_close_ac}'
+lid-close-battery-action='${lid_close_battery}'
+power-button-action='${power_button}'
+sleep-inactive-ac-type='${idle_ac}'
+sleep-inactive-battery-type='${idle_battery}'
+sleep-inactive-ac-timeout=${idle_timeout}
+sleep-inactive-battery-timeout=${idle_timeout}
+
+EOF
+    
+    log "SUCCESS" "Power management configured"
+}
+
+customize_pat() {
+    log "INFO" "Configuring Pat Winlink aliases..."
+    
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    log "DEBUG" "Sourced secrets file for Pat config"
+    
+    local emcomm_alias="${PAT_EMCOMM_ALIAS:-no}"
+    local emcomm_gateway="${PAT_EMCOMM_GATEWAY:-}"
+    
+    log "DEBUG" "Pat settings: emcomm_alias=$emcomm_alias, gateway=$emcomm_gateway"
+    
+    if [[ "${emcomm_alias,,}" != "yes" ]]; then
+        log "INFO" "Pat emcomm alias not enabled, skipping"
+        return 0
+    fi
+    
+    if [ $DRY_RUN -eq 1 ]; then
+        log "DRY-RUN" "Would configure Pat emcomm alias"
+        [ -n "$emcomm_gateway" ] && log "DRY-RUN" "  Gateway: $emcomm_gateway"
+        return 0
+    fi
+    
+    # Pat stores its config in ~/.config/pat/config.json (standard location)
+    # ETC creates this when Pat runs for the first time
+    # We create a helper script to add the emcomm alias to the standard config
+    local pat_script_dir="${SQUASHFS_DIR}/etc/skel/.config/pat"
+    local pat_alias_script="${pat_script_dir}/add-emcomm-alias.sh"
+    
+    mkdir -p "$pat_script_dir"
+    log "DEBUG" "Creating Pat alias setup script: $pat_alias_script"
+    
+    # Create a setup script that adds the alias to standard Pat config
+    cat > "$pat_alias_script" <<'SCRIPT_EOF'
+#!/bin/bash
+# Add emcomm alias to standard Pat Winlink config
+# This modifies ~/.config/pat/config.json (Pat's normal config file)
+# Run this after Pat has been configured with your callsign
+
+PAT_CONFIG="$HOME/.config/pat/config.json"
+
+if [ ! -f "$PAT_CONFIG" ]; then
+    echo "Pat config not found. Run Pat first to create initial config."
+    exit 1
+fi
+
+# Check if alias already exists
+if grep -q '"emcomm"' "$PAT_CONFIG" 2>/dev/null; then
+    echo "emcomm alias already exists in Pat config."
+    exit 0
+fi
+
+SCRIPT_EOF
+
+    # Add gateway-specific or generic alias
+    if [ -n "$emcomm_gateway" ]; then
+        cat >> "$pat_alias_script" <<EOF
+# Add emcomm alias with preconfigured gateway
+# This uses jq to properly modify the JSON config
+if command -v jq &> /dev/null; then
+    jq '.connect_aliases.emcomm = "${emcomm_gateway}"' "\$PAT_CONFIG" > "\$PAT_CONFIG.tmp" && \\
+        mv "\$PAT_CONFIG.tmp" "\$PAT_CONFIG"
+    echo "Added emcomm alias -> ${emcomm_gateway}"
+else
+    echo "jq not found. Please install: sudo apt install jq"
+    echo "Then add manually: connect_aliases.emcomm = \"${emcomm_gateway}\""
+fi
+EOF
+    else
+        cat >> "$pat_alias_script" <<'EOF'
+# Add placeholder emcomm alias - user will need to set gateway
+echo ""
+echo "To add an emcomm alias, edit ~/.config/pat/config.json"
+echo "Add to connect_aliases section:"
+echo '  "emcomm": "YOUR-GATEWAY-CALLSIGN"'
+echo ""
+echo "Example gateways: W7ACS-10, K7YYY-10"
+EOF
+    fi
+    
+    chmod +x "$pat_alias_script"
+    log "DEBUG" "Pat alias script created"
+    
+    # Also create a desktop reminder or README
+    local pat_readme="${pat_script_dir}/README-emcomm-alias.txt"
+    cat > "$pat_readme" <<EOF
+Pat Winlink EmComm Alias Setup
+==============================
+
+To quickly connect to Winlink, run:
+  pat connect emcomm
+
+First-time setup:
+1. Run Pat once to create initial config: pat configure
+2. Run the alias script: ~/.config/pat/add-emcomm-alias.sh
+3. If no gateway was preconfigured, edit ~/.config/pat/config.json
+   and add your preferred gateway to connect_aliases
+
+Example connect_aliases in config.json:
+{
+  "connect_aliases": {
+    "emcomm": "W7ACS-10",
+    "hf": "W7ACS-5"
+  }
+}
+EOF
+
+    log "SUCCESS" "Pat emcomm alias configured"
+    [ -n "$emcomm_gateway" ] && log "INFO" "  Default gateway: $emcomm_gateway"
+}
+
+embed_cache_files() {
+    # Embed cache files into the ISO so they're available for future builds
+    # This is for users who build on the same machine they install to
+    
+    if [ $MINIMAL_BUILD -eq 1 ]; then
+        log "INFO" "Minimal build - skipping cache embedding"
+        return 0
+    fi
+    
+    log "INFO" "Embedding cache files for future builds..."
+    
+    if [ $DRY_RUN -eq 1 ]; then
+        log "DRY-RUN" "Would embed cache files from: $CACHE_DIR"
+        return 0
+    fi
+    
+    # Create cache directory in /opt for the installed system
+    local target_cache="${SQUASHFS_DIR}/opt/emcomm-customizer-cache"
+    log "DEBUG" "Creating target cache dir: $target_cache"
+    mkdir -p "$target_cache"
+    
+    # Copy Ubuntu ISO if present
+    local ubuntu_iso="${CACHE_DIR}/${UBUNTU_ISO_FILE}"
+    if [ -f "$ubuntu_iso" ]; then
+        log "DEBUG" "Copying Ubuntu ISO to embedded cache..."
+        cp -v "$ubuntu_iso" "$target_cache/"
+        log "SUCCESS" "Ubuntu ISO embedded (~4GB)"
+    else
+        log "DEBUG" "No Ubuntu ISO found in cache"
+    fi
+    
+    # Copy ETC tarball if present (find most recent)
+    local etc_tarball
+    etc_tarball=$(find "$CACHE_DIR" -maxdepth 1 -name "emcomm-tools-os-community*.tar.gz" -type f | sort -r | head -1)
+    if [ -n "$etc_tarball" ] && [ -f "$etc_tarball" ]; then
+        log "DEBUG" "Copying ETC tarball to embedded cache..."
+        cp -v "$etc_tarball" "$target_cache/"
+        log "SUCCESS" "ETC tarball embedded"
+    else
+        log "DEBUG" "No ETC tarball found in cache"
+    fi
+    
+    # Create a README explaining the cache
+    cat > "$target_cache/README.txt" <<EOF
+EmComm Tools Customizer - Embedded Cache
+=========================================
+
+These files were embedded during ISO build so you can rebuild without
+re-downloading large files.
+
+To use this cache for your next build:
+  cp -r /opt/emcomm-customizer-cache/* ~/emcomm-tools-customizer/cache/
+
+Or run build-etc-iso.sh from /opt/emcomm-customizer-cache directly.
+
+Files:
+$(ls -lh "$target_cache" 2>/dev/null | grep -v README)
+
+Build date: $(date +'%Y-%m-%d %H:%M:%S')
+EOF
+    
+    log "SUCCESS" "Cache files embedded (use -m for minimal build without cache)"
 }
 
 create_build_manifest() {
@@ -792,14 +1196,17 @@ create_build_manifest() {
     
     # shellcheck source=/dev/null
     source "$SECRETS_FILE"
+    log "DEBUG" "Sourced secrets file for manifest"
     
     local manifest_file="${SQUASHFS_DIR}/etc/emcomm-customizations-manifest.txt"
+    log "DEBUG" "Manifest file: $manifest_file"
     
     if [ $DRY_RUN -eq 1 ]; then
         log "DRY-RUN" "Would create manifest at: $manifest_file"
         return 0
     fi
     
+    log "DEBUG" "Writing build manifest..."
     cat > "$manifest_file" <<EOF
 EmComm Tools Community - KD7DGF Customizations
 Build Date: $(date +'%Y-%m-%d %H:%M:%S')
@@ -829,6 +1236,7 @@ Build Information:
 - Source: ${RELEASE_TAG}
 - No Cubic GUI used - fully automated
 EOF
+    log "DEBUG" "Manifest written successfully"
     
     log "SUCCESS" "Build manifest created"
 }
@@ -846,6 +1254,9 @@ rebuild_squashfs() {
     fi
     
     local new_squashfs="${WORK_DIR}/filesystem.squashfs.new"
+    log "DEBUG" "Creating new squashfs: $new_squashfs"
+    log "DEBUG" "Source directory: $SQUASHFS_DIR"
+    log "DEBUG" "Compression: xz, block size: 1M"
     
     # Create new squashfs with compression
     mksquashfs "$SQUASHFS_DIR" "$new_squashfs" \
@@ -853,13 +1264,16 @@ rebuild_squashfs() {
         -b 1M \
         -Xbcj x86 \
         -noappend
+    log "DEBUG" "mksquashfs completed"
     
     # Replace original squashfs
+    log "DEBUG" "Moving new squashfs to: $SQUASHFS_FILE"
     mv "$new_squashfs" "$SQUASHFS_FILE"
     
     # Update filesystem.size
     local fs_size
     fs_size=$(du -s "$SQUASHFS_DIR" | cut -f1)
+    log "DEBUG" "Filesystem size: $fs_size"
     echo "$fs_size" > "$(dirname "$SQUASHFS_FILE")/filesystem.size"
     
     log "SUCCESS" "Squashfs rebuilt"
@@ -868,6 +1282,7 @@ rebuild_squashfs() {
 rebuild_iso() {
     log "INFO" "Rebuilding ISO image..."
     
+    log "DEBUG" "Output directory: $OUTPUT_DIR"
     mkdir -p "$OUTPUT_DIR"
     
     if [ $DRY_RUN -eq 1 ]; then
@@ -877,10 +1292,14 @@ rebuild_iso() {
     
     # Calculate MD5 sums
     log "INFO" "Calculating checksums..."
+    log "DEBUG" "Running md5sum on all files in ISO"
     (cd "$ISO_EXTRACT_DIR" && find . -type f -print0 | xargs -0 md5sum > md5sum.txt) 2>/dev/null || true
+    log "DEBUG" "Checksums calculated"
     
     # Rebuild ISO with xorriso (Ventoy handles the booting)
     log "INFO" "Creating ISO image..."
+    log "DEBUG" "Output ISO: $OUTPUT_ISO"
+    log "DEBUG" "ISO label: ETC_${RELEASE_NUMBER^^}_CUSTOM"
     xorriso -as mkisofs \
         -r -V "ETC_${RELEASE_NUMBER^^}_CUSTOM" \
         -J -joliet-long \
@@ -985,15 +1404,53 @@ main() {
     # Apply customizations
     log "INFO" ""
     log "INFO" "=== Applying Customizations ==="
+    log "DEBUG" "Starting customization phase..."
     
+    log "DEBUG" "Step 1/11: customize_hostname"
     customize_hostname
+    log "DEBUG" "Step 1/11: customize_hostname COMPLETED"
+    
+    log "DEBUG" "Step 2/11: customize_wifi"
     customize_wifi
+    log "DEBUG" "Step 2/11: customize_wifi COMPLETED"
+    
+    log "DEBUG" "Step 3/11: customize_desktop"
     customize_desktop
+    log "DEBUG" "Step 3/11: customize_desktop COMPLETED"
+    
+    log "DEBUG" "Step 4/11: customize_aprs"
     customize_aprs
+    log "DEBUG" "Step 4/11: customize_aprs COMPLETED"
+    
+    log "DEBUG" "Step 5/11: customize_user_and_autologin"
     customize_user_and_autologin
+    log "DEBUG" "Step 5/11: customize_user_and_autologin COMPLETED"
+    
+    log "DEBUG" "Step 6/11: customize_vara_license"
     customize_vara_license
+    log "DEBUG" "Step 6/11: customize_vara_license COMPLETED"
+    
+    log "DEBUG" "Step 7/11: customize_pat"
+    customize_pat
+    log "DEBUG" "Step 7/11: customize_pat COMPLETED"
+    
+    log "DEBUG" "Step 8/11: customize_git_config"
     customize_git_config
+    log "DEBUG" "Step 8/11: customize_git_config COMPLETED"
+    
+    log "DEBUG" "Step 9/11: customize_power"
+    customize_power
+    log "DEBUG" "Step 9/11: customize_power COMPLETED"
+    
+    log "DEBUG" "Step 10/11: embed_cache_files"
+    embed_cache_files
+    log "DEBUG" "Step 10/11: embed_cache_files COMPLETED"
+    
+    log "DEBUG" "Step 11/11: create_build_manifest"
     create_build_manifest
+    log "DEBUG" "Step 11/11: create_build_manifest COMPLETED"
+    
+    log "DEBUG" "All customizations completed successfully"
     
     # Rebuild ISO
     log "INFO" ""
@@ -1032,7 +1489,7 @@ main() {
 # Parse Arguments
 # ============================================================================
 
-while getopts "r:t:ldvDh" opt; do
+while getopts "r:t:ldmvDh" opt; do
     case $opt in
         r)
             RELEASE_MODE="$OPTARG"
@@ -1052,6 +1509,10 @@ while getopts "r:t:ldvDh" opt; do
             ;;
         d)
             DRY_RUN=1
+            ;;
+        m)
+            MINIMAL_BUILD=1
+            log "INFO" "Minimal build - cache files will not be embedded in ISO"
             ;;
         v)
             set -x
