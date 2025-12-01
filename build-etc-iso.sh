@@ -49,7 +49,11 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
+
+# Debug mode (set to 1 to see DEBUG messages on console)
+DEBUG_MODE=0
 
 # ============================================================================
 # Logging
@@ -65,15 +69,20 @@ log() {
     local timestamp
     timestamp=$(date +'%Y-%m-%d %H:%M:%S')
     
-    # Log to file
+    # Always log to file (including DEBUG)
     echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
     
-    # Log to console with color
+    # Log to console with color (DEBUG only shown if DEBUG_MODE=1)
     case "$level" in
         ERROR)   echo -e "${RED}[$level]${NC} $message" ;;
         WARN)    echo -e "${YELLOW}[$level]${NC} $message" ;;
         SUCCESS) echo -e "${GREEN}[$level]${NC} $message" ;;
         INFO)    echo -e "${BLUE}[$level]${NC} $message" ;;
+        DEBUG)   
+            if [ $DEBUG_MODE -eq 1 ]; then
+                echo -e "${CYAN}[$level]${NC} $message"
+            fi
+            ;;
         *)       echo "[$level] $message" ;;
     esac
 }
@@ -100,6 +109,7 @@ RELEASE OPTIONS:
 BUILD OPTIONS:
     -d        Dry-run mode (show what would be done without making changes)
     -v        Verbose mode (enable bash -x debugging)
+    -D        Debug mode (show DEBUG log messages on console)
     -h        Show this help message
 
 DIRECTORY STRUCTURE:
@@ -107,7 +117,7 @@ DIRECTORY STRUCTURE:
               - Drop your Ubuntu ISO here to skip download
               - ETC tarballs are cached here too
     output/   Generated custom ISOs
-    logs/     Build logs
+    logs/     Build logs (DEBUG messages always written here)
 
 PREREQUISITES:
     sudo apt install xorriso squashfs-tools wget curl jq
@@ -124,6 +134,9 @@ EXAMPLES:
 
     # Build specific version
     sudo ./build-etc-iso.sh -r tag -t emcomm-tools-os-community-20251113-r5-build17
+
+    # Build with debug output for troubleshooting
+    sudo ./build-etc-iso.sh -r stable -D
 
 EOF
 }
@@ -444,13 +457,18 @@ customize_wifi() {
     source "$SECRETS_FILE"
     
     local nm_dir="${SQUASHFS_DIR}/etc/NetworkManager/system-connections"
+    log "DEBUG" "NetworkManager connections dir: $nm_dir"
     mkdir -p "$nm_dir"
     
     # Find all WIFI_SSID_* variables
     local wifi_count=0
+    log "DEBUG" "Scanning secrets.env for WIFI_SSID_* variables..."
+    
     while IFS= read -r line; do
         if [[ "$line" =~ ^WIFI_SSID_([A-Z0-9_]+)= ]]; then
             local identifier="${BASH_REMATCH[1]}"
+            log "DEBUG" "Found WiFi identifier: $identifier"
+            
             local ssid_var="WIFI_SSID_${identifier}"
             local password_var="WIFI_PASSWORD_${identifier}"
             local autoconnect_var="WIFI_AUTOCONNECT_${identifier}"
@@ -459,8 +477,11 @@ customize_wifi() {
             local password="${!password_var:-}"
             local autoconnect="${!autoconnect_var:-yes}"
             
+            log "DEBUG" "Processing: ssid_var=$ssid_var, ssid='$ssid'"
+            
             # Skip empty/template values
             if [[ -z "$ssid" ]] || [[ "$ssid" == "YOUR_"* ]]; then
+                log "DEBUG" "Skipping empty or template SSID: '$ssid'"
                 continue
             fi
             if [[ -z "$password" ]]; then
@@ -470,7 +491,7 @@ customize_wifi() {
             
             if [ $DRY_RUN -eq 1 ]; then
                 log "DRY-RUN" "Would configure WiFi: $ssid"
-                ((wifi_count++))
+                wifi_count=$((wifi_count + 1))
                 continue
             fi
             
@@ -480,9 +501,13 @@ customize_wifi() {
             # Generate UUID
             local uuid
             uuid=$(cat /proc/sys/kernel/random/uuid)
+            log "DEBUG" "Generated UUID for $ssid: $uuid"
+            
+            local conn_file="${nm_dir}/${ssid}.nmconnection"
+            log "DEBUG" "Creating connection file: $conn_file"
             
             # Create connection file
-            cat > "${nm_dir}/${ssid}.nmconnection" <<EOF
+            cat > "$conn_file" <<EOF
 [connection]
 id=$ssid
 uuid=$uuid
@@ -505,11 +530,15 @@ addr-gen-mode=default
 method=auto
 EOF
             
-            chmod 600 "${nm_dir}/${ssid}.nmconnection"
+            chmod 600 "$conn_file"
+            log "DEBUG" "Set permissions 600 on $conn_file"
             log "SUCCESS" "WiFi configured: $ssid"
-            ((wifi_count++))
+            wifi_count=$((wifi_count + 1))
+            log "DEBUG" "wifi_count is now: $wifi_count"
         fi
     done < "$SECRETS_FILE"
+    
+    log "DEBUG" "Finished scanning secrets.env, wifi_count=$wifi_count"
     
     if [ $wifi_count -eq 0 ]; then
         log "WARN" "No WiFi networks configured in secrets.env"
@@ -1003,7 +1032,7 @@ main() {
 # Parse Arguments
 # ============================================================================
 
-while getopts "r:t:ldvh" opt; do
+while getopts "r:t:ldvDh" opt; do
     case $opt in
         r)
             RELEASE_MODE="$OPTARG"
@@ -1026,6 +1055,10 @@ while getopts "r:t:ldvh" opt; do
             ;;
         v)
             set -x
+            ;;
+        D)
+            DEBUG_MODE=1
+            log "INFO" "Debug mode enabled - showing DEBUG messages"
             ;;
         h)
             usage
