@@ -1,12 +1,31 @@
 #!/bin/bash
 #
 # Script Name: restore-backups-from-skel.sh
-# Description: Restore backup files from /etc/skel to user's home directory after deployment
-# Usage: ./restore-backups-from-skel.sh (run once after first boot)
+# Description: Legacy script - backups are now restored at build time
+# Usage: Not typically needed - kept for backwards compatibility
 # Author: KD7DGF
 # Date: 2025-11-28
-# Cubic Stage: No (runs post-installation)
-# Post-Install: Yes
+# Build-Time: N/A (backups extracted directly at build time via ET_USER_BACKUP)
+# Post-Install: Optional (only if you want to copy backup tarballs for future reference)
+#
+# === HOW BACKUP RESTORATION NOW WORKS ===
+#
+# 1. RECOMMENDED: Build-Time Restoration
+#    - Run 'et-user-backup' on your existing ETC system
+#    - Copy tarball to ./cache/ directory
+#    - Set ET_USER_BACKUP in secrets.env
+#    - Build ISO - backup is extracted directly into /etc/skel
+#    - Settings are pre-configured when user account is created
+#
+# 2. OPTIONAL: Post-Install with et-user-restore
+#    - If backup tarball is in ~/add-ons/backups/, you can run:
+#      et-user-restore
+#    - This is ETC's native restore tool with a dialog menu
+#
+# 3. LEGACY: This script
+#    - Kept for backwards compatibility
+#    - Only copies backup tarballs from /etc/skel to home directory
+#    - Does NOT extract them (use et-user-restore for that)
 #
 
 set -euo pipefail
@@ -22,62 +41,32 @@ log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] [$level] $message" | tee -a "$LOG_FILE"
 }
 
-log "INFO" "=== Starting Backup Restoration from /etc/skel ==="
+log "INFO" "=== Checking for Backup Tarballs in /etc/skel ==="
 
-# Detect backup source directory in /etc/skel
+# Look for backup tarballs in /etc/skel
 SKEL_BACKUP_DIR="/etc/skel/.etc-customizer-backups"
 
 if [ ! -d "$SKEL_BACKUP_DIR" ]; then
-    log "INFO" "No backups found in /etc/skel/.etc-customizer-backups/ (normal for new deployments)"
-    log "INFO" "Backups will be created on next ISO build"
+    log "INFO" "No backup tarballs in /etc/skel/.etc-customizer-backups/"
+    log "INFO" "This is normal - backups are now extracted at build time"
+    log "INFO" "If you have a backup tarball, use: et-user-restore"
     exit 0
 fi
 
-# Create target backup directory
-BACKUP_DIR="$HOME/etc-customizer-backups"
+# Create target directory for backup tarballs
+BACKUP_DIR="$HOME/add-ons/backups"
 mkdir -p "$BACKUP_DIR"
-log "INFO" "Target backup directory: $BACKUP_DIR"
+log "INFO" "Target directory for backup tarballs: $BACKUP_DIR"
 
-# Restore wine.tar.gz if present
-if [ -f "$SKEL_BACKUP_DIR/wine.tar.gz" ]; then
-    log "INFO" "Restoring wine.tar.gz from /etc/skel..."
-    if cp -v "$SKEL_BACKUP_DIR/wine.tar.gz" "$BACKUP_DIR/wine.tar.gz" 2>&1 | tee -a "$LOG_FILE"; then
-        log "SUCCESS" "Restored wine.tar.gz (VARA FM baseline)"
-    else
-        log "WARN" "Failed to copy wine.tar.gz (non-fatal)"
-    fi
-else
-    log "INFO" "wine.tar.gz not found in /etc/skel (no VARA FM backup configured)"
-fi
+# Copy any backup tarballs found (for reference/future use)
+shopt -s nullglob
+for tarball in "$SKEL_BACKUP_DIR"/*.tar.gz; do
+    filename=$(basename "$tarball")
+    log "INFO" "Copying backup tarball: $filename"
+    cp -v "$tarball" "$BACKUP_DIR/$filename" 2>&1 | tee -a "$LOG_FILE"
+done
+shopt -u nullglob
 
-# Restore et-user-current.tar.gz if present
-if [ -f "$SKEL_BACKUP_DIR/et-user-current.tar.gz" ]; then
-    log "INFO" "Restoring et-user-current.tar.gz from /etc/skel..."
-    if cp -v "$SKEL_BACKUP_DIR/et-user-current.tar.gz" "$BACKUP_DIR/et-user-current.tar.gz" 2>&1 | tee -a "$LOG_FILE"; then
-        log "SUCCESS" "Restored et-user-current.tar.gz (current user settings)"
-    else
-        log "WARN" "Failed to copy et-user-current.tar.gz (non-fatal)"
-    fi
-else
-    log "INFO" "et-user-current.tar.gz not found in /etc/skel"
-fi
-
-# Restore et-user.tar.gz if present
-if [ -f "$SKEL_BACKUP_DIR/et-user.tar.gz" ]; then
-    log "INFO" "Restoring et-user.tar.gz from /etc/skel..."
-    if cp -v "$SKEL_BACKUP_DIR/et-user.tar.gz" "$BACKUP_DIR/et-user.tar.gz" 2>&1 | tee -a "$LOG_FILE"; then
-        log "SUCCESS" "Restored et-user.tar.gz (baseline settings)"
-    else
-        log "WARN" "Failed to copy et-user.tar.gz (non-fatal)"
-    fi
-else
-    log "INFO" "et-user.tar.gz not found in /etc/skel"
-fi
-
-# Verify what was restored
-log "INFO" "Backup directory contents after restoration:"
-ls -lh "$BACKUP_DIR" 2>&1 | tee -a "$LOG_FILE"
-
-log "SUCCESS" "=== Backup Restoration Complete ==="
-log "INFO" "Backups available at: $BACKUP_DIR"
-log "INFO" "These will be used for next ISO build"
+log "INFO" "Backup tarballs copied to: $BACKUP_DIR"
+log "INFO" "To restore, run: et-user-restore"
+log "SUCCESS" "Done"

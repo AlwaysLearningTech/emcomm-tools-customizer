@@ -54,6 +54,8 @@ Automated customization of EmComm Tools Community (ETC) ISO images.
 - APRS configuration (iGate, beaconing) - modifies ETC's direwolf templates
 - Git configuration
 - User account with password (NO autologin by default)
+- **Settings preservation** from existing ETC (via `et-user-backup` tarball)
+- **Wine/VARA preservation** from existing ETC (via Wine backup tarball)
 
 ### Future Enhancements (TODO)
 
@@ -67,19 +69,21 @@ Automated customization of EmComm Tools Community (ETC) ISO images.
 emcomm-tools-customizer/
 ├── README.md                    # Main documentation
 ├── QUICK_START.md               # Quick reference
-├── TTPCustomization.md          # Original Cubic guide (legacy reference)
-├── build-etc-iso.sh             # Main build script (xorriso/squashfs, no Cubic)
+├── TTPCustomization.md          # AI/Copilot learning guide (not build-specific)
+├── build-etc-iso.sh             # Main build script (xorriso/squashfs, fully automated)
 ├── secrets.env.template         # Config template
 ├── secrets.env                  # User config (gitignored)
 ├── cache/                       # Downloaded files (persistent across builds)
 │   ├── ubuntu-22.10-desktop-amd64.iso  # Ubuntu base ISO (drop here to skip!)
-│   └── emcomm-tools-os-*.tar.gz        # ETC installer tarballs
+│   ├── emcomm-tools-os-*.tar.gz        # ETC installer tarballs
+│   ├── etc-user-backup-*.tar.gz        # User settings backup (optional)
+│   └── etc-wine-backup-*.tar.gz        # Wine/VARA backup (optional)
 ├── output/                      # Generated custom ISOs
 ├── logs/                        # Build logs
 ├── post-install/                # Post-installation scripts (for runtime detection)
 │   ├── README.md
-│   ├── download-resources.sh
-│   └── restore-backups-from-skel.sh
+│   ├── download-resources.sh           # Downloads ham radio documentation sites
+│   └── create-ham-wikipedia-zim.sh     # Creates custom Wikipedia .zim file
 └── .github/
     └── copilot-instructions.md  # This file
 ```

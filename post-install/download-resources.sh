@@ -3,11 +3,11 @@
 # Script Name: download-resources.sh
 # Description: Downloads offline documentation and resources POST-INSTALLATION
 #              Uses ETC's et-mirror.sh command which is only available after ETC install
-# Usage: Run AFTER installing ETC on the target system (NOT in Cubic)
+# Usage: Run AFTER installing ETC on the target system (post-install, not during ISO build)
 # Author: KD7DGF
 # Date: 2025-10-15
-# Cubic Stage: No
-# Post-Install: Yes (requires et-mirror.sh from ETC)
+# Build-Time: No (requires et-mirror.sh from installed ETC)
+# Post-Install: Yes
 #
 
 set -euo pipefail

@@ -467,6 +467,10 @@ install_etc_in_chroot() {
         return 0
     fi
     
+    # Source secrets for map configuration
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    
     # Extract ETC tarball to a temp location in the chroot
     local etc_install_dir="${SQUASHFS_DIR}/tmp/etc-installer"
     log "DEBUG" "Extracting ETC installer to: $etc_install_dir"
@@ -487,23 +491,193 @@ install_etc_in_chroot() {
         sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
     "
     
-    # Run the ETC installer inside chroot
-    # Note: The installer uses dialog for interactive menus (OSM maps, Wikipedia, etc.)
-    # We redirect stdin from /dev/null to make dialog exit immediately (simulating ESC)
-    # This causes the interactive scripts to skip their downloads
-    log "INFO" "Running ETC installer (this takes a while)..."
-    log "INFO" "Note: Interactive map/Wikipedia downloads will be skipped (run post-install if needed)"
+    # Patch known download scripts to use secrets.env values when configured.
+    # If a variable is NOT set, the original script runs unchanged (dialog passes through).
+    # This ensures future ETC versions with new dialogs still work interactively.
     
-    # Set DEBIAN_FRONTEND to avoid interactive prompts
-    # Redirect stdin from /dev/null to skip dialog prompts
-    chroot "${SQUASHFS_DIR}" /bin/bash -c "
-        export DEBIAN_FRONTEND=noninteractive
-        export NEEDRESTART_MODE=a
-        cd /tmp/etc-installer/scripts
-        ./install.sh
-    " </dev/null 2>&1 | while IFS= read -r line; do
-        log "ETC" "$line"
-    done
+    log "INFO" "Patching ETC download scripts (configured values only)..."
+    
+    # Patch download-osm-maps.sh ONLY if OSM_MAP_STATE is configured
+    # If not set, leave original script intact (dialog will pass through to terminal)
+    if [[ -n "${OSM_MAP_STATE:-}" ]]; then
+        log "INFO" "OSM_MAP_STATE=${OSM_MAP_STATE} - will download state map automatically"
+        cat > "${etc_install_dir}/scripts/download-osm-maps.sh" <<OSMSCRIPT
+#!/bin/bash
+# Patched by EmComm Tools Customizer - uses OSM_MAP_STATE from secrets.env
+set -e
+
+PBF_MAP_DIR=/etc/skel/my-maps
+[ ! -e \${PBF_MAP_DIR} ] && mkdir -v \${PBF_MAP_DIR}
+
+STATE_NAME="${OSM_MAP_STATE}"
+download_file="\${STATE_NAME}-latest.osm.pbf"
+download_url="http://download.geofabrik.de/north-america/us/\${download_file}"
+
+if [ -e "\${PBF_MAP_DIR}/\${download_file}" ]; then
+    et-log "\${download_file} already exists. Skipping download."
+else
+    et-log "Downloading \${download_url}..."
+    curl -L -f -O "\${download_url}"
+    
+    if [ -e "\${download_file}" ]; then
+        navit_osm_bin_file="\${STATE_NAME}-latest.osm.bin"
+        navit_osm_bin_file_path="/etc/skel/.navit/maps/\${navit_osm_bin_file}"
+        et-log "Generating OSM map for Navit: \${navit_osm_bin_file_path}"
+        maptool --protobuf -i "\${download_file}" "\${navit_osm_bin_file_path}"
+        
+        et-log "Moving OSM .pbf to \${PBF_MAP_DIR}"
+        mv -v "\${download_file}" "\${PBF_MAP_DIR}"
+    fi
+fi
+OSMSCRIPT
+        chmod +x "${etc_install_dir}/scripts/download-osm-maps.sh"
+    else
+        log "INFO" "OSM_MAP_STATE not set - original dialog will be shown"
+    fi
+    
+    # Patch download-et-maps.sh ONLY if ET_MAP_REGION is configured
+    # If not set, leave original script intact (dialog will pass through to terminal)
+    if [[ -n "${ET_MAP_REGION:-}" ]]; then
+        log "INFO" "ET_MAP_REGION=${ET_MAP_REGION} - will download pre-rendered tiles automatically"
+        # Validate region before patching
+        case "${ET_MAP_REGION}" in
+            us|ca|world)
+                local et_map_file
+                case "${ET_MAP_REGION}" in
+                    us) et_map_file="osm-us-zoom0to11-20251120.mbtiles" ;;
+                    ca) et_map_file="osm-ca-zoom0to10-20251120.mbtiles" ;;
+                    world) et_map_file="osm-world-zoom0to7-20251121.mbtiles" ;;
+                esac
+                cat > "${etc_install_dir}/scripts/download-et-maps.sh" <<ETMAPSCRIPT
+#!/bin/bash
+# Patched by EmComm Tools Customizer - uses ET_MAP_REGION from secrets.env
+set -e
+
+BASE_URL="https://github.com/thetechprepper/emcomm-tools-os-community/releases/download"
+RELEASE="emcomm-tools-os-community-20251128-r5-final-5.0.0"
+TILESET_DIR="/etc/skel/.local/share/emcomm-tools/mbtileserver/tilesets"
+
+[ ! -e "\${TILESET_DIR}" ] && mkdir -vp "\${TILESET_DIR}"
+
+DOWNLOAD_FILE="${et_map_file}"
+DOWNLOAD_URL="\${BASE_URL}/\${RELEASE}/\${DOWNLOAD_FILE}"
+
+if [[ -e "\${TILESET_DIR}/\${DOWNLOAD_FILE}" ]]; then
+    et-log "\${DOWNLOAD_FILE} already exists. Skipping download."
+else
+    et-log "Downloading \${DOWNLOAD_URL}..."
+    curl -L -f -o "\${DOWNLOAD_FILE}" "\${DOWNLOAD_URL}"
+    
+    et-log "Moving \${DOWNLOAD_FILE} to \${TILESET_DIR}"
+    mv -v "\${DOWNLOAD_FILE}" "\${TILESET_DIR}"
+fi
+ETMAPSCRIPT
+                chmod +x "${etc_install_dir}/scripts/download-et-maps.sh"
+                ;;
+            *)
+                log "WARN" "Invalid ET_MAP_REGION='${ET_MAP_REGION}' - must be us, ca, or world. Dialog will be shown."
+                ;;
+        esac
+    else
+        log "INFO" "ET_MAP_REGION not set - original dialog will be shown"
+    fi
+    
+    # Patch download-wikipedia.sh ONLY if WIKIPEDIA_SECTIONS is configured
+    # Note: This script only runs if ET_EXPERT is set during install
+    if [[ -n "${WIKIPEDIA_SECTIONS:-}" ]]; then
+        log "INFO" "WIKIPEDIA_SECTIONS=${WIKIPEDIA_SECTIONS} - will download Wikipedia sections automatically"
+        # Convert comma-separated list to space-separated for the script
+        local wiki_sections_escaped="${WIKIPEDIA_SECTIONS//,/ }"
+        cat > "${etc_install_dir}/scripts/download-wikipedia.sh" <<WIKIPEDIASCRIPT
+#!/bin/bash
+# Patched by EmComm Tools Customizer - uses WIKIPEDIA_SECTIONS from secrets.env
+set -e
+
+URL="http://download.kiwix.org/zim/wikipedia"
+ZIM_DIR="/etc/skel/wikipedia"
+HTML="/tmp/kiwix.html"
+
+[ ! -e "\${ZIM_DIR}" ] && mkdir -v "\${ZIM_DIR}"
+
+# Download the index page to find exact filenames
+et-log "Downloading Wikipedia file index..."
+curl -s -L -f -o "\${HTML}" "\${URL}"
+if [ \$? -ne 0 ]; then
+    et-log "Can't download list of files from \${URL}. Exiting..."
+    exit 1
+fi
+
+# Download each configured section
+for section in ${wiki_sections_escaped}; do
+    et-log "Looking for Wikipedia section: \${section}"
+    
+    # Find the latest nopic file matching this section
+    zim_file=\$(grep -o 'href="wikipedia_en_[^"]*'"\${section}"'[^"]*_nopic[^"]*\\.zim"' "\${HTML}" | \\
+               sed 's/href="//; s/"\$//' | sort -V | tail -1)
+    
+    if [[ -n "\$zim_file" ]]; then
+        download_url="\${URL}/\${zim_file}"
+        if [[ -e "\${ZIM_DIR}/\${zim_file}" ]]; then
+            et-log "\${zim_file} already exists. Skipping."
+        else
+            et-log "Downloading \${download_url}..."
+            curl -L -f -O "\${download_url}" && mv "\${zim_file}" "\${ZIM_DIR}"
+        fi
+    else
+        et-log "Warning: Could not find Wikipedia section '\${section}'"
+    fi
+done
+
+rm -f "\${HTML}"
+WIKIPEDIASCRIPT
+        chmod +x "${etc_install_dir}/scripts/download-wikipedia.sh"
+    else
+        log "INFO" "WIKIPEDIA_SECTIONS not set - original dialog will be shown (if ET_EXPERT is set)"
+    fi
+    
+    log "INFO" "Running ETC installer (this takes a while)..."
+    log "INFO" "NOTE: If map variables are not configured, dialog prompts will appear."
+    log "INFO" "      Configure OSM_MAP_STATE, ET_MAP_REGION in secrets.env for automated builds."
+    if [[ -n "${ET_EXPERT:-}" ]]; then
+        log "INFO" "      ET_EXPERT is set - Wikipedia download dialog will be shown (or auto if WIKIPEDIA_SECTIONS set)."
+    fi
+    
+    # Determine if we need interactive mode (any unconfigured dialogs)
+    local needs_interactive=0
+    [[ -z "${OSM_MAP_STATE:-}" ]] && needs_interactive=1
+    [[ -z "${ET_MAP_REGION:-}" ]] && needs_interactive=1
+    # Wikipedia dialog only shows with ET_EXPERT set
+    if [[ -n "${ET_EXPERT:-}" ]] && [[ -z "${WIKIPEDIA_SECTIONS:-}" ]]; then
+        needs_interactive=1
+    fi
+    
+    # Pass ET_EXPERT through if set (controls Wikipedia download in ETC)
+    local et_expert_val="${ET_EXPERT:-}"
+    
+    if [[ $needs_interactive -eq 1 ]]; then
+        log "INFO" "Some map variables not configured - dialogs will be shown interactively"
+        # Run with terminal attached so dialog can work
+        chroot "${SQUASHFS_DIR}" /bin/bash -c "
+            export DEBIAN_FRONTEND=noninteractive
+            export NEEDRESTART_MODE=a
+            export ET_EXPERT='${et_expert_val}'
+            cd /tmp/etc-installer/scripts
+            ./install.sh
+        " 2>&1 | tee -a "${LOG_FILE}" | while IFS= read -r line; do
+            echo "[ETC] $line"
+        done
+    else
+        log "INFO" "All map variables configured - running fully automated"
+        chroot "${SQUASHFS_DIR}" /bin/bash -c "
+            export DEBIAN_FRONTEND=noninteractive
+            export NEEDRESTART_MODE=a
+            export ET_EXPERT='${et_expert_val}'
+            cd /tmp/etc-installer/scripts
+            ./install.sh
+        " </dev/null 2>&1 | while IFS= read -r line; do
+            log "ETC" "$line"
+        done
+    fi
     
     local exit_code=${PIPESTATUS[0]}
     
@@ -527,6 +701,118 @@ install_etc_in_chroot() {
 # ============================================================================
 # Customization Functions (apply AFTER ETC is installed)
 # ============================================================================
+
+restore_user_backup() {
+    log "INFO" "Checking for ETC user backup to restore..."
+    
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    log "DEBUG" "Sourced secrets file for backup config"
+    
+    local user_backup="${ET_USER_BACKUP:-}"
+    local wine_backup="${ET_WINE_BACKUP:-}"
+    
+    # Check if any backups are configured
+    if [ -z "$user_backup" ] && [ -z "$wine_backup" ]; then
+        log "DEBUG" "No backup files configured (ET_USER_BACKUP and ET_WINE_BACKUP are empty)"
+        return 0
+    fi
+    
+    if [ $DRY_RUN -eq 1 ]; then
+        [ -n "$user_backup" ] && log "DRY-RUN" "Would restore user backup: $user_backup"
+        [ -n "$wine_backup" ] && log "DRY-RUN" "Would restore Wine backup: $wine_backup"
+        return 0
+    fi
+    
+    # Restore user backup (et-user-backup tarball)
+    # Contains: .config/emcomm-tools, .local/share/emcomm-tools, .local/share/pat
+    if [ -n "$user_backup" ]; then
+        if [ ! -f "$user_backup" ]; then
+            log "ERROR" "User backup file not found: $user_backup"
+            log "ERROR" "Create backup with: et-user-backup (on existing ETC system)"
+            return 1
+        fi
+        
+        log "INFO" "Restoring user backup: $user_backup"
+        
+        # Verify it's a valid tarball
+        if ! tar tzf "$user_backup" >/dev/null 2>&1; then
+            log "ERROR" "Invalid tarball: $user_backup"
+            return 1
+        fi
+        
+        # List contents for verification
+        log "DEBUG" "Backup contents:"
+        tar tzf "$user_backup" | head -20 | while read -r line; do
+            log "DEBUG" "  $line"
+        done
+        
+        # Extract to /etc/skel (without leading path components that match home dir structure)
+        # et-user-backup creates: .config/emcomm-tools/, .local/share/emcomm-tools/, .local/share/pat/
+        local skel_dir="${SQUASHFS_DIR}/etc/skel"
+        mkdir -p "$skel_dir"
+        
+        # Extract backup into /etc/skel
+        # The tarball contains paths like .config/emcomm-tools/user.json (relative to $HOME)
+        tar xzf "$user_backup" -C "$skel_dir"
+        
+        log "SUCCESS" "User backup restored to /etc/skel"
+        log "DEBUG" "Restored files:"
+        find "$skel_dir/.config/emcomm-tools" -type f 2>/dev/null | head -10 | while read -r f; do
+            log "DEBUG" "  ${f#$skel_dir}"
+        done
+        find "$skel_dir/.local/share/emcomm-tools" -type f 2>/dev/null | head -10 | while read -r f; do
+            log "DEBUG" "  ${f#$skel_dir}"
+        done
+        find "$skel_dir/.local/share/pat" -type f 2>/dev/null | head -10 | while read -r f; do
+            log "DEBUG" "  ${f#$skel_dir}"
+        done
+    fi
+    
+    # Restore Wine backup (VARA/Wine prefix)
+    # Contains: .wine32/ (entire 32-bit Wine prefix)
+    if [ -n "$wine_backup" ]; then
+        if [ ! -f "$wine_backup" ]; then
+            log "ERROR" "Wine backup file not found: $wine_backup"
+            log "ERROR" "Create backup with: ~/add-ons/wine/05-backup-wine-install.sh (on existing ETC system)"
+            return 1
+        fi
+        
+        log "INFO" "Restoring Wine backup: $wine_backup"
+        
+        # Verify it's a valid tarball
+        if ! tar tzf "$wine_backup" >/dev/null 2>&1; then
+            log "ERROR" "Invalid tarball: $wine_backup"
+            return 1
+        fi
+        
+        # List contents for verification
+        log "DEBUG" "Wine backup contents (first 20 entries):"
+        tar tzf "$wine_backup" | head -20 | while read -r line; do
+            log "DEBUG" "  $line"
+        done
+        
+        # Extract to /etc/skel
+        local skel_dir="${SQUASHFS_DIR}/etc/skel"
+        mkdir -p "$skel_dir"
+        
+        # Extract Wine backup
+        # The tarball should contain .wine32/ (relative to $HOME)
+        tar xzf "$wine_backup" -C "$skel_dir"
+        
+        # Verify extraction
+        if [ -d "$skel_dir/.wine32" ]; then
+            local wine_size
+            wine_size=$(du -sh "$skel_dir/.wine32" 2>/dev/null | cut -f1)
+            log "SUCCESS" "Wine backup restored to /etc/skel/.wine32 ($wine_size)"
+        else
+            log "WARN" "Wine backup extracted but .wine32 directory not found"
+            log "WARN" "Check backup tarball structure (expected .wine32/ at root)"
+        fi
+    fi
+    
+    log "DEBUG" "Backup restoration complete"
+}
 
 customize_hostname() {
     log "INFO" "Configuring hostname..."
@@ -1354,6 +1640,130 @@ EOF
     [ -n "$emcomm_gateway" ] && log "INFO" "  Default gateway: $emcomm_gateway"
 }
 
+setup_wikipedia_tools() {
+    log "INFO" "Setting up Wikipedia offline tools..."
+    
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    log "DEBUG" "Sourced secrets file for Wikipedia config"
+    
+    # Get custom articles list if configured
+    local custom_articles="${WIKIPEDIA_ARTICLES:-}"
+    
+    if [ $DRY_RUN -eq 1 ]; then
+        log "DRY-RUN" "Would copy Wikipedia ZIM creator script to ~/add-ons/wikipedia/"
+        [ -n "$custom_articles" ] && log "DRY-RUN" "Would configure custom articles: $custom_articles"
+        return 0
+    fi
+    
+    # Create add-ons directory for Wikipedia tools
+    local addon_dir="${SQUASHFS_DIR}/etc/skel/add-ons/wikipedia"
+    mkdir -p "$addon_dir"
+    log "DEBUG" "Created Wikipedia add-ons dir: $addon_dir"
+    
+    # Copy the ZIM creator script from post-install/
+    local source_script="${SCRIPT_DIR}/post-install/create-ham-wikipedia-zim.sh"
+    if [ -f "$source_script" ]; then
+        cp "$source_script" "$addon_dir/"
+        chmod +x "$addon_dir/create-ham-wikipedia-zim.sh"
+        log "DEBUG" "Copied create-ham-wikipedia-zim.sh"
+    else
+        log "WARN" "Wikipedia ZIM creator script not found: $source_script"
+        return 0
+    fi
+    
+    # Create a wrapper script with custom articles if configured
+    local wrapper_script="${addon_dir}/create-my-wikipedia.sh"
+    
+    if [ -n "$custom_articles" ]; then
+        # User specified custom articles
+        cat > "$wrapper_script" <<EOF
+#!/bin/bash
+# Auto-generated by build-etc-iso.sh
+# Creates a custom Wikipedia ZIM with your configured articles
+
+SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+
+echo "Creating custom Wikipedia ZIM with your configured articles..."
+echo ""
+
+"\$SCRIPT_DIR/create-ham-wikipedia-zim.sh" --articles "${custom_articles}"
+EOF
+        log "SUCCESS" "Custom Wikipedia articles configured: $(echo "$custom_articles" | tr '|' ' ' | wc -w) articles"
+    else
+        # Use default ham radio articles
+        cat > "$wrapper_script" <<EOF
+#!/bin/bash
+# Auto-generated by build-etc-iso.sh
+# Creates a custom Wikipedia ZIM with ham radio articles
+
+SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+
+echo "Creating Wikipedia ZIM with default ham radio articles..."
+echo "(2m, 70cm, GMRS, FRS, APRS, Winlink, DMR, D-STAR, etc.)"
+echo ""
+
+"\$SCRIPT_DIR/create-ham-wikipedia-zim.sh"
+EOF
+        log "DEBUG" "Using default ham radio article list"
+    fi
+    
+    chmod +x "$wrapper_script"
+    
+    # Create README
+    cat > "$addon_dir/README.md" <<'EOF'
+# Wikipedia Offline Tools
+
+This directory contains tools for creating custom offline Wikipedia content.
+
+## Quick Start
+
+Run the wrapper script to create a Wikipedia ZIM file with ham radio articles:
+
+```bash
+./create-my-wikipedia.sh
+```
+
+The script will:
+1. Download Wikipedia articles about ham radio topics
+2. Create a .zim file in ~/wikipedia/
+3. The .zim file can be viewed with Kiwix
+
+## Custom Articles
+
+To download specific articles, run:
+
+```bash
+./create-ham-wikipedia-zim.sh --articles "Article1|Article2|Article3"
+```
+
+Article names are Wikipedia page titles with spaces replaced by underscores.
+
+## Viewing the Content
+
+After creating the .zim file:
+
+```bash
+# Start local Kiwix server
+kiwix-serve --port=8080 ~/wikipedia/ham-radio-wikipedia_*.zim
+
+# Open browser to http://localhost:8080
+```
+
+Or use the Kiwix desktop app to browse the .zim file.
+
+## Note About ETC's Wikipedia Downloads
+
+ETC's `download-wikipedia.sh` (runs when ET_EXPERT=yes) downloads LARGE
+pre-built collections from kiwix.org (computer, medicine, etc. - 100s of MB each).
+
+This script creates SMALL, targeted ZIM files with just the articles you need.
+EOF
+
+    log "SUCCESS" "Wikipedia tools installed in ~/add-ons/wikipedia/"
+    log "INFO" "  Run ~/add-ons/wikipedia/create-my-wikipedia.sh after first boot"
+}
+
 embed_cache_files() {
     # Embed cache files into the ISO so they're available for future builds
     # This is for users who build on the same machine they install to
@@ -1639,49 +2049,57 @@ main() {
     log "INFO" "=== Applying Customizations ==="
     log "DEBUG" "Starting customization phase..."
     
-    log "DEBUG" "Step 1/11: customize_hostname"
+    log "DEBUG" "Step 1/13: customize_hostname"
     customize_hostname
-    log "DEBUG" "Step 1/11: customize_hostname COMPLETED"
+    log "DEBUG" "Step 1/13: customize_hostname COMPLETED"
     
-    log "DEBUG" "Step 2/11: customize_wifi"
+    log "DEBUG" "Step 2/13: restore_user_backup"
+    restore_user_backup
+    log "DEBUG" "Step 2/13: restore_user_backup COMPLETED"
+    
+    log "DEBUG" "Step 3/13: customize_wifi"
     customize_wifi
-    log "DEBUG" "Step 2/11: customize_wifi COMPLETED"
+    log "DEBUG" "Step 3/13: customize_wifi COMPLETED"
     
-    log "DEBUG" "Step 3/11: customize_desktop"
+    log "DEBUG" "Step 4/13: customize_desktop"
     customize_desktop
-    log "DEBUG" "Step 3/11: customize_desktop COMPLETED"
+    log "DEBUG" "Step 4/13: customize_desktop COMPLETED"
     
-    log "DEBUG" "Step 4/11: customize_aprs"
+    log "DEBUG" "Step 5/13: customize_aprs"
     customize_aprs
-    log "DEBUG" "Step 4/11: customize_aprs COMPLETED"
+    log "DEBUG" "Step 5/13: customize_aprs COMPLETED"
     
-    log "DEBUG" "Step 5/11: customize_user_and_autologin"
+    log "DEBUG" "Step 6/13: customize_user_and_autologin"
     customize_user_and_autologin
-    log "DEBUG" "Step 5/11: customize_user_and_autologin COMPLETED"
+    log "DEBUG" "Step 6/13: customize_user_and_autologin COMPLETED"
     
-    log "DEBUG" "Step 6/11: customize_vara_license"
+    log "DEBUG" "Step 7/13: customize_vara_license"
     customize_vara_license
-    log "DEBUG" "Step 6/11: customize_vara_license COMPLETED"
+    log "DEBUG" "Step 7/13: customize_vara_license COMPLETED"
     
-    log "DEBUG" "Step 7/11: customize_pat"
+    log "DEBUG" "Step 8/13: customize_pat"
     customize_pat
-    log "DEBUG" "Step 7/11: customize_pat COMPLETED"
+    log "DEBUG" "Step 8/13: customize_pat COMPLETED"
     
-    log "DEBUG" "Step 8/11: customize_git_config"
+    log "DEBUG" "Step 9/13: setup_wikipedia_tools"
+    setup_wikipedia_tools
+    log "DEBUG" "Step 9/13: setup_wikipedia_tools COMPLETED"
+    
+    log "DEBUG" "Step 10/13: customize_git_config"
     customize_git_config
-    log "DEBUG" "Step 8/11: customize_git_config COMPLETED"
+    log "DEBUG" "Step 10/13: customize_git_config COMPLETED"
     
-    log "DEBUG" "Step 9/11: customize_power"
+    log "DEBUG" "Step 11/13: customize_power"
     customize_power
-    log "DEBUG" "Step 9/11: customize_power COMPLETED"
+    log "DEBUG" "Step 11/13: customize_power COMPLETED"
     
-    log "DEBUG" "Step 10/11: embed_cache_files"
+    log "DEBUG" "Step 12/13: embed_cache_files"
     embed_cache_files
-    log "DEBUG" "Step 10/11: embed_cache_files COMPLETED"
+    log "DEBUG" "Step 12/13: embed_cache_files COMPLETED"
     
-    log "DEBUG" "Step 11/11: create_build_manifest"
+    log "DEBUG" "Step 13/13: create_build_manifest"
     create_build_manifest
-    log "DEBUG" "Step 11/11: create_build_manifest COMPLETED"
+    log "DEBUG" "Step 13/13: create_build_manifest COMPLETED"
     
     log "DEBUG" "All customizations completed successfully"
     

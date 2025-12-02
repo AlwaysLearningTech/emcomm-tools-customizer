@@ -281,6 +281,103 @@ After first boot, run `~/.config/pat/add-emcomm-alias.sh` to add the alias to yo
 | Idle Action | `nothing`, `suspend`, `hibernate` | Action after idle timeout |
 | Idle Timeout | Seconds (e.g., `900` = 15 min) | Time before idle action triggers |
 
+### ETC Build Options & Map Downloads
+
+These variables control ETC's optional features and map downloads during the ISO build.
+
+**Interactive vs Automated Builds:**
+- **Variables configured** → Downloads happen automatically, no prompts
+- **Variables blank** → Original ETC dialog prompts appear during build
+- This ensures future ETC versions with new dialogs still work interactively
+
+| Variable | Options | Description |
+|----------|---------|-------------|
+| `OSM_MAP_STATE` | US state name (lowercase) | OpenStreetMap data for offline Navit navigation |
+| `ET_MAP_REGION` | `us`, `ca`, `world` | Pre-rendered raster tiles for YAAC and other apps |
+| `ET_EXPERT` | `yes` or blank | Enables Wikipedia download (ETC internal variable) |
+| `WIKIPEDIA_SECTIONS` | Comma-separated list | Offline Wikipedia sections (requires ET_EXPERT=yes) |
+
+**Note about ET_EXPERT:** This is an undocumented ETC variable. When set, it:
+1. Enables the Wikipedia download dialog during install
+2. Shows a Wine info textbox during wine installation
+
+Leave blank unless you want Wikipedia offline content.
+
+**OSM State Names:** Use lowercase state names from [Geofabrik US](https://download.geofabrik.de/north-america/us.html):
+`alabama`, `alaska`, `arizona`, `arkansas`, `california`, `colorado`, `connecticut`, `delaware`, `district-of-columbia`, `florida`, `georgia`, `hawaii`, `idaho`, `illinois`, `indiana`, `iowa`, `kansas`, `kentucky`, `louisiana`, `maine`, `maryland`, `massachusetts`, `michigan`, `minnesota`, `mississippi`, `missouri`, `montana`, `nebraska`, `nevada`, `new-hampshire`, `new-jersey`, `new-mexico`, `new-york`, `north-carolina`, `north-dakota`, `ohio`, `oklahoma`, `oregon`, `pennsylvania`, `rhode-island`, `south-carolina`, `south-dakota`, `tennessee`, `texas`, `utah`, `vermont`, `virginia`, `washington`, `west-virginia`, `wisconsin`, `wyoming`
+
+**ET Map Regions:**
+| Region | File Size | Coverage |
+|--------|-----------|----------|
+| `us` | ~2.5 GB | United States, zoom 0-11 |
+| `ca` | ~1.5 GB | Canada, zoom 0-10 |
+| `world` | ~500 MB | Global, zoom 0-7 |
+
+**Wikipedia Sections:** Available sections for offline Wikipedia:
+`computer`, `history`, `mathematics`, `medicine`, `simple`
+
+**Examples:**
+
+```bash
+# Fully automated build (no Wikipedia)
+OSM_MAP_STATE="washington"
+ET_MAP_REGION="us"
+ET_EXPERT=""
+WIKIPEDIA_SECTIONS=""
+
+# Fully automated with Wikipedia
+OSM_MAP_STATE="washington"
+ET_MAP_REGION="us"
+ET_EXPERT="yes"
+WIKIPEDIA_SECTIONS="computer,medicine"
+
+# Semi-automated - let dialog prompt for maps you're unsure about
+OSM_MAP_STATE=""                 # Will show dialog to pick state
+ET_MAP_REGION="us"               # Auto-download US tiles
+```
+
+### Wikipedia Offline Content
+
+There are **two ways** to get offline Wikipedia content on ETC:
+
+#### Option 1: ETC's Pre-Built Collections (Large Files)
+
+Set `ET_EXPERT="yes"` and `WIKIPEDIA_SECTIONS="computer,medicine"` to download pre-built .zim files from Kiwix during the build. These are large files (100-500MB each) covering entire topic areas.
+
+#### Option 2: Custom Ham Radio Articles (Recommended)
+
+This customizer includes a script to create a small, targeted .zim file with just the Wikipedia articles relevant to ham radio operators.
+
+**Configuration:**
+```bash
+# In secrets.env - specify individual articles (pipe-separated)
+WIKIPEDIA_ARTICLES="2-meter_band|70-centimeter_band|General_Mobile_Radio_Service|Family_Radio_Service"
+```
+
+**Default articles include:**
+- Band information: 2-meter band, 70-centimeter band, HF/VHF/UHF
+- Radio services: GMRS, FRS, MURS, Citizens Band
+- Digital modes: APRS, Winlink, DMR, D-STAR, System Fusion
+- Emergency comms: Amateur radio emergency communications
+- General ham radio topics: Repeaters, simplex, antennas, propagation
+
+**Post-Install Usage:**
+After first boot, run the Wikipedia ZIM creator:
+```bash
+cd ~/add-ons/wikipedia
+./create-my-wikipedia.sh
+```
+
+This downloads your configured articles and creates a .zim file in `~/wikipedia/` that you can view with Kiwix:
+```bash
+# Start local server
+kiwix-serve --port=8080 ~/wikipedia/ham-radio-wikipedia_*.zim
+
+# Open http://localhost:8080 in browser
+```
+
+**Note:** The custom .zim creator is a post-install script because it requires network access and takes a few minutes to run. It's NOT embedded in the ISO build.
+
 ### APRS SSID Reference
 
 | SSID | Usage |
