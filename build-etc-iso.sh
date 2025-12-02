@@ -432,14 +432,20 @@ setup_chroot_mounts() {
     # Set up bind mounts for chroot environment
     log "DEBUG" "Setting up chroot bind mounts..."
     
-    mount --bind /dev "${SQUASHFS_DIR}/dev"
-    mount --bind /dev/pts "${SQUASHFS_DIR}/dev/pts"
-    mount --bind /proc "${SQUASHFS_DIR}/proc"
-    mount --bind /sys "${SQUASHFS_DIR}/sys"
-    mount --bind /run "${SQUASHFS_DIR}/run"
+    # Check if already mounted to avoid double-mounting
+    if mountpoint -q "${SQUASHFS_DIR}/dev" 2>/dev/null; then
+        log "DEBUG" "Chroot mounts already active, skipping"
+        return 0
+    fi
+    
+    mount --bind /dev "${SQUASHFS_DIR}/dev" || { log "WARN" "Failed to mount /dev"; return 1; }
+    mount --bind /dev/pts "${SQUASHFS_DIR}/dev/pts" || { log "WARN" "Failed to mount /dev/pts"; }
+    mount --bind /proc "${SQUASHFS_DIR}/proc" || { log "WARN" "Failed to mount /proc"; return 1; }
+    mount --bind /sys "${SQUASHFS_DIR}/sys" || { log "WARN" "Failed to mount /sys"; return 1; }
+    mount --bind /run "${SQUASHFS_DIR}/run" 2>/dev/null || true  # /run may not exist
     
     # Copy resolv.conf for network access
-    cp /etc/resolv.conf "${SQUASHFS_DIR}/etc/resolv.conf"
+    cp /etc/resolv.conf "${SQUASHFS_DIR}/etc/resolv.conf" 2>/dev/null || true
     
     log "DEBUG" "Chroot mounts configured"
 }
@@ -1036,19 +1042,10 @@ ambient-enabled=false
 EOF
     fi
 
-    # Compile dconf database using chroot
-    log "DEBUG" "Compiling dconf database..."
-    setup_chroot_mounts
-    trap 'cleanup_chroot_mounts' EXIT
-    
-    chroot "${SQUASHFS_DIR}" /usr/bin/dconf update 2>/dev/null || {
-        log "WARN" "dconf update failed - settings may not apply correctly"
-    }
-    
-    cleanup_chroot_mounts
-    trap - EXIT
-
-    log "DEBUG" "dconf database compiled"
+    # Skip dconf database compilation - it will compile automatically on first boot
+    # Running dconf update in chroot can hang due to missing dbus/system services
+    log "DEBUG" "dconf settings written to $dconf_settings_file"
+    log "DEBUG" "Database will be compiled automatically on first boot"
     log "SUCCESS" "Desktop preferences configured (${color_scheme}, ${scaling}x)"
 }
 
