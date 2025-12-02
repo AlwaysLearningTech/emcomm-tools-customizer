@@ -751,38 +751,42 @@ restore_user_backup() {
     
     # Restore Wine backup (VARA/Wine prefix)
     # Contains: .wine32/ (entire 32-bit Wine prefix)
+    # TODO: Disabled for now - large tarball extraction causing issues
+    # Re-enable in future revision after testing with smaller files
     if [ -n "$wine_backup" ]; then
-        log "INFO" "Restoring Wine backup: $(basename "$wine_backup")"
-        
-        # Verify it's a valid tarball
-        if ! tar tzf "$wine_backup" >/dev/null 2>&1; then
-            log "ERROR" "Invalid tarball: $wine_backup"
-            return 1
-        fi
-        
-        # List contents for verification
-        log "DEBUG" "Wine backup contents (first 20 entries):"
-        tar tzf "$wine_backup" | head -20 | while read -r line; do
-            log "DEBUG" "  $line"
-        done
-        
-        # Extract to /etc/skel
-        local skel_dir="${SQUASHFS_DIR}/etc/skel"
-        mkdir -p "$skel_dir"
-        
-        # Extract Wine backup
-        # The tarball should contain .wine32/ (relative to $HOME)
-        tar xzf "$wine_backup" -C "$skel_dir"
-        
-        # Verify extraction
-        if [ -d "$skel_dir/.wine32" ]; then
-            local wine_size
-            wine_size=$(du -sh "$skel_dir/.wine32" 2>/dev/null | cut -f1)
-            log "SUCCESS" "Wine backup restored to /etc/skel/.wine32 ($wine_size)"
-        else
-            log "WARN" "Wine backup extracted but .wine32 directory not found"
-            log "WARN" "Check backup tarball structure (expected .wine32/ at root)"
-        fi
+        log "INFO" "Wine backup found but restore is disabled in this version"
+        log "INFO" "To restore manually after install: tar xzf $(basename "$wine_backup") -C ~"
+        # log "INFO" "Restoring Wine backup: $(basename "$wine_backup")"
+        # 
+        # # Verify it's a valid tarball
+        # if ! tar tzf "$wine_backup" >/dev/null 2>&1; then
+        #     log "ERROR" "Invalid tarball: $wine_backup"
+        #     return 1
+        # fi
+        # 
+        # # List contents for verification
+        # log "DEBUG" "Wine backup contents (first 20 entries):"
+        # tar tzf "$wine_backup" | head -20 | while read -r line; do
+        #     log "DEBUG" "  $line"
+        # done
+        # 
+        # # Extract to /etc/skel
+        # local skel_dir="${SQUASHFS_DIR}/etc/skel"
+        # mkdir -p "$skel_dir"
+        # 
+        # # Extract Wine backup
+        # # The tarball should contain .wine32/ (relative to $HOME)
+        # tar xzf "$wine_backup" -C "$skel_dir"
+        # 
+        # # Verify extraction
+        # if [ -d "$skel_dir/.wine32" ]; then
+        #     local wine_size
+        #     wine_size=$(du -sh "$skel_dir/.wine32" 2>/dev/null | cut -f1)
+        #     log "SUCCESS" "Wine backup restored to /etc/skel/.wine32 ($wine_size)"
+        # else
+        #     log "WARN" "Wine backup extracted but .wine32 directory not found"
+        #     log "WARN" "Check backup tarball structure (expected .wine32/ at root)"
+        # fi
     fi
     
     log "DEBUG" "Backup restoration complete"
