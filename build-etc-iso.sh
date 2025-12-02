@@ -200,7 +200,6 @@ get_release_info() {
             
             RELEASE_TAG=$(echo "$RELEASE_JSON" | jq -r '.tag_name // empty')
             RELEASE_NAME=$(echo "$RELEASE_JSON" | jq -r '.name // empty')
-            RELEASE_DATE=$(echo "$RELEASE_JSON" | jq -r '.published_at // empty' | cut -d'T' -f1)
             TARBALL_URL=$(echo "$RELEASE_JSON" | jq -r '.tarball_url // empty')
             ;;
             
@@ -214,7 +213,6 @@ get_release_info() {
             RELEASE_TAG=$(echo "$TAGS_JSON" | jq -r '.[0].name // empty')
             TARBALL_URL=$(echo "$TAGS_JSON" | jq -r '.[0].tarball_url // empty')
             RELEASE_NAME="$RELEASE_TAG"
-            RELEASE_DATE=$(date +%Y-%m-%d)
             ;;
             
         tag)
@@ -234,7 +232,6 @@ get_release_info() {
             fi
             
             RELEASE_NAME="$RELEASE_TAG"
-            RELEASE_DATE=$(date +%Y-%m-%d)
             ;;
     esac
     
@@ -266,6 +263,7 @@ get_release_info() {
 # Prerequisites Check
 # ============================================================================
 
+# shellcheck disable=SC2120
 check_prerequisites() {
     log "INFO" "Checking prerequisites..."
     
@@ -1044,7 +1042,7 @@ EOF
 
     # Skip dconf database compilation - it will compile automatically on first boot
     # Running dconf update in chroot can hang due to missing dbus/system services
-    log "DEBUG" "dconf settings written to $dconf_settings_file"
+    log "DEBUG" "dconf settings written to $dconf_file"
     log "DEBUG" "Database will be compiled automatically on first boot"
     log "SUCCESS" "Desktop preferences configured (${color_scheme}, ${scaling}x)"
 }
@@ -1074,7 +1072,7 @@ customize_aprs() {
     local beacon_dir="${APRS_BEACON_DIR:-}"
     local enable_igate="${ENABLE_APRS_IGATE:-yes}"
     local aprs_server="${APRS_SERVER:-noam.aprs2.net}"
-    local direwolf_adevice="${DIREWOLF_ADEVICE:-plughw:1,0}"
+    # Note: DIREWOLF_ADEVICE not used here - ETC uses {{ET_AUDIO_DEVICE}} placeholder
     local direwolf_ptt="${DIREWOLF_PTT:-CM108}"
     
     log "DEBUG" "User config: callsign=$callsign, grid=$grid"
@@ -1852,7 +1850,7 @@ To use this cache for your next build:
 Or run build-etc-iso.sh from /opt/emcomm-customizer-cache directly.
 
 Files:
-$(ls -lh "$target_cache" 2>/dev/null | grep -v README)
+$(find "$target_cache" -maxdepth 1 -type f ! -name 'README*' -exec ls -lh {} \; 2>/dev/null)
 
 Build date: $(date +'%Y-%m-%d %H:%M:%S')
 EOF
