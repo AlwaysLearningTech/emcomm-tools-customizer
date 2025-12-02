@@ -703,18 +703,30 @@ WIKIPEDIASCRIPT
 # ============================================================================
 
 restore_user_backup() {
-    log "INFO" "Checking for ETC user backup to restore..."
+    log "INFO" "Checking for ETC backups in cache directory..."
     
-    # shellcheck source=/dev/null
-    source "$SECRETS_FILE"
-    log "DEBUG" "Sourced secrets file for backup config"
+    local cache_dir="${SCRIPT_DIR}/cache"
+    local user_backup=""
+    local wine_backup=""
     
-    local user_backup="${ET_USER_BACKUP:-}"
-    local wine_backup="${ET_WINE_BACKUP:-}"
+    # Auto-detect user backup (etc-user-backup-*.tar.gz)
+    # Use the most recent one if multiple exist
+    if compgen -G "${cache_dir}/etc-user-backup-*.tar.gz" > /dev/null 2>&1; then
+        user_backup=$(ls -t "${cache_dir}"/etc-user-backup-*.tar.gz 2>/dev/null | head -1)
+        log "DEBUG" "Found user backup: $user_backup"
+    fi
     
-    # Check if any backups are configured
+    # Auto-detect wine backup (etc-wine-backup-*.tar.gz)
+    # Use the most recent one if multiple exist
+    if compgen -G "${cache_dir}/etc-wine-backup-*.tar.gz" > /dev/null 2>&1; then
+        wine_backup=$(ls -t "${cache_dir}"/etc-wine-backup-*.tar.gz 2>/dev/null | head -1)
+        log "DEBUG" "Found Wine backup: $wine_backup"
+    fi
+    
+    # Check if any backups were found
     if [ -z "$user_backup" ] && [ -z "$wine_backup" ]; then
-        log "DEBUG" "No backup files configured (ET_USER_BACKUP and ET_WINE_BACKUP are empty)"
+        log "DEBUG" "No backup files found in ${cache_dir}/"
+        log "DEBUG" "To restore settings, place etc-user-backup-*.tar.gz or etc-wine-backup-*.tar.gz in cache/"
         return 0
     fi
     
@@ -727,13 +739,7 @@ restore_user_backup() {
     # Restore user backup (et-user-backup tarball)
     # Contains: .config/emcomm-tools, .local/share/emcomm-tools, .local/share/pat
     if [ -n "$user_backup" ]; then
-        if [ ! -f "$user_backup" ]; then
-            log "ERROR" "User backup file not found: $user_backup"
-            log "ERROR" "Create backup with: et-user-backup (on existing ETC system)"
-            return 1
-        fi
-        
-        log "INFO" "Restoring user backup: $user_backup"
+        log "INFO" "Restoring user backup: $(basename "$user_backup")"
         
         # Verify it's a valid tarball
         if ! tar tzf "$user_backup" >/dev/null 2>&1; then
@@ -772,13 +778,7 @@ restore_user_backup() {
     # Restore Wine backup (VARA/Wine prefix)
     # Contains: .wine32/ (entire 32-bit Wine prefix)
     if [ -n "$wine_backup" ]; then
-        if [ ! -f "$wine_backup" ]; then
-            log "ERROR" "Wine backup file not found: $wine_backup"
-            log "ERROR" "Create backup with: ~/add-ons/wine/05-backup-wine-install.sh (on existing ETC system)"
-            return 1
-        fi
-        
-        log "INFO" "Restoring Wine backup: $wine_backup"
+        log "INFO" "Restoring Wine backup: $(basename "$wine_backup")"
         
         # Verify it's a valid tarball
         if ! tar tzf "$wine_backup" >/dev/null 2>&1; then
@@ -1647,8 +1647,21 @@ setup_wikipedia_tools() {
     source "$SECRETS_FILE"
     log "DEBUG" "Sourced secrets file for Wikipedia config"
     
-    # Get custom articles list if configured
-    local custom_articles="${WIKIPEDIA_ARTICLES:-}"
+    # Get custom articles - handle both array and pipe-separated formats
+    local custom_articles=""
+    
+    # Check if WIKIPEDIA_ARTICLES is an array (bash 4+)
+    if declare -p WIKIPEDIA_ARTICLES 2>/dev/null | grep -q 'declare -a'; then
+        # It's an array - join with pipes
+        if [ ${#WIKIPEDIA_ARTICLES[@]} -gt 0 ]; then
+            custom_articles=$(IFS='|'; echo "${WIKIPEDIA_ARTICLES[*]}")
+            log "DEBUG" "Wikipedia articles from array: ${#WIKIPEDIA_ARTICLES[@]} articles"
+        fi
+    elif [ -n "${WIKIPEDIA_ARTICLES:-}" ]; then
+        # It's a string (legacy pipe-separated format)
+        custom_articles="$WIKIPEDIA_ARTICLES"
+        log "DEBUG" "Wikipedia articles from string: $custom_articles"
+    fi
     
     if [ $DRY_RUN -eq 1 ]; then
         log "DRY-RUN" "Would copy Wikipedia ZIM creator script to ~/add-ons/wikipedia/"
@@ -1689,7 +1702,9 @@ echo ""
 
 "\$SCRIPT_DIR/create-ham-wikipedia-zim.sh" --articles "${custom_articles}"
 EOF
-        log "SUCCESS" "Custom Wikipedia articles configured: $(echo "$custom_articles" | tr '|' ' ' | wc -w) articles"
+        local article_count
+        article_count=$(echo "$custom_articles" | tr '|' '\n' | grep -c .)
+        log "SUCCESS" "Custom Wikipedia articles configured: $article_count articles"
     else
         # Use default ham radio articles
         cat > "$wrapper_script" <<EOF

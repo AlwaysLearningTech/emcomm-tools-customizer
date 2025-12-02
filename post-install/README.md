@@ -25,48 +25,40 @@ during ISO creation. Post-install scripts are reserved for:
 
 ## Backup/Restore Workflow
 
-The build system now supports restoring settings from an existing ETC installation.
-This preserves your configurations across ISO rebuilds.
+The build system automatically restores settings from an existing ETC installation
+if backup files are found in the `./cache/` directory.
 
 ### How It Works
 
-1. **On your existing ETC system**, create a backup:
+1. **On your existing ETC system**, create backups:
    ```bash
-   et-user-backup  # Creates etc-user-backup-HOSTNAME-DATE.tar.gz in current dir
-   ```
-
-2. **Copy the tarball** to your build machine's `./cache/` directory
-
-3. **Configure secrets.env**:
-   ```bash
-   ET_USER_BACKUP="./cache/etc-user-backup-ETC-KD7DGF-20250128.tar.gz"
-   ```
-
-4. **Build the ISO** - backup is extracted directly into /etc/skel
-
-5. **After installation**, your settings are pre-configured
-
-### What Gets Backed Up
-
-| Backup Type | Command | Contains |
-|-------------|---------|----------|
-| User Settings | `et-user-backup` | `~/.config/emcomm-tools/`, `~/.local/share/emcomm-tools/`, `~/.local/share/pat/` |
-| Wine/VARA | `~/add-ons/wine/05-backup-wine-install.sh` | `~/.wine32/` (entire VARA installation) |
-
-### Optional: Wine/VARA Backup
-
-If you have a working VARA installation:
-
-1. **Create Wine backup**:
-   ```bash
+   # User settings (callsign, grid, Pat mailbox, etc.)
+   et-user-backup
+   
+   # Wine/VARA (optional, if you have VARA installed)
    ~/add-ons/wine/05-backup-wine-install.sh
-   # Creates etc-wine-backup-HOSTNAME-DATE.tar.gz
    ```
 
-2. **Configure secrets.env**:
+2. **Copy the tarballs** to your build machine's `./cache/` directory:
    ```bash
-   ET_WINE_BACKUP="./cache/etc-wine-backup-ETC-KD7DGF-20250128.tar.gz"
+   cp etc-user-backup-*.tar.gz /path/to/emcomm-tools-customizer/cache/
+   cp etc-wine-backup-*.tar.gz /path/to/emcomm-tools-customizer/cache/  # optional
    ```
+
+3. **Build the ISO** - backups are automatically detected and restored
+
+4. **After installation**, your settings are pre-configured
+
+### Auto-Detection
+
+The build script automatically finds these files in `./cache/`:
+
+| File Pattern | Created By | Contains |
+|--------------|------------|----------|
+| `etc-user-backup-*.tar.gz` | `et-user-backup` | `~/.config/emcomm-tools/`, `~/.local/share/emcomm-tools/`, `~/.local/share/pat/` |
+| `etc-wine-backup-*.tar.gz` | `05-backup-wine-install.sh` | `~/.wine32/` (entire VARA installation) |
+
+If multiple backup files match, the most recent one is used.
 
 **Note**: Wine backups can be large (~500MB+). They're extracted to /etc/skel during
 build, so VARA will be pre-installed when you create a user account.
