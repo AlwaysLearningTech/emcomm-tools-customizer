@@ -167,7 +167,7 @@ USER_EMAIL="you@example.com"    # Email for git commits
 GRID_SQUARE="CN87"             # Maidenhead grid locator
 
 # === User Account ===
-USER_USERNAME="emcomm"          # Linux username (default: emcomm)
+USER_USERNAME=""                # Linux username (defaults to lowercase CALLSIGN)
 USER_PASSWORD=""                # Password (leave blank to keep ETC default)
 ENABLE_AUTOLOGIN="no"          # "yes" or "no" - default is NO
 

@@ -939,8 +939,10 @@ customize_user_and_autologin() {
     source "$SECRETS_FILE"
     log "DEBUG" "Sourced secrets file for user config"
     
+    local callsign="${CALLSIGN:-N0CALL}"
     local fullname="${USER_FULLNAME:-EmComm User}"
-    local username="${USER_USERNAME:-emcomm}"
+    # Default username to lowercase callsign
+    local username="${USER_USERNAME:-${callsign,,}}"
     local password="${USER_PASSWORD:-}"
     local enable_autologin="${ENABLE_AUTOLOGIN:-no}"
     
