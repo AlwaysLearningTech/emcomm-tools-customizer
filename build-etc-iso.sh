@@ -1267,29 +1267,49 @@ EOF
         fi
     fi
     
-    # Set user password via chroot if provided
-    # We need chroot because passwd requires proper system context
+    # Set user password by pre-hashing and writing directly
+    # We avoid chroot because it requires bind mounts that can hang
     if [ -n "$password" ]; then
-        log "INFO" "Setting user password via chroot..."
+        log "INFO" "Setting up password for user..."
         
-        # Set up chroot mounts
-        setup_chroot_mounts
-        trap 'cleanup_chroot_mounts' EXIT
+        # Hash the password using openssl (works without chroot)
+        local hashed_password
+        hashed_password=$(openssl passwd -6 "$password")
         
-        # Use chpasswd to set password (more script-friendly than passwd)
-        # Format: username:password
-        echo "${username}:${password}" | chroot "${SQUASHFS_DIR}" /usr/sbin/chpasswd
-        local chpasswd_exit=$?
-        
-        # Clean up
-        cleanup_chroot_mounts
-        trap - EXIT
-        
-        if [ $chpasswd_exit -eq 0 ]; then
-            log "SUCCESS" "Password set for user: $username"
+        if [ -n "$hashed_password" ]; then
+            # Create a first-boot script that sets the password
+            local firstboot_dir="${SQUASHFS_DIR}/etc/profile.d"
+            local firstboot_script="${firstboot_dir}/z99-set-user-password.sh"
+            
+            mkdir -p "$firstboot_dir"
+            
+            cat > "$firstboot_script" << PWEOF
+#!/bin/bash
+# One-time password setup - self-deleting script
+if [ "\$(id -u)" = "0" ] && [ -f "/etc/shadow" ]; then
+    # Update password hash for user
+    if grep -q "^${username}:" /etc/shadow 2>/dev/null; then
+        sed -i "s|^${username}:[^:]*:|${username}:${hashed_password}:|" /etc/shadow
+    fi
+    # Self-delete
+    rm -f "\$0"
+fi
+PWEOF
+            chmod 755 "$firstboot_script"
+            log "DEBUG" "Created first-boot password script"
+            
+            # Also try to directly modify shadow if the user exists
+            local shadow_file="${SQUASHFS_DIR}/etc/shadow"
+            if [ -f "$shadow_file" ] && grep -q "^${username}:" "$shadow_file" 2>/dev/null; then
+                sed -i "s|^${username}:[^:]*:|${username}:${hashed_password}:|" "$shadow_file"
+                log "SUCCESS" "Password hash set directly in shadow file"
+                # Remove the first-boot script since we did it directly
+                rm -f "$firstboot_script"
+            else
+                log "INFO" "User not in shadow yet - password will be set on first boot"
+            fi
         else
-            log "WARN" "Failed to set password (exit code: $chpasswd_exit)"
-            log "WARN" "User may need to set password on first boot"
+            log "WARN" "Failed to hash password"
         fi
     else
         log "INFO" "No password configured - user will use ETC default or must set on first boot"
