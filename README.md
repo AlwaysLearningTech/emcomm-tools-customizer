@@ -119,10 +119,10 @@ sudo ./build-etc-iso.sh -r tag -t emcomm-tools-os-community-20251113-r5-build17
 # Minimal build (smaller ISO, no embedded cache files)
 sudo ./build-etc-iso.sh -r stable -m
 
-# Dry run (show what would happen without making changes)
-./build-etc-iso.sh -d
+# Debug mode (show detailed DEBUG log messages)
+sudo ./build-etc-iso.sh -r stable -d
 
-# Verbose mode for debugging
+# Verbose mode for maximum debugging (bash -x)
 sudo ./build-etc-iso.sh -r stable -v
 ```
 
@@ -134,9 +134,8 @@ sudo ./build-etc-iso.sh -r stable -v
 | `-t <tag>` | Specific tag name (required with `-r tag`) |
 | `-l` | List available releases and tags |
 | `-m` | Minimal build (exclude cache files, saves ~4GB) |
-| `-d` | Dry-run mode |
-| `-v` | Verbose mode |
-| `-D` | Debug mode (show DEBUG log messages) |
+| `-d` | Debug mode (show DEBUG log messages) |
+| `-v` | Verbose mode (bash -x tracing) |
 | `-h` | Show help |
 
 ### Release Modes

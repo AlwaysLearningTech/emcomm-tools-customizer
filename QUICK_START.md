@@ -61,10 +61,16 @@ cp output/*.iso /media/$USER/Ventoy/
 sync
 ```
 
-## Dry Run
+## Debug Mode
 
-Preview what would happen without making changes:
+Enable debug logging to see detailed output:
 
 ```bash
-./build-etc-iso.sh -d
+sudo ./build-etc-iso.sh -r stable -d
+```
+
+For maximum verbosity (bash tracing):
+
+```bash
+sudo ./build-etc-iso.sh -r stable -d -v
 ```

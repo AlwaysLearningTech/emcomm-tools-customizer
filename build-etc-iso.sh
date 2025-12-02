@@ -7,8 +7,9 @@
 #   -r MODE   Release mode: stable, latest, or tag (default: latest)
 #   -t TAG    Specify release tag (required when -r tag)
 #   -l        List available tags from GitHub and exit
-#   -d        Dry-run mode (show what would be done)
+#   -d        Debug mode (show DEBUG log messages)
 #   -v        Verbose mode (enable set -x)
+#   -m        Minimal build (omit cache files from ISO)
 #   -h        Show this help message
 # Author: KD7DGF
 # Date: 2025-11-29
@@ -40,7 +41,6 @@ OUTPUT_DIR="${SCRIPT_DIR}/output"         # Generated ISOs
 WORK_DIR="${SCRIPT_DIR}/.work"            # Temporary build directory (cleaned each build)
 
 # Build state
-DRY_RUN=0
 RELEASE_MODE="latest"
 SPECIFIED_TAG=""
 MINIMAL_BUILD=0                           # When 1, omit cache files from ISO to reduce size
@@ -108,10 +108,9 @@ RELEASE OPTIONS:
     -l        List available tags and releases, then exit
 
 BUILD OPTIONS:
-    -d        Dry-run mode (show what would be done without making changes)
+    -d        Debug mode (show DEBUG log messages on console)
     -m        Minimal build (omit cache files from ISO to reduce size)
     -v        Verbose mode (enable bash -x debugging)
-    -D        Debug mode (show DEBUG log messages on console)
     -h        Show this help message
 
 DIRECTORY STRUCTURE:
@@ -333,12 +332,6 @@ download_ubuntu_iso() {
     log "INFO" "TIP: To skip download, place your Ubuntu ISO at:"
     log "INFO" "     $iso_path"
     
-    if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would download Ubuntu ISO"
-        UBUNTU_ISO_PATH="$iso_path"
-        return 0
-    fi
-    
     if ! wget -c -O "$iso_path" "$UBUNTU_ISO_URL"; then
         log "ERROR" "Failed to download Ubuntu ISO"
         return 1
@@ -363,12 +356,6 @@ download_etc_installer() {
     
     log "INFO" "Downloading ETC installer: $TARBALL_FILE"
     
-    if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would download ETC tarball"
-        ETC_TARBALL_PATH="$tarball_path"
-        return 0
-    fi
-    
     if ! wget -O "$tarball_path" "$TARBALL_URL"; then
         log "ERROR" "Failed to download ETC installer"
         return 1
@@ -390,12 +377,6 @@ extract_iso() {
     local squashfs_dir="${WORK_DIR}/squashfs"
     
     mkdir -p "$iso_extract_dir" "$squashfs_dir"
-    
-    if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would extract ISO to: $iso_extract_dir"
-        log "DRY-RUN" "Would extract squashfs to: $squashfs_dir"
-        return 0
-    fi
     
     # Extract ISO contents
     log "INFO" "Extracting ISO structure..."
@@ -465,11 +446,6 @@ install_etc_in_chroot() {
     log "INFO" ""
     log "INFO" "=== Installing EmComm Tools Community ==="
     log "INFO" "This will take 30-60 minutes depending on your internet connection..."
-    
-    if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would install ETC in chroot from: $ETC_TARBALL_PATH"
-        return 0
-    fi
     
     # Source secrets for map configuration
     # shellcheck source=/dev/null
@@ -693,7 +669,7 @@ WIKIPEDIASCRIPT
     log "DEBUG" "Cleaning up installer files..."
     rm -rf "$etc_install_dir"
     
-    if [ $exit_code -ne 0 ]; then
+    if [ "$exit_code" -ne 0 ]; then
         log "ERROR" "ETC installation failed with exit code: $exit_code"
         return 1
     fi
@@ -716,14 +692,14 @@ restore_user_backup() {
     # Auto-detect user backup (etc-user-backup-*.tar.gz)
     # Use the most recent one if multiple exist
     if compgen -G "${cache_dir}/etc-user-backup-*.tar.gz" > /dev/null 2>&1; then
-        user_backup=$(ls -t "${cache_dir}"/etc-user-backup-*.tar.gz 2>/dev/null | head -1)
+        user_backup=$(find "${cache_dir}" -maxdepth 1 -name 'etc-user-backup-*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
         log "DEBUG" "Found user backup: $user_backup"
     fi
     
     # Auto-detect wine backup (etc-wine-backup-*.tar.gz)
     # Use the most recent one if multiple exist
     if compgen -G "${cache_dir}/etc-wine-backup-*.tar.gz" > /dev/null 2>&1; then
-        wine_backup=$(ls -t "${cache_dir}"/etc-wine-backup-*.tar.gz 2>/dev/null | head -1)
+        wine_backup=$(find "${cache_dir}" -maxdepth 1 -name 'etc-wine-backup-*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
         log "DEBUG" "Found Wine backup: $wine_backup"
     fi
     
@@ -731,12 +707,6 @@ restore_user_backup() {
     if [ -z "$user_backup" ] && [ -z "$wine_backup" ]; then
         log "DEBUG" "No backup files found in ${cache_dir}/"
         log "DEBUG" "To restore settings, place etc-user-backup-*.tar.gz or etc-wine-backup-*.tar.gz in cache/"
-        return 0
-    fi
-    
-    if [ $DRY_RUN -eq 1 ]; then
-        [ -n "$user_backup" ] && log "DRY-RUN" "Would restore user backup: $user_backup"
-        [ -n "$wine_backup" ] && log "DRY-RUN" "Would restore Wine backup: $wine_backup"
         return 0
     fi
     
@@ -769,13 +739,13 @@ restore_user_backup() {
         log "SUCCESS" "User backup restored to /etc/skel"
         log "DEBUG" "Restored files:"
         find "$skel_dir/.config/emcomm-tools" -type f 2>/dev/null | head -10 | while read -r f; do
-            log "DEBUG" "  ${f#$skel_dir}"
+            log "DEBUG" "  ${f#"$skel_dir"}"
         done
         find "$skel_dir/.local/share/emcomm-tools" -type f 2>/dev/null | head -10 | while read -r f; do
-            log "DEBUG" "  ${f#$skel_dir}"
+            log "DEBUG" "  ${f#"$skel_dir"}"
         done
         find "$skel_dir/.local/share/pat" -type f 2>/dev/null | head -10 | while read -r f; do
-            log "DEBUG" "  ${f#$skel_dir}"
+            log "DEBUG" "  ${f#"$skel_dir"}"
         done
     fi
     
@@ -828,11 +798,6 @@ customize_hostname() {
     local callsign="${CALLSIGN:-N0CALL}"
     local machine_name="${MACHINE_NAME:-ETC-${callsign}}"
     log "DEBUG" "CALLSIGN=$callsign, MACHINE_NAME=$machine_name"
-    
-    if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would set hostname to: $machine_name"
-        return 0
-    fi
     
     # Set hostname
     local hostname_file="${SQUASHFS_DIR}/etc/hostname"
@@ -894,12 +859,6 @@ customize_wifi() {
             fi
             if [[ -z "$password" ]]; then
                 log "WARN" "No password for $ssid, skipping"
-                continue
-            fi
-            
-            if [ $DRY_RUN -eq 1 ]; then
-                log "DRY-RUN" "Would configure WiFi: $ssid"
-                wifi_count=$((wifi_count + 1))
                 continue
             fi
             
@@ -968,11 +927,6 @@ customize_desktop() {
     local disable_auto_bright="${DISABLE_AUTO_BRIGHTNESS:-yes}"
     
     log "DEBUG" "Desktop config: color_scheme=$color_scheme, scaling=$scaling"
-    
-    if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would configure: $color_scheme mode, ${scaling}x scaling"
-        return 0
-    fi
     
     # GNOME dconf uses a binary database, not plain text files in user.d
     # To set system-wide defaults, we use:
@@ -1080,12 +1034,6 @@ customize_aprs() {
     
     if [[ "$callsign" == "N0CALL" ]]; then
         log "WARN" "APRS not configured - callsign is N0CALL"
-        return 0
-    fi
-    
-    if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would pre-configure user.json for: ${callsign}"
-        log "DRY-RUN" "Would modify ETC direwolf templates with iGate/beacon settings"
         return 0
     fi
     
@@ -1230,15 +1178,6 @@ customize_user_and_autologin() {
     log "DEBUG" "User config: fullname='$fullname', username='$username'"
     log "DEBUG" "Autologin: $enable_autologin, password_set: $([ -n "$password" ] && echo 'yes' || echo 'no')"
     
-    if [ $DRY_RUN -eq 1 ]; then
-        if [ "$enable_autologin" = "yes" ]; then
-            log "DRY-RUN" "Would configure autologin for: $username"
-        else
-            log "DRY-RUN" "Would configure password login for: $username"
-        fi
-        return 0
-    fi
-    
     # Only configure autologin if explicitly enabled
     if [ "$enable_autologin" = "yes" ]; then
         local lightdm_dir="${SQUASHFS_DIR}/etc/lightdm/lightdm.conf.d"
@@ -1333,12 +1272,6 @@ customize_vara_license() {
     
     if [ -z "$vara_fm_key" ] && [ -z "$vara_hf_key" ]; then
         log "INFO" "No VARA license keys configured, skipping"
-        return 0
-    fi
-    
-    if [ $DRY_RUN -eq 1 ]; then
-        [ -n "$vara_fm_key" ] && log "DRY-RUN" "Would create VARA FM license .reg file"
-        [ -n "$vara_hf_key" ] && log "DRY-RUN" "Would create VARA HF license .reg file"
         return 0
     fi
     
@@ -1462,11 +1395,6 @@ customize_git_config() {
         return 0
     fi
     
-    if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would configure Git for: $git_name <$git_email>"
-        return 0
-    fi
-    
     local gitconfig="${SQUASHFS_DIR}/etc/skel/.gitconfig"
     log "DEBUG" "Writing git config: $gitconfig"
     cat > "$gitconfig" <<EOF
@@ -1500,11 +1428,6 @@ customize_power() {
     
     log "DEBUG" "Power settings: lid_ac=$lid_close_ac, lid_battery=$lid_close_battery, button=$power_button"
     log "DEBUG" "Idle settings: ac=$idle_ac, battery=$idle_battery, timeout=$idle_timeout"
-    
-    if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would configure power management via dconf"
-        return 0
-    fi
     
     # Power management uses dconf - add to the same system-wide database
     # as the desktop settings (created by customize_desktop)
@@ -1558,12 +1481,6 @@ customize_pat() {
     
     if [[ "${emcomm_alias,,}" != "yes" ]]; then
         log "INFO" "Pat emcomm alias not enabled, skipping"
-        return 0
-    fi
-    
-    if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would configure Pat emcomm alias"
-        [ -n "$emcomm_gateway" ] && log "DRY-RUN" "  Gateway: $emcomm_gateway"
         return 0
     fi
     
@@ -1676,12 +1593,6 @@ setup_wikipedia_tools() {
         # It's a string (legacy pipe-separated format)
         custom_articles="$WIKIPEDIA_ARTICLES"
         log "DEBUG" "Wikipedia articles from string: $custom_articles"
-    fi
-    
-    if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would copy Wikipedia ZIM creator script to ~/add-ons/wikipedia/"
-        [ -n "$custom_articles" ] && log "DRY-RUN" "Would configure custom articles: $custom_articles"
-        return 0
     fi
     
     # Create add-ons directory for Wikipedia tools
@@ -1805,11 +1716,6 @@ embed_cache_files() {
     
     log "INFO" "Embedding cache files for future builds..."
     
-    if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would embed cache files from: $CACHE_DIR"
-        return 0
-    fi
-    
     # Create cache directory in /opt for the installed system
     local target_cache="${SQUASHFS_DIR}/opt/emcomm-customizer-cache"
     log "DEBUG" "Creating target cache dir: $target_cache"
@@ -1868,11 +1774,6 @@ create_build_manifest() {
     local manifest_file="${SQUASHFS_DIR}/etc/emcomm-customizations-manifest.txt"
     log "DEBUG" "Manifest file: $manifest_file"
     
-    if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would create manifest at: $manifest_file"
-        return 0
-    fi
-    
     log "DEBUG" "Writing build manifest..."
     cat > "$manifest_file" <<EOF
 EmComm Tools Community - KD7DGF Customizations
@@ -1915,11 +1816,6 @@ EOF
 rebuild_squashfs() {
     log "INFO" "Rebuilding squashfs filesystem (this takes 10-20 minutes)..."
     
-    if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would rebuild squashfs"
-        return 0
-    fi
-    
     local new_squashfs="${WORK_DIR}/filesystem.squashfs.new"
     log "DEBUG" "Creating new squashfs: $new_squashfs"
     log "DEBUG" "Source directory: $SQUASHFS_DIR"
@@ -1951,11 +1847,6 @@ rebuild_iso() {
     
     log "DEBUG" "Output directory: $OUTPUT_DIR"
     mkdir -p "$OUTPUT_DIR"
-    
-    if [ $DRY_RUN -eq 1 ]; then
-        log "DRY-RUN" "Would create ISO: $OUTPUT_ISO"
-        return 0
-    fi
     
     # Calculate MD5 sums
     log "INFO" "Calculating checksums..."
@@ -2170,7 +2061,7 @@ main() {
 # Parse Arguments
 # ============================================================================
 
-while getopts "r:t:ldmvDh" opt; do
+while getopts "r:t:ldmvh" opt; do
     case $opt in
         r)
             RELEASE_MODE="$OPTARG"
@@ -2189,7 +2080,8 @@ while getopts "r:t:ldmvDh" opt; do
             exit 0
             ;;
         d)
-            DRY_RUN=1
+            DEBUG_MODE=1
+            log "INFO" "Debug mode enabled - showing DEBUG messages"
             ;;
         m)
             MINIMAL_BUILD=1
@@ -2197,10 +2089,6 @@ while getopts "r:t:ldmvDh" opt; do
             ;;
         v)
             set -x
-            ;;
-        D)
-            DEBUG_MODE=1
-            log "INFO" "Debug mode enabled - showing DEBUG messages"
             ;;
         h)
             usage

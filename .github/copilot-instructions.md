@@ -95,9 +95,9 @@ emcomm-tools-customizer/
 | `-r stable\|latest\|tag` | Release mode selection |
 | `-t <tag>` | Specific tag name (with `-r tag`) |
 | `-l` | List available releases and tags |
-| `-d` | Dry-run mode (preview changes) |
+| `-d` | Debug mode (show DEBUG log messages) |
 | `-m` | Minimal build (skip cache embedding) |
-| `-v` | Verbose mode (bash debugging) |
+| `-v` | Verbose mode (bash -x tracing) |
 | `-h` | Show help |
 
 ## User Account Configuration
