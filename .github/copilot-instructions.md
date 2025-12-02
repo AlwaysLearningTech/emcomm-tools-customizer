@@ -69,7 +69,7 @@ Automated customization of EmComm Tools Community (ETC) ISO images.
 emcomm-tools-customizer/
 ├── README.md                    # Main documentation
 ├── QUICK_START.md               # Quick reference
-├── TTPCustomization.md          # AI/Copilot learning guide (not build-specific)
+├── COPILOT_LEARNING_GUIDE.md    # AI/Copilot learning guide (not build-specific)
 ├── build-etc-iso.sh             # Main build script (xorriso/squashfs, fully automated)
 ├── secrets.env.template         # Config template
 ├── secrets.env                  # User config (gitignored)
