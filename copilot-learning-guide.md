@@ -6,6 +6,52 @@
 
 ---
 
+## Realistic Expectations: AI Is Powerful, Not Magic
+
+Before diving in, let's set honest expectations about what AI-assisted development looks like in practice.
+
+### This Project's Real Numbers
+
+| Metric | Value |
+|--------|-------|
+| **Total development time** | ~40-50 hours over 3.5 months |
+| **Git commits** | 63 |
+| **Lines of bash code** | ~2,100 |
+| **Lines of documentation** | ~1,500 |
+| **Major rewrites** | 3 (Cubic GUI → xorriso, dry-run removal, template sync) |
+
+### What AI Does Well
+
+- **Generates working code quickly** — First drafts appear in seconds
+- **Explains unfamiliar concepts** — Ask "why" and get clear answers
+- **Catches errors you'd miss** — ShellCheck + Copilot finds bugs fast
+- **Handles boilerplate** — Repetitive patterns are effortless
+- **Remembers context** — No need to re-explain your project each session
+
+### What AI Doesn't Do
+
+- **Understand your actual hardware** — It doesn't know your radio setup
+- **Test in your environment** — You still run and debug
+- **Make architectural decisions** — You choose the approach
+- **Know upstream project internals** — ETC's template system required research
+- **Guarantee correctness** — AI confidently generates wrong code sometimes
+
+### The Real Workflow
+
+1. **AI generates code** (5 minutes)
+2. **You test it** (10 minutes)  
+3. **Something fails** (always)
+4. **You investigate** (20 minutes)
+5. **AI helps fix it** (5 minutes)
+6. **Repeat steps 2-5** (hours)
+7. **Finally works** (satisfaction!)
+
+**The honest truth:** AI accelerates development 3-5x, but doesn't eliminate the learning curve. This project would have taken 150+ hours without Copilot, but it still took 40-50 hours *with* it.
+
+If someone tells you AI writes perfect code on the first try, they're either lying or building something trivial.
+
+---
+
 ## What This Guide Is About
 
 This is NOT documentation for the emcomm-tools-customizer project—see
