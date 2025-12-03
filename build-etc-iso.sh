@@ -392,7 +392,14 @@ extract_iso() {
     fi
     
     log "INFO" "Extracting squashfs filesystem (this takes several minutes)..."
-    unsquashfs -d "$squashfs_dir" -f "$squashfs_file"
+    log "INFO" "  Progress will be shown below:"
+    unsquashfs -d "$squashfs_dir" -f "$squashfs_file" | while IFS= read -r line; do
+        # Show progress lines (unsquashfs outputs percentage)
+        if [[ "$line" =~ ^[0-9] ]] || [[ "$line" =~ created ]]; then
+            printf "\r  %s" "$line"
+        fi
+    done
+    echo ""  # newline after progress
     
     # Store paths for later
     ISO_EXTRACT_DIR="$iso_extract_dir"
@@ -1819,18 +1826,26 @@ EOF
 
 rebuild_squashfs() {
     log "INFO" "Rebuilding squashfs filesystem (this takes 10-20 minutes)..."
+    log "INFO" "  Progress will be shown below:"
     
     local new_squashfs="${WORK_DIR}/filesystem.squashfs.new"
     log "DEBUG" "Creating new squashfs: $new_squashfs"
     log "DEBUG" "Source directory: $SQUASHFS_DIR"
     log "DEBUG" "Compression: xz, block size: 1M"
     
-    # Create new squashfs with compression
+    # Create new squashfs with compression - show progress
     mksquashfs "$SQUASHFS_DIR" "$new_squashfs" \
         -comp xz \
         -b 1M \
         -Xbcj x86 \
-        -noappend
+        -noappend \
+        -progress 2>&1 | while IFS= read -r line; do
+        # mksquashfs outputs progress on stderr
+        if [[ "$line" =~ ^\[ ]] || [[ "$line" =~ % ]]; then
+            printf "\r  %s" "$line"
+        fi
+    done
+    echo ""  # newline after progress
     log "DEBUG" "mksquashfs completed"
     
     # Replace original squashfs
