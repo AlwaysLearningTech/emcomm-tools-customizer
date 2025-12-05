@@ -18,6 +18,9 @@
 
 set -euo pipefail
 
+# Error trap to help diagnose where script fails
+trap 'echo "[ERROR] Script failed at line $LINENO with exit code $?. Command: $BASH_COMMAND" | tee -a "${LOG_FILE:-/tmp/build-etc-iso-error.log}"' ERR
+
 # ============================================================================
 # Configuration
 # ============================================================================
@@ -70,8 +73,9 @@ log() {
     local timestamp
     timestamp=$(date +'%Y-%m-%d %H:%M:%S')
     
-    # Always log to file (including DEBUG)
+    # Always log to file (including DEBUG) - use sync to flush
     echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
+    sync  # Flush to disk so we don't lose log entries on crash
     
     # Log to console with color (DEBUG only shown if DEBUG_MODE=1)
     case "$level" in
@@ -252,7 +256,9 @@ get_release_info() {
     log "SUCCESS" "Release: $RELEASE_NAME"
     log "INFO" "  Tag: $RELEASE_TAG"
     log "INFO" "  Version: $VERSION"
-    [ -n "$BUILD_NUMBER" ] && log "INFO" "  Build: $BUILD_NUMBER"
+    if [ -n "$BUILD_NUMBER" ]; then
+        log "INFO" "  Build: $BUILD_NUMBER"
+    fi
     log "INFO" "  Date: $DATE_VERSION"
     
     return 0
@@ -1580,7 +1586,9 @@ Example connect_aliases in config.json:
 EOF
 
     log "SUCCESS" "Pat emcomm alias configured"
-    [ -n "$emcomm_gateway" ] && log "INFO" "  Default gateway: $emcomm_gateway"
+    if [ -n "$emcomm_gateway" ]; then
+        log "INFO" "  Default gateway: $emcomm_gateway"
+    fi
 }
 
 setup_wikipedia_tools() {
