@@ -10,6 +10,13 @@
 7. **BUILD MACHINE = TARGET MACHINE** - User rebuilds on same hardware. Cache and logs should persist in ISO.
 8. **LOOK AT ACTUAL FILES FIRST** - Verify current state before changes.
 9. **UPDATE DOCUMENTATION IN-PLACE** - Modify existing README.md directly.
+10. **COMMIT BEFORE BUILDS** - ALWAYS remind user to commit and sync changes before starting a build. After build completes, user may overwrite OS with new ISO before syncing!
+
+## Troubleshooting Priority
+- **Priority is a working build** - If a non-core component breaks the build, ask whether to attempt repair or defer to next revision.
+- **Estimate fix probability** - When prompting about repair vs defer, estimate likelihood of first-time fix success so we don't skip easy fixes.
+- **Core components**: hostname, WiFi, user account, desktop settings, APRS/direwolf, squashfs/ISO creation
+- **Deferrable**: Wine backup restore, Pat aliases, Wikipedia tools, cache embedding
 
 ## ETC Architecture (CRITICAL - UNDERSTAND THIS)
 
