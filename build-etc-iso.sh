@@ -1882,11 +1882,13 @@ rebuild_iso() {
     log "DEBUG" "Checksums calculated"
     
     # Rebuild ISO with xorriso (Ventoy handles the booting)
+    # Using -iso-level 3 to allow files over 4GB (embedded cache makes squashfs large)
     log "INFO" "Creating ISO image..."
     log "DEBUG" "Output ISO: $OUTPUT_ISO"
     log "DEBUG" "ISO label: ETC_${RELEASE_NUMBER^^}_CUSTOM"
     xorriso -as mkisofs \
         -r -V "ETC_${RELEASE_NUMBER^^}_CUSTOM" \
+        -iso-level 3 \
         -J -joliet-long \
         -l -cache-inodes \
         -c boot.catalog \
@@ -1908,6 +1910,7 @@ rebuild_iso() {
         log "WARN" "Standard method failed, trying simple ISO creation..."
         xorriso -as mkisofs \
             -r -V "ETC_${RELEASE_NUMBER^^}_CUSTOM" \
+            -iso-level 3 \
             -J -joliet-long \
             -l -cache-inodes \
             -o "$OUTPUT_ISO" \
