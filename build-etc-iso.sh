@@ -47,6 +47,7 @@ WORK_DIR="${SCRIPT_DIR}/.work"            # Temporary build directory (cleaned e
 RELEASE_MODE="latest"
 SPECIFIED_TAG=""
 MINIMAL_BUILD=0                           # When 1, omit cache files from ISO to reduce size
+KEEP_WORK=0                               # When 1, preserve .work directory for iterative debugging
 
 # Colors for output
 RED='\033[0;31m'
@@ -113,6 +114,7 @@ RELEASE OPTIONS:
 
 BUILD OPTIONS:
     -d        Debug mode (show DEBUG log messages on console)
+    -k        Keep work directory after build (for iterative debugging)
     -m        Minimal build (omit cache files from ISO to reduce size)
     -v        Verbose mode (enable bash -x debugging)
     -h        Show this help message
@@ -1935,6 +1937,12 @@ rebuild_iso() {
 # ============================================================================
 
 cleanup_work_dir() {
+    if [ "$KEEP_WORK" -eq 1 ]; then
+        log "INFO" "Keeping work directory for debugging (-k flag)"
+        log "INFO" "  Location: $WORK_DIR"
+        log "INFO" "  To clean manually: sudo rm -rf $WORK_DIR"
+        return 0
+    fi
     if [ -d "$WORK_DIR" ]; then
         log "INFO" "Cleaning up work directory..."
         rm -rf "$WORK_DIR"
@@ -2091,7 +2099,7 @@ main() {
 # Parse Arguments
 # ============================================================================
 
-while getopts "r:t:ldmvh" opt; do
+while getopts "r:t:ldkmvh" opt; do
     case $opt in
         r)
             RELEASE_MODE="$OPTARG"
@@ -2112,6 +2120,10 @@ while getopts "r:t:ldmvh" opt; do
         d)
             DEBUG_MODE=1
             log "INFO" "Debug mode enabled - showing DEBUG messages"
+            ;;
+        k)
+            KEEP_WORK=1
+            log "INFO" "Keep mode - .work directory will be preserved for debugging"
             ;;
         m)
             MINIMAL_BUILD=1
