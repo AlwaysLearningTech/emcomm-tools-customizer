@@ -473,6 +473,23 @@ install_etc_in_chroot() {
     mkdir -p "$etc_install_dir"
     tar -xzf "$ETC_TARBALL_PATH" -C "$etc_install_dir" --strip-components=1
     
+    # Verify extraction - GitHub tarballs have a nested structure
+    # After --strip-components=1, we should have scripts/install.sh
+    if [ ! -d "${etc_install_dir}/scripts" ]; then
+        log "ERROR" "ETC tarball extraction failed - scripts/ directory not found"
+        log "DEBUG" "Contents of $etc_install_dir:"
+        ls -la "$etc_install_dir" 2>&1 | while read -r line; do log "DEBUG" "  $line"; done
+        # Try to find install.sh anywhere
+        local found_install
+        found_install=$(find "$etc_install_dir" -name "install.sh" -type f 2>/dev/null | head -1)
+        if [ -n "$found_install" ]; then
+            log "ERROR" "Found install.sh at: $found_install"
+            log "ERROR" "GitHub tarball may have different structure - please report this issue"
+        fi
+        return 1
+    fi
+    log "DEBUG" "Tarball extracted successfully, scripts/ directory found"
+    
     # Set up chroot environment
     setup_chroot_mounts
     
@@ -630,6 +647,22 @@ WIKIPEDIASCRIPT
         log "INFO" "WIKIPEDIA_SECTIONS not set - original dialog will be shown (if ET_EXPERT is set)"
     fi
     
+    # Verify the ETC installer was extracted correctly
+    if [ ! -f "${etc_install_dir}/scripts/install.sh" ]; then
+        log "ERROR" "ETC install.sh not found at expected location!"
+        log "ERROR" "Expected: ${etc_install_dir}/scripts/install.sh"
+        log "DEBUG" "Contents of etc_install_dir:"
+        ls -la "${etc_install_dir}" 2>&1 | while read -r line; do log "DEBUG" "  $line"; done
+        if [ -d "${etc_install_dir}/scripts" ]; then
+            log "DEBUG" "Contents of scripts/:"
+            ls -la "${etc_install_dir}/scripts" 2>&1 | while read -r line; do log "DEBUG" "  $line"; done
+        fi
+        cleanup_chroot_mounts
+        trap - EXIT
+        return 1
+    fi
+    log "DEBUG" "Verified install.sh exists at: ${etc_install_dir}/scripts/install.sh"
+    
     log "INFO" "Running ETC installer (this takes a while)..."
     log "INFO" "NOTE: If map variables are not configured, dialog prompts will appear."
     log "INFO" "      Configure OSM_MAP_STATE, ET_MAP_REGION in secrets.env for automated builds."
@@ -649,32 +682,48 @@ WIKIPEDIASCRIPT
     # Pass ET_EXPERT through if set (controls Wikipedia download in ETC)
     local et_expert_val="${ET_EXPERT:-}"
     
+    # Use a temp file to capture exit code since pipelines lose it
+    local exit_code_file="${WORK_DIR}/etc_install_exit_code"
+    
     if [[ $needs_interactive -eq 1 ]]; then
         log "INFO" "Some map variables not configured - dialogs will be shown interactively"
         # Run with terminal attached so dialog can work
-        chroot "${SQUASHFS_DIR}" /bin/bash -c "
-            export DEBIAN_FRONTEND=noninteractive
-            export NEEDRESTART_MODE=a
-            export ET_EXPERT='${et_expert_val}'
-            cd /tmp/etc-installer/scripts
-            ./install.sh
-        " 2>&1 | tee -a "${LOG_FILE}" | while IFS= read -r line; do
-            echo "[ETC] $line"
-        done
+        # Use subshell to capture exit code properly
+        (
+            chroot "${SQUASHFS_DIR}" /bin/bash -c "
+                export DEBIAN_FRONTEND=noninteractive
+                export NEEDRESTART_MODE=a
+                export ET_EXPERT='${et_expert_val}'
+                cd /tmp/etc-installer/scripts
+                ./install.sh
+            " 2>&1 | tee -a "${LOG_FILE}" | while IFS= read -r line; do
+                echo "[ETC] $line"
+            done
+            echo "${PIPESTATUS[0]}" > "$exit_code_file"
+        )
     else
         log "INFO" "All map variables configured - running fully automated"
-        chroot "${SQUASHFS_DIR}" /bin/bash -c "
-            export DEBIAN_FRONTEND=noninteractive
-            export NEEDRESTART_MODE=a
-            export ET_EXPERT='${et_expert_val}'
-            cd /tmp/etc-installer/scripts
-            ./install.sh
-        " </dev/null 2>&1 | while IFS= read -r line; do
-            log "ETC" "$line"
-        done
+        # Use subshell to capture exit code properly
+        (
+            chroot "${SQUASHFS_DIR}" /bin/bash -c "
+                export DEBIAN_FRONTEND=noninteractive
+                export NEEDRESTART_MODE=a
+                export ET_EXPERT='${et_expert_val}'
+                cd /tmp/etc-installer/scripts
+                ./install.sh
+            " </dev/null 2>&1 | tee -a "${LOG_FILE}" | while IFS= read -r line; do
+                log "ETC" "$line"
+            done
+            echo "${PIPESTATUS[0]}" > "$exit_code_file"
+        )
     fi
     
-    local exit_code=${PIPESTATUS[0]}
+    # Read the exit code from the temp file
+    local exit_code=1  # Default to failure
+    if [ -f "$exit_code_file" ]; then
+        exit_code=$(cat "$exit_code_file")
+        rm -f "$exit_code_file"
+    fi
     
     # Clean up
     cleanup_chroot_mounts
@@ -689,7 +738,39 @@ WIKIPEDIASCRIPT
         return 1
     fi
     
-    log "SUCCESS" "EmComm Tools Community installed successfully"
+    # Verify ETC actually installed key components
+    log "INFO" "Verifying ETC installation..."
+    local verification_failed=0
+    
+    # Check for ETC marker files/directories
+    if [ ! -d "${SQUASHFS_DIR}/opt/emcomm-tools" ]; then
+        log "ERROR" "ETC installation verification failed: /opt/emcomm-tools not found"
+        verification_failed=1
+    fi
+    
+    if [ ! -f "${SQUASHFS_DIR}/usr/local/bin/et-user" ]; then
+        log "ERROR" "ETC installation verification failed: et-user not found"
+        verification_failed=1
+    fi
+    
+    # Check for key ham radio tools
+    local expected_tools=("direwolf" "pat")
+    for tool in "${expected_tools[@]}"; do
+        if ! chroot "${SQUASHFS_DIR}" /bin/bash -c "command -v $tool" &>/dev/null; then
+            log "WARN" "Expected tool not found in chroot: $tool"
+            # Don't fail on individual tools, just warn
+        else
+            log "DEBUG" "Verified tool installed: $tool"
+        fi
+    done
+    
+    if [ "$verification_failed" -eq 1 ]; then
+        log "ERROR" "ETC installation verification failed - key components missing"
+        log "ERROR" "The resulting ISO would be a base Ubuntu install, not ETC!"
+        return 1
+    fi
+    
+    log "SUCCESS" "EmComm Tools Community installed and verified successfully"
     return 0
 }
 

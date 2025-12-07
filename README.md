@@ -487,6 +487,58 @@ sync
 
 ## Troubleshooting
 
+### ISO boots as vanilla Ubuntu (not ETC)
+
+**Symptom**: The built ISO boots into a standard Ubuntu installer asking you to create a user, with none of the ETC tools installed.
+
+**Cause**: The ETC installer (install.sh) failed silently during the chroot phase.
+
+**Fixes** (as of v1.1.0):
+- Build now verifies the ETC tarball extraction was successful
+- Build now verifies ETC installation by checking for `/opt/emcomm-tools` and `et-user`
+- Build now properly captures the chroot exit code
+
+If you still encounter this, run with `-d` flag for debug output and check the log file in `logs/`.
+
+### Screen brightness broken after install (Windows and Linux)
+
+**Symptom**: After installing the ISO on a dual-boot system (especially Panasonic Toughbook FZ-G1), screen brightness controls no longer work in either Windows or Ubuntu.
+
+**Causes**: The Intel graphics backlight controller can get confused by ACPI/UEFI state changes during OS installation.
+
+**Fixes**:
+
+1. **Try BIOS reset**: Power off completely, enter BIOS setup, and load "Setup Defaults" then save and exit.
+
+2. **Windows Device Manager**: Device Manager → Display Adapters → Intel HD Graphics → Update/Rollback Driver
+
+3. **Ubuntu kernel parameters**: Edit `/etc/default/grub`, find the `GRUB_CMDLINE_LINUX_DEFAULT` line and add one of:
+   ```
+   acpi_backlight=vendor
+   acpi_backlight=video
+   acpi_backlight=native
+   ```
+   Then run `sudo update-grub` and reboot.
+
+4. **Intel xbacklight**: Install `xbacklight` and use it directly:
+   ```bash
+   sudo apt install xbacklight
+   xbacklight -set 50  # Set to 50%
+   ```
+
+5. **Direct sysfs control** (last resort):
+   ```bash
+   # Find the backlight device
+   ls /sys/class/backlight/
+   # Typically intel_backlight or acpi_video0
+   
+   # Read max brightness
+   cat /sys/class/backlight/intel_backlight/max_brightness
+   
+   # Set brightness (example: 500)
+   echo 500 | sudo tee /sys/class/backlight/intel_backlight/brightness
+   ```
+
 ### "Permission denied" errors
 
 Run with `sudo`:
@@ -522,8 +574,10 @@ wget -O cache/ubuntu-22.10-desktop-amd64.iso \
 
 1. **Download**: Fetches Ubuntu 22.10 ISO and ETC installer tarball (cached in `cache/`)
 2. **Extract**: Uses xorriso to extract ISO, unsquashfs for filesystem
-3. **Customize**: Modifies `/etc/skel/` and system configs in the extracted filesystem
-4. **Rebuild**: Creates new squashfs and ISO with xorriso
+3. **Install ETC**: Runs ETC's install.sh in chroot to install all ham radio tools
+4. **Verify**: Confirms ETC installed correctly by checking for key files
+5. **Customize**: Modifies `/etc/skel/` and system configs with your settings
+6. **Rebuild**: Creates new squashfs and ISO with xorriso
 
 All customizations go into `/etc/skel/` so they apply to new users automatically.
 
