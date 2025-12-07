@@ -400,7 +400,6 @@ extract_iso() {
     fi
     
     log "INFO" "Extracting squashfs filesystem (this takes several minutes)..."
-    log "INFO" "  Progress will be shown below:"
     unsquashfs -d "$squashfs_dir" -f "$squashfs_file" | while IFS= read -r line; do
         # Show progress lines (unsquashfs outputs percentage)
         if [[ "$line" =~ ^[0-9] ]] || [[ "$line" =~ created ]]; then
@@ -1920,7 +1919,6 @@ EOF
 
 rebuild_squashfs() {
     log "INFO" "Rebuilding squashfs filesystem (this takes 10-20 minutes)..."
-    log "INFO" "  Progress will be shown below:"
     
     local new_squashfs="${WORK_DIR}/filesystem.squashfs.new"
     log "DEBUG" "Creating new squashfs: $new_squashfs"
