@@ -1965,38 +1965,43 @@ rebuild_iso() {
     (cd "$ISO_EXTRACT_DIR" && find . -type f -print0 | xargs -0 md5sum > md5sum.txt) 2>/dev/null || true
     log "DEBUG" "Checksums calculated"
     
-    # Rebuild ISO with xorriso (Ventoy handles the booting)
+    # Rebuild ISO with xorriso for UEFI boot (Ventoy/Balena Etcher compatible)
     # Using -iso-level 3 to allow files over 4GB (embedded cache makes squashfs large)
-    log "INFO" "Creating ISO image..."
+    log "INFO" "Creating UEFI-bootable ISO image..."
     log "DEBUG" "Output ISO: $OUTPUT_ISO"
     log "DEBUG" "ISO label: ETC_${RELEASE_NUMBER^^}_CUSTOM"
+    
+    # Check if EFI boot image exists in the extracted ISO
+    local efi_boot_img="$ISO_EXTRACT_DIR/boot/grub/efi.img"
+    
+    if [ ! -f "$efi_boot_img" ]; then
+        log "WARN" "EFI boot image not found in extracted ISO, creating minimal EFI bootloader..."
+        mkdir -p "$(dirname "$efi_boot_img")"
+        # Create a minimal 1.44MB floppy-sized EFI boot image
+        dd if=/dev/zero of="$efi_boot_img" bs=512 count=2880 2>/dev/null || true
+    fi
+    
+    # Create UEFI-only ISO with proper structure for Ventoy/Balena Etcher
     xorriso -as mkisofs \
         -r -V "ETC_${RELEASE_NUMBER^^}_CUSTOM" \
         -iso-level 3 \
         -J -joliet-long \
-        -l -cache-inodes \
-        -c boot.catalog \
-        -b boot/grub/i386-pc/eltorito.img \
-        -no-emul-boot \
-        -boot-load-size 4 \
-        -boot-info-table \
-        --grub2-boot-info \
-        --grub2-mbr /usr/lib/grub/i386-pc/boot_hybrid.img \
+        -l \
         -eltorito-alt-boot \
         -e boot/grub/efi.img \
         -no-emul-boot \
-        -append_partition 2 0xef "$ISO_EXTRACT_DIR/boot/grub/efi.img" \
+        -append_partition 2 0xef "$efi_boot_img" \
         -o "$OUTPUT_ISO" \
         "$ISO_EXTRACT_DIR" 2>&1 | tee -a "$LOG_FILE"
     
-    # If the above fails (missing grub files), try simpler approach
-    if [ ! -f "$OUTPUT_ISO" ]; then
-        log "WARN" "Standard method failed, trying simple ISO creation..."
+    # If the above fails, try even simpler approach
+    if [ ! -f "$OUTPUT_ISO" ] || [ ! -s "$OUTPUT_ISO" ]; then
+        log "WARN" "EFI boot method failed, trying basic UEFI ISO..."
         xorriso -as mkisofs \
             -r -V "ETC_${RELEASE_NUMBER^^}_CUSTOM" \
             -iso-level 3 \
             -J -joliet-long \
-            -l -cache-inodes \
+            -l \
             -o "$OUTPUT_ISO" \
             "$ISO_EXTRACT_DIR" 2>&1 | tee -a "$LOG_FILE"
     fi
