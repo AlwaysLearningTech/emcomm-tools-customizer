@@ -19,9 +19,53 @@
 - **Core components**: hostname, WiFi, user account, desktop settings, APRS/direwolf, squashfs/ISO creation
 - **Deferrable**: Wine backup restore, Pat aliases, Wikipedia tools, cache embedding
 
-## ETC Architecture (CRITICAL - UNDERSTAND THIS)
+## ETC: How It Actually Works
 
-### Runtime Config Generation
+### The Upstream Repository Structure
+The ETC repository (https://github.com/thetechprepper/emcomm-tools-os-community) is **NOT a binary distribution**. It contains:
+- **`overlay/`** - Files/scripts that modify base Ubuntu install (applied via `install.sh`)
+- **`src/et-portaudio/`** - Source for et-portaudio utility (compiled during build)
+- **`scripts/`** - Installation and helper scripts
+- **`tests/`** - Test cases
+
+The `install.sh` script runs INSIDE the squashfs chroot during ISO build to:
+1. Extract overlay files to the filesystem
+2. Compile tools from source (fldigi, direwolf, et-portaudio, etc.)
+3. Install ham radio packages and configurations
+4. Set up templates in `/opt/emcomm-tools/conf/template.d/`
+5. Create wrapper scripts in `/opt/emcomm-tools/bin/`
+
+### Release vs Latest Versioning
+- **Stable releases**: Only major versions are published as GitHub Releases (e.g., `emcomm-tools-os-community-20251128-r5-final-5.0.0`)
+  - Marked with release tags like `emcomm-tools-os-community-20250401-r4-final-4.0.0`
+  - Have release notes documenting new features
+- **Latest builds**: Between releases, ETC publishes pre-release builds as GitHub tags (e.g., `emcomm-tools-os-community-20251121-r5-final-5.0.0-pre-release.a`)
+  - These are NOT in the "Releases" section—they're in the "Tags" list
+  - Built and tagged automatically, may be unstable
+- **Build script selection**:
+  - `-r stable` downloads the latest official Release
+  - `-r latest` downloads the most recent Git tag (may include pre-releases)
+  - `-r tag -t emcomm-tools-os-community-20251121-r5-final-5.0.0-pre-release.a` pins a specific tag
+
+### Build Process: What Actually Happens
+1. **Download base Ubuntu 22.10 ISO** (cached in `./cache/`)
+2. **Download ETC tarball** from GitHub (GitHub's tarball_url points to the repository content at that tag/release)
+3. **Extract Ubuntu squashfs** and enter chroot
+4. **Extract ETC tarball** into `/tmp/etc-installer/` inside the chroot
+5. **Run `install.sh`** inside chroot (this compiles fldigi, direwolf, etc. from source inside the container)
+6. **Apply our customizations** (WiFi, hostname, desktop settings, APRS config, etc.)
+7. **Verify ETC installed** (check for marker directories like `/opt/emcomm-tools` and key tools like direwolf/pat)
+8. **Repack squashfs** into new ISO
+9. **Output ISO** to `./output/`
+
+### What `build-etc-iso.sh` Does
+- Uses xorriso to extract/repack ISOs
+- Uses squashfs-tools to extract/repack the filesystem
+- Mounts chroot with `/proc`, `/sys`, `/dev` for compilation
+- Caches Ubuntu ISO and ETC tarballs in `./cache/` for reuse
+- Logs all output to `./logs/build-etc-iso_TIMESTAMP.log`
+
+### ETC Architecture: Runtime Config Generation
 ETC generates configs at RUNTIME from templates, NOT at install time:
 - **User config**: `~/.config/emcomm-tools/user.json` (callsign, grid, winlinkPasswd)
 - **Templates**: `/opt/emcomm-tools/conf/template.d/` with `{{ET_CALLSIGN}}`, `{{ET_AUDIO_DEVICE}}` placeholders
