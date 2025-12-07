@@ -21,48 +21,85 @@
 
 ## ETC: How It Actually Works
 
+### Official Build Method (from https://community.emcommtools.com)
+The official ETC build process uses **Cubic** (GUI tool) to:
+1. Download Ubuntu 22.10 ISO
+2. Extract and mount the squashfs filesystem
+3. Enter a virtual chroot environment
+4. Download the ETC installer tarball: `wget https://github.com/thetechprepper/emcomm-tools-os-community/archive/refs/tags/emcomm-tools-os-community-20251128-r5-final-5.0.0.tar.gz`
+5. Extract the tarball: `tar -xzf emcomm-tools-os-community-*.tar.gz`
+6. Navigate to scripts directory: `cd emcomm-tools-os-community-*/scripts`
+7. Run `./install.sh` inside the chroot
+8. Optionally select offline maps (10-20 minutes per state map)
+9. Run post-install validation: `./run-test-suite.sh`
+10. Exit chroot
+11. Use Cubic to finalize and compress the ISO
+12. Flash the resulting ISO to USB
+
+### Our Automated Approach
+Instead of using Cubic GUI, `build-etc-iso.sh` automates the same steps using:
+- **xorriso** to extract/repack ISOs without GUI
+- **squashfs-tools** to work with squashfs filesystems
+- **chroot** to execute `install.sh` in an isolated environment
+- **dconf** for GNOME settings (instead of manual desktop config)
+
+The net result is identical: a customized ETC ISO with our WiFi, hostname, and APRS settings.
+
 ### The Upstream Repository Structure
-The ETC repository (https://github.com/thetechprepper/emcomm-tools-os-community) is **NOT a binary distribution**. It contains:
+The ETC repository (https://github.com/thetechprepper/emcomm-tools-os-community) contains:
 - **`overlay/`** - Files/scripts that modify base Ubuntu install (applied via `install.sh`)
 - **`src/et-portaudio/`** - Source for et-portaudio utility (compiled during build)
-- **`scripts/`** - Installation and helper scripts
-- **`tests/`** - Test cases
+- **`scripts/install.sh`** - Main installation script that runs in chroot
+- **`tests/`** - Test validation suite
+- **`RELEASES.md`** - Release notes
 
 The `install.sh` script runs INSIDE the squashfs chroot during ISO build to:
-1. Extract overlay files to the filesystem
-2. Compile tools from source (fldigi, direwolf, et-portaudio, etc.)
+1. Copy overlay files to the filesystem (e.g., `/etc/apt/sources.list`, startup scripts)
+2. Update apt and compile tools from source (fldigi, direwolf, hamlib, etc.)
 3. Install ham radio packages and configurations
 4. Set up templates in `/opt/emcomm-tools/conf/template.d/`
 5. Create wrapper scripts in `/opt/emcomm-tools/bin/`
+6. Optionally download offline maps
 
-### Release vs Latest Versioning
-- **Stable releases**: Only major versions are published as GitHub Releases (e.g., `emcomm-tools-os-community-20251128-r5-final-5.0.0`)
-  - Marked with release tags like `emcomm-tools-os-community-20250401-r4-final-4.0.0`
-  - Have release notes documenting new features
-- **Latest builds**: Between releases, ETC publishes pre-release builds as GitHub tags (e.g., `emcomm-tools-os-community-20251121-r5-final-5.0.0-pre-release.a`)
-  - These are NOT in the "Releases" section—they're in the "Tags" list
+### Release vs Latest Versioning (CRITICAL)
+- **Stable releases**: Only MAJOR versions published as GitHub Releases
+  - Examples: `emcomm-tools-os-community-20251128-r5-final-5.0.0`, `emcomm-tools-os-community-20250401-r4-final-4.0.0`
+  - Have full release notes at https://github.com/thetechprepper/emcomm-tools-os-community/releases
+  - Use `-r stable` to download latest stable release
+  
+- **Latest builds**: Between releases, ETC publishes pre-release builds as GitHub TAGS (not Releases)
+  - Examples: `emcomm-tools-os-community-20251121-r5-final-5.0.0-pre-release.a`, `emcomm-tools-os-community-20251113-r5-build17`
+  - Found in Tags tab, NOT Releases tab
   - Built and tagged automatically, may be unstable
-- **Build script selection**:
-  - `-r stable` downloads the latest official Release
-  - `-r latest` downloads the most recent Git tag (may include pre-releases)
-  - `-r tag -t emcomm-tools-os-community-20251121-r5-final-5.0.0-pre-release.a` pins a specific tag
+  - Use `-r latest` to download most recent tag (may include pre-releases)
+  - Use `-r tag -t <specific-tag>` to pin a specific tag
+
+- **GitHub tarball_url**: Points to the repository snapshot at that tag/release
+  - This is the ETC installer source code and overlay files
+  - It is NOT a binary distribution—it contains the scripts that compile everything from source
 
 ### Build Process: What Actually Happens
-1. **Download base Ubuntu 22.10 ISO** (cached in `./cache/`)
-2. **Download ETC tarball** from GitHub (GitHub's tarball_url points to the repository content at that tag/release)
-3. **Extract Ubuntu squashfs** and enter chroot
-4. **Extract ETC tarball** into `/tmp/etc-installer/` inside the chroot
-5. **Run `install.sh`** inside chroot (this compiles fldigi, direwolf, etc. from source inside the container)
-6. **Apply our customizations** (WiFi, hostname, desktop settings, APRS config, etc.)
-7. **Verify ETC installed** (check for marker directories like `/opt/emcomm-tools` and key tools like direwolf/pat)
-8. **Repack squashfs** into new ISO
-9. **Output ISO** to `./output/`
+1. **Download base Ubuntu 22.10 ISO** (cached in `./cache/` for reuse)
+2. **Download ETC tarball** from GitHub (using `tarball_url` from the release/tag metadata)
+3. **Extract Ubuntu squashfs** to a work directory
+4. **Mount chroot** with `/proc`, `/sys`, `/dev` for compilation
+5. **Extract ETC tarball** into `/tmp/etc-installer/` inside the chroot
+6. **Run `install.sh`** inside chroot (this compiles fldigi, direwolf, etc. from source)
+7. **Apply customizations** (WiFi config, hostname, desktop settings, APRS templates, etc.)
+8. **Verify ETC installed** (check for `/opt/emcomm-tools`, `direwolf`, `pat`)
+9. **Repack squashfs** filesystem
+10. **Create new ISO** with xorriso
+11. **Output final ISO** to `./output/`
 
-### What `build-etc-iso.sh` Does
-- Uses xorriso to extract/repack ISOs
-- Uses squashfs-tools to extract/repack the filesystem
-- Mounts chroot with `/proc`, `/sys`, `/dev` for compilation
-- Caches Ubuntu ISO and ETC tarballs in `./cache/` for reuse
+### What `build-etc-iso.sh` Does (Under the Hood)
+- Uses xorriso to extract ISO contents and mount squashfs without GUI
+- Uses squashfs-tools to modify the root filesystem
+- Sets up proper chroot mounts (`/proc`, `/sys`, `/dev`, `/run`)
+- Downloads and caches both Ubuntu ISO and ETC tarballs
+- Runs ETC's official `install.sh` script inside the chroot
+- Applies our customizations (WiFi, hostname, APRS config) post-installation
+- Verifies key ETC components installed (direwolf, pat, /opt/emcomm-tools)
+- Cleans up chroot mounts before repacking
 - Logs all output to `./logs/build-etc-iso_TIMESTAMP.log`
 
 ### ETC Architecture: Runtime Config Generation
