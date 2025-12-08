@@ -14,9 +14,13 @@ ETC already includes all ham radio tools (Winlink, VARA, JS8Call, fldigi, etc.).
 - ✅ Pre-configured WiFi networks (auto-connect on boot)
 - ✅ Personal callsign and grid square (pre-populated for `et-user`)
 - ✅ Hostname set to `ETC-{CALLSIGN}`
-- ✅ Desktop preferences (dark mode, scaling)
+- ✅ Desktop preferences (dark mode, scaling, accessibility)
+- ✅ Display & screen management (brightness, dimming, blank timeout)
+- ✅ Power management (sleep behavior, power profiles, idle actions)
+- ✅ System timezone configuration
+- ✅ Additional development packages (VS Code, Node.js, npm, git)
 - ✅ VARA FM/HF license `.reg` files + import script (run post-install after VARA installation)
-- ✅ Disabled accessibility features (screen reader, on-screen keyboard)
+- ✅ APRS configuration (iGate, beaconing with symbol/comment)
 - ✅ Git configuration
 - ✅ Embedded cache files for faster rebuilds (use `-m` for minimal)
 
@@ -168,19 +172,38 @@ GRID_SQUARE="CN87"             # Maidenhead grid locator
 # === User Account ===
 USER_USERNAME=""                # Linux username (defaults to lowercase CALLSIGN)
 USER_PASSWORD=""                # Password (leave blank to keep ETC default)
-ENABLE_AUTOLOGIN="no"          # "yes" or "no" - default is NO
+ENABLE_AUTOLOGIN="no"          # "yes" or "no" - default is NO (password prompt)
 
 # === System ===
 MACHINE_NAME=""                 # Hostname (defaults to ETC-{CALLSIGN})
+TIMEZONE="America/Denver"       # System timezone (Linux format, see /usr/share/zoneinfo/)
 
 # === Desktop Preferences ===
 DESKTOP_COLOR_SCHEME="prefer-dark"  # prefer-dark or prefer-light
 DESKTOP_SCALING_FACTOR="1.0"        # 1.0, 1.25, 1.5, or 2.0
-DISABLE_ACCESSIBILITY="yes"         # Disable screen reader, on-screen keyboard
-DISABLE_AUTO_BRIGHTNESS="yes"       # Disable automatic backlight
+DISABLE_ACCESSIBILITY="yes"         # yes = disable screen reader, on-screen keyboard
+
+# === Display & Screen Management ===
+AUTOMATIC_SCREEN_BRIGHTNESS="false" # true = adaptive brightness, false = manual
+DIM_SCREEN="true"                   # true = dim screen during idle
+SCREEN_BLANK="true"                 # true = blank screen after idle timeout
+SCREEN_BLANK_TIMEOUT="300"          # Seconds before screen blanks (300=5min)
+
+# === Power Management ===
+POWER_MODE="balanced"               # balanced, performance, or power-saver
+POWER_LID_CLOSE_AC="suspend"        # AC lid close: nothing, suspend, hibernate, logout
+POWER_LID_CLOSE_BATTERY="suspend"   # Battery lid close: nothing, suspend, hibernate, logout
+POWER_BUTTON_ACTION="interactive"   # Power button: nothing, suspend, hibernate, interactive
+POWER_IDLE_AC="nothing"             # AC idle action: nothing, suspend, hibernate
+POWER_IDLE_BATTERY="suspend"        # Battery idle action: nothing, suspend, hibernate
+POWER_IDLE_TIMEOUT="900"            # Seconds before idle action (900=15min)
+AUTOMATIC_POWER_SAVER="true"        # true = enable power saver on battery
+AUTOMATIC_SUSPEND="true"            # true = enable automatic suspend
+
+# === Additional System Packages ===
+ADDITIONAL_PACKAGES="code git nodejs npm"  # Space-separated apt packages to install
 
 # === WiFi Networks ===
-# Add as many networks as needed with unique suffixes
 WIFI_SSID_HOME="YourHomeNetwork"
 WIFI_PASSWORD_HOME="YourHomePassword"
 WIFI_AUTOCONNECT_HOME="yes"
@@ -194,6 +217,7 @@ WINLINK_PASSWORD=""            # Your Winlink password
 
 # === APRS Configuration ===
 APRS_SSID="10"                 # SSID (0-15, 10=iGate)
+```
 APRS_PASSCODE="-1"             # APRS-IS passcode (-1=RX only)
 APRS_SYMBOL="/r"               # Symbol: table+code (/r=antenna)
 APRS_COMMENT="EmComm iGate"    # Beacon comment
