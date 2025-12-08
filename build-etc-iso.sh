@@ -1931,6 +1931,26 @@ embed_cache_files() {
         log "DEBUG" "No ETC tarball found in cache"
     fi
     
+    # Copy Wine backup if present
+    local wine_backup
+    wine_backup=$(find "$CACHE_DIR" -maxdepth 1 -name "etc-wine-backup*.tar.gz" -type f | sort -r | head -1)
+    if [ -n "$wine_backup" ] && [ -f "$wine_backup" ]; then
+        log "DEBUG" "Copying Wine backup to embedded cache..."
+        cp -v "$wine_backup" "$target_cache/"
+        log "SUCCESS" "Wine backup embedded"
+    else
+        log "DEBUG" "No Wine backup found in cache"
+    fi
+    
+    # Copy secrets.env for future builds
+    if [ -f "$SECRETS_FILE" ]; then
+        log "DEBUG" "Copying secrets.env to embedded cache..."
+        cp -v "$SECRETS_FILE" "$target_cache/"
+        log "SUCCESS" "secrets.env embedded for future builds"
+    else
+        log "DEBUG" "No secrets.env found"
+    fi
+    
     # Create a README explaining the cache
     cat > "$target_cache/README.txt" <<EOF
 EmComm Tools Customizer - Embedded Cache
@@ -2098,8 +2118,37 @@ rebuild_iso() {
     
     local iso_size
     iso_size=$(du -h "$OUTPUT_ISO" | cut -f1)
+    local iso_size_bytes
+    iso_size_bytes=$(stat -f%z "$OUTPUT_ISO" 2>/dev/null || stat -c%s "$OUTPUT_ISO" 2>/dev/null)
     
-    log "SUCCESS" "ISO created: $OUTPUT_ISO ($iso_size)"
+    # Estimate final size with component breakdown
+    log "INFO" "=== ISO Size Breakdown ==="
+    
+    local ubuntu_size=0
+    local ubuntu_iso="${CACHE_DIR}/${UBUNTU_ISO_FILE}"
+    if [ -f "$ubuntu_iso" ]; then
+        ubuntu_size=$(stat -c%s "$ubuntu_iso" 2>/dev/null || stat -f%z "$ubuntu_iso" 2>/dev/null)
+        log "INFO" "  Ubuntu ISO embedded: $(numfmt --to=iec-i --suffix=B $ubuntu_size 2>/dev/null || echo "~4GB")"
+    fi
+    
+    local wine_size=0
+    local wine_backup
+    wine_backup=$(find "$CACHE_DIR" -maxdepth 1 -name "etc-wine-backup*.tar.gz" -type f | sort -r | head -1)
+    if [ -n "$wine_backup" ] && [ -f "$wine_backup" ]; then
+        wine_size=$(stat -c%s "$wine_backup" 2>/dev/null || stat -f%z "$wine_backup" 2>/dev/null)
+        log "INFO" "  Wine backup: $(numfmt --to=iec-i --suffix=B $wine_size 2>/dev/null || du -h "$wine_backup" | cut -f1)"
+    fi
+    
+    local secrets_size=0
+    if [ -f "$SECRETS_FILE" ]; then
+        secrets_size=$(stat -c%s "$SECRETS_FILE" 2>/dev/null || stat -f%z "$SECRETS_FILE" 2>/dev/null)
+        log "INFO" "  secrets.env: $(numfmt --to=iec-i --suffix=B $secrets_size 2>/dev/null || du -h "$SECRETS_FILE" | cut -f1)"
+    fi
+    
+    log "INFO" "  Final ISO: $iso_size"
+    log "INFO" "========================================="
+    
+    log "SUCCESS" "ISO created: $OUTPUT_ISO"
     log "INFO" "Copy to Ventoy/Balena Etcher: cp \"$OUTPUT_ISO\" /media/\$USER/Ventoy/"
 }
 
