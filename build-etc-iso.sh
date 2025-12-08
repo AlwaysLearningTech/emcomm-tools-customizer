@@ -2050,38 +2050,60 @@ rebuild_iso() {
     (cd "$ISO_EXTRACT_DIR" && find . -type f -print0 | xargs -0 md5sum > md5sum.txt) 2>/dev/null || true
     log "DEBUG" "Checksums calculated"
     
-    # Rebuild ISO with xorriso for UEFI boot (Ventoy/Balena Etcher compatible)
+    # Rebuild ISO with xorriso - support both BIOS and UEFI boot
     # Using -iso-level 3 to allow files over 4GB (embedded cache makes squashfs large)
-    log "INFO" "Creating UEFI-bootable ISO image..."
+    log "INFO" "Creating BIOS/UEFI hybrid bootable ISO image..."
     log "DEBUG" "Output ISO: $OUTPUT_ISO"
     log "DEBUG" "ISO label: ETC_${RELEASE_NUMBER^^}_CUSTOM"
     
-    # Check if EFI boot image exists in the extracted ISO
+    # Check if EFI boot image exists
     local efi_boot_img="$ISO_EXTRACT_DIR/boot/grub/efi.img"
+    local bios_boot_img="$ISO_EXTRACT_DIR/boot/grub/bios.img"
     
     if [ ! -f "$efi_boot_img" ]; then
-        log "WARN" "EFI boot image not found in extracted ISO, creating minimal EFI bootloader..."
+        log "DEBUG" "EFI boot image not found, creating minimal stub..."
         mkdir -p "$(dirname "$efi_boot_img")"
-        # Create a minimal 1.44MB floppy-sized EFI boot image
         dd if=/dev/zero of="$efi_boot_img" bs=512 count=2880 2>/dev/null || true
     fi
     
-    # Create UEFI-only ISO with proper structure for Ventoy/Balena Etcher
+    if [ ! -f "$bios_boot_img" ]; then
+        log "DEBUG" "BIOS boot image not found in extracted ISO"
+    fi
+    
+    # Create ISO with both BIOS (El Torito) and UEFI boot support
     xorriso -as mkisofs \
         -r -V "ETC_${RELEASE_NUMBER^^}_CUSTOM" \
         -iso-level 3 \
         -J -joliet-long \
         -l \
+        -eltorito-boot boot/grub/i386-pc/boot.img -no-emul-boot -boot-load-size 4 \
         -eltorito-alt-boot \
         -e boot/grub/efi.img \
         -no-emul-boot \
+        -isohybrid-mbr /usr/lib/ISOLINUX/isohdpfx.bin \
         -append_partition 2 0xef "$efi_boot_img" \
         -o "$OUTPUT_ISO" \
         "$ISO_EXTRACT_DIR" 2>&1 | tee -a "$LOG_FILE"
     
-    # If the above fails, try even simpler approach
+    # If the above fails, try simpler UEFI-only approach
     if [ ! -f "$OUTPUT_ISO" ] || [ ! -s "$OUTPUT_ISO" ]; then
-        log "WARN" "EFI boot method failed, trying basic UEFI ISO..."
+        log "WARN" "Hybrid ISO creation failed, trying UEFI-only..."
+        xorriso -as mkisofs \
+            -r -V "ETC_${RELEASE_NUMBER^^}_CUSTOM" \
+            -iso-level 3 \
+            -J -joliet-long \
+            -l \
+            -eltorito-alt-boot \
+            -e boot/grub/efi.img \
+            -no-emul-boot \
+            -append_partition 2 0xef "$efi_boot_img" \
+            -o "$OUTPUT_ISO" \
+            "$ISO_EXTRACT_DIR" 2>&1 | tee -a "$LOG_FILE"
+    fi
+    
+    # If still fails, try basic ISO
+    if [ ! -f "$OUTPUT_ISO" ] || [ ! -s "$OUTPUT_ISO" ]; then
+        log "WARN" "UEFI ISO creation failed, trying basic ISO..."
         xorriso -as mkisofs \
             -r -V "ETC_${RELEASE_NUMBER^^}_CUSTOM" \
             -iso-level 3 \
