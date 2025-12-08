@@ -1643,7 +1643,8 @@ customize_additional_packages() {
     # Install packages
     log "INFO" "Installing packages: $additional_packages"
     # Use -y to auto-confirm, -qq for less output
-    if chroot "${SQUASHFS_DIR}" apt-get install -y -qq "$additional_packages" 2>&1 | tee -a "$LOG_FILE"; then
+    # Note: DO NOT quote $additional_packages - we need word splitting for separate package names
+    if chroot "${SQUASHFS_DIR}" apt-get install -y -qq $additional_packages 2>&1 | tee -a "$LOG_FILE"; then
         log "SUCCESS" "Packages installed successfully"
     else
         log "WARN" "Some packages may have failed to install - see log for details"
