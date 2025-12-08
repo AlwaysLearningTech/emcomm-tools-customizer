@@ -477,7 +477,7 @@ install_etc_in_chroot() {
     if [ ! -d "${etc_install_dir}/scripts" ]; then
         log "ERROR" "ETC tarball extraction failed - scripts/ directory not found"
         log "DEBUG" "Contents of $etc_install_dir:"
-        ls -la "$etc_install_dir" 2>&1 | while read -r line; do log "DEBUG" "  $line"; done
+        find "$etc_install_dir" -maxdepth 1 -exec ls -ld {} \; 2>&1 | while read -r line; do log "DEBUG" "  $line"; done
         # Try to find install.sh anywhere
         local found_install
         found_install=$(find "$etc_install_dir" -name "install.sh" -type f 2>/dev/null | head -1)
@@ -651,10 +651,10 @@ WIKIPEDIASCRIPT
         log "ERROR" "ETC install.sh not found at expected location!"
         log "ERROR" "Expected: ${etc_install_dir}/scripts/install.sh"
         log "DEBUG" "Contents of etc_install_dir:"
-        ls -la "${etc_install_dir}" 2>&1 | while read -r line; do log "DEBUG" "  $line"; done
+        find "${etc_install_dir}" -maxdepth 1 -exec ls -ld {} \; 2>&1 | while read -r line; do log "DEBUG" "  $line"; done
         if [ -d "${etc_install_dir}/scripts" ]; then
             log "DEBUG" "Contents of scripts/:"
-            ls -la "${etc_install_dir}/scripts" 2>&1 | while read -r line; do log "DEBUG" "  $line"; done
+            find "${etc_install_dir}/scripts" -maxdepth 1 -exec ls -ld {} \; 2>&1 | while read -r line; do log "DEBUG" "  $line"; done
         fi
         cleanup_chroot_mounts
         trap - EXIT
@@ -1643,7 +1643,7 @@ customize_additional_packages() {
     # Install packages
     log "INFO" "Installing packages: $additional_packages"
     # Use -y to auto-confirm, -qq for less output
-    if chroot "${SQUASHFS_DIR}" apt-get install -y -qq $additional_packages 2>&1 | tee -a "$LOG_FILE"; then
+    if chroot "${SQUASHFS_DIR}" apt-get install -y -qq "$additional_packages" 2>&1 | tee -a "$LOG_FILE"; then
         log "SUCCESS" "Packages installed successfully"
     else
         log "WARN" "Some packages may have failed to install - see log for details"
