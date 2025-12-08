@@ -1616,6 +1616,43 @@ customize_timezone() {
     log "SUCCESS" "Timezone configured: $timezone"
 }
 
+customize_additional_packages() {
+    log "INFO" "Installing additional system packages..."
+    
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    log "DEBUG" "Sourced secrets file for package config"
+    
+    local additional_packages="${ADDITIONAL_PACKAGES:-}"
+    
+    if [ -z "$additional_packages" ]; then
+        log "INFO" "No additional packages configured"
+        return 0
+    fi
+    
+    log "DEBUG" "Packages to install: $additional_packages"
+    
+    # Install packages in chroot
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+    
+    # Update apt cache first
+    log "INFO" "Updating package cache..."
+    chroot "${SQUASHFS_DIR}" apt-get update 2>&1 | tail -5 | tee -a "$LOG_FILE"
+    
+    # Install packages
+    log "INFO" "Installing packages: $additional_packages"
+    # Use -y to auto-confirm, -qq for less output
+    if chroot "${SQUASHFS_DIR}" apt-get install -y -qq $additional_packages 2>&1 | tee -a "$LOG_FILE"; then
+        log "SUCCESS" "Packages installed successfully"
+    else
+        log "WARN" "Some packages may have failed to install - see log for details"
+    fi
+    
+    cleanup_chroot_mounts
+    trap - EXIT
+}
+
 customize_pat() {
     log "INFO" "Configuring Pat Winlink aliases..."
     
@@ -2190,13 +2227,17 @@ main() {
     customize_timezone
     log "DEBUG" "Step 12/13: customize_timezone COMPLETED"
     
-    log "DEBUG" "Step 13/14: embed_cache_files"
-    embed_cache_files
-    log "DEBUG" "Step 13/14: embed_cache_files COMPLETED"
+    log "DEBUG" "Step 13/14: customize_additional_packages"
+    customize_additional_packages
+    log "DEBUG" "Step 13/14: customize_additional_packages COMPLETED"
     
-    log "DEBUG" "Step 14/14: create_build_manifest"
+    log "DEBUG" "Step 14/15: embed_cache_files"
+    embed_cache_files
+    log "DEBUG" "Step 14/15: embed_cache_files COMPLETED"
+    
+    log "DEBUG" "Step 15/15: create_build_manifest"
     create_build_manifest
-    log "DEBUG" "Step 14/14: create_build_manifest COMPLETED"
+    log "DEBUG" "Step 15/15: create_build_manifest COMPLETED"
     
     log "DEBUG" "All customizations completed successfully"
     
