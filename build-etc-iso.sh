@@ -1616,6 +1616,40 @@ customize_timezone() {
     log "SUCCESS" "Timezone configured: $timezone"
 }
 
+customize_uv() {
+    log "INFO" "Checking if uv package manager should be installed..."
+    
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    log "DEBUG" "Sourced secrets file for uv config"
+    
+    local install_uv="${INSTALL_UV:-no}"
+    
+    if [[ "${install_uv,,}" != "yes" ]]; then
+        log "INFO" "uv installation not enabled"
+        return 0
+    fi
+    
+    log "INFO" "Installing uv (Astral's Python package manager)..."
+    
+    # Set up chroot and install uv from official installer
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+    
+    # Download and run the official uv installer inside the chroot
+    # The installer creates ~/.local/bin/{uv,uvx} and sets up PATH in ~/.local/bin/env
+    chroot "${SQUASHFS_DIR}" /bin/bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh' 2>&1 | tee -a "$LOG_FILE"
+    
+    if [ ${PIPESTATUS[0]} -eq 0 ]; then
+        log "SUCCESS" "uv installed successfully"
+    else
+        log "WARN" "uv installation may have failed - see log for details"
+    fi
+    
+    cleanup_chroot_mounts
+    trap - EXIT
+}
+
 customize_additional_packages() {
     log "INFO" "Installing additional system packages..."
     
@@ -2280,13 +2314,17 @@ main() {
     customize_additional_packages
     log "DEBUG" "Step 13/14: customize_additional_packages COMPLETED"
     
-    log "DEBUG" "Step 14/15: embed_cache_files"
-    embed_cache_files
-    log "DEBUG" "Step 14/15: embed_cache_files COMPLETED"
+    log "DEBUG" "Step 14/15: customize_uv"
+    customize_uv
+    log "DEBUG" "Step 14/15: customize_uv COMPLETED"
     
-    log "DEBUG" "Step 15/15: create_build_manifest"
+    log "DEBUG" "Step 15/16: embed_cache_files"
+    embed_cache_files
+    log "DEBUG" "Step 15/16: embed_cache_files COMPLETED"
+    
+    log "DEBUG" "Step 16/16: create_build_manifest"
     create_build_manifest
-    log "DEBUG" "Step 15/15: create_build_manifest COMPLETED"
+    log "DEBUG" "Step 16/16: create_build_manifest COMPLETED"
     
     log "DEBUG" "All customizations completed successfully"
     
