@@ -37,8 +37,38 @@ This customizer **respects upstream ETC architecture**. We:
 
 **APRS Customization**: We modify ETC's direwolf template at `/opt/emcomm-tools/conf/template.d/packet/direwolf.aprs-digipeater.conf` to add iGate and beacon settings while preserving the `{{ET_CALLSIGN}}` and `{{ET_AUDIO_DEVICE}}` placeholders that ETC substitutes at runtime.
 
-### Future Enhancements (TODO)
+## Release Status: v1.0 (First Working Build)
 
+### ✅ What's Working
+
+- **Build process**: Fully automated ETC ISO customization via xorriso/squashfs
+- **WiFi configuration**: Networks are pre-configured in NetworkManager
+- **APRS setup**: direwolf iGate/beacon templates customized and ready for runtime use
+- **User config**: `~/.config/emcomm-tools/user.json` pre-populated with callsign, grid, Winlink password
+- **Desktop settings**: Dark mode, scaling, accessibility, display, power management, timezone all applied
+- **Git config**: User name/email configured
+- **VARA license setup**: `.reg` files and import script created for post-install use
+- **Additional packages**: Development tools (git, nodejs, npm, uv) installable via configuration
+- **Cache system**: Downloaded ISOs cached for faster rebuilds
+
+### ⚠️ Known Limitations (v1.0)
+
+**Hostname & User Account** - Currently **BYPASSED** due to Ubuntu installer behavior:
+
+- The Ubuntu 22.10 installer runs after ISO boot and prompts for hostname/username
+- Our pre-build customizations are overwritten during this interactive setup phase
+- Users must manually enter values during Ubuntu installer (not automated)
+
+**Workaround (Current)**: Users must:
+1. Boot the custom ISO
+2. Go through Ubuntu installer (set hostname and username manually)
+3. All other customizations (WiFi, APRS, desktop settings, etc.) apply automatically
+
+**v2.0 Priority**: Preseed file integration to automate the Ubuntu installer completely.
+
+### Future Enhancements (v2.0+)
+
+- ⏳ **Preseed file support** (v2.0 - PRIORITY): Fully automated Ubuntu installer with hostname/user pre-configured
 - ⏳ **D578 CAT Control**: Hamlib/rigctld configuration for Anytone D578UV radio
 - ⏳ **GPS Auto-Detection**: Automatic grid square from GPS hardware
 - ⏳ **Radio Auto-Detection**: USB VID/PID detection for CAT control setup
