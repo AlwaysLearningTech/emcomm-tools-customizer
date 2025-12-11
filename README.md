@@ -64,14 +64,27 @@ This customizer **respects upstream ETC architecture**. We:
 2. Go through Ubuntu installer (set hostname and username manually)
 3. All other customizations (WiFi, APRS, desktop settings, etc.) apply automatically
 
-**v2.0 Priority**: Preseed file integration to automate the Ubuntu installer completely.
+**Priority Fix**: See GitHub Issues for tracking.
 
-### Future Enhancements (v2.0+)
+### Future Work (Tracked in GitHub Issues)
 
-- ⏳ **Preseed file support** (v2.0 - PRIORITY): Fully automated Ubuntu installer with hostname/user pre-configured
-- ⏳ **D578 CAT Control**: Hamlib/rigctld configuration for Anytone D578UV radio
-- ⏳ **GPS Auto-Detection**: Automatic grid square from GPS hardware
-- ⏳ **Radio Auto-Detection**: USB VID/PID detection for CAT control setup
+All planned features for future releases are tracked as GitHub Issues:
+
+- **#8** - [HIGH PRIORITY] Preseed file for automated Ubuntu installer
+- **#7** - Build log preservation and embedding
+- **#6** - Anytone D578UV CAT control integration
+- **#5** - GPS auto-detection for grid square calculation
+- **#4** - USB radio auto-detection for CAT control setup
+- **#3** - WiFi network connection validation and troubleshooting
+- **#2** - Post-install script for first-boot customizations
+
+View all work: [GitHub Issues](https://github.com/AlwaysLearningTech/emcomm-tools-customizer/issues)
+
+Each issue includes:
+- Problem statement and proposed solution
+- Acceptance criteria (checklist)
+- Estimated effort
+- Prerequisites and dependencies
 
 ## Directory Structure
 
