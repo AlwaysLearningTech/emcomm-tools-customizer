@@ -70,12 +70,45 @@ Preseed file now **AUTOMATES** Ubuntu installer—hostname, username, password, 
 
 Remaining planned features for future releases:
 
-- **#7** - Build log preservation and embedding
 - **#6** - Anytone D578UV CAT control integration (rigctld systemd service)
 - **#3** - WiFi network connection validation and troubleshooting
 - **#2** - Post-install script for first-boot customizations
 
 View all work: [GitHub Issues](https://github.com/AlwaysLearningTech/emcomm-tools-customizer/issues)
+
+### Build Logs & Diagnostics
+
+Build logs are automatically created and embedded in the ISO for post-install diagnostics:
+
+**On the build machine (after running build script)**:
+```bash
+# View the latest build log
+less logs/build-etc-iso_YYYYMMDD_HHMMSS.log
+
+# View all build logs
+ls logs/
+```
+
+**On the installed system**:
+```bash
+# Logs are embedded in the ISO and available at:
+/opt/emcomm-customizer-cache/logs/
+
+# Copy to home directory for easy access:
+mkdir -p ~/.emcomm-customizer/logs
+cp /opt/emcomm-customizer-cache/logs/* ~/.emcomm-customizer/logs/
+
+# View the build manifest (summary of what was customized)
+less ~/.emcomm-customizer/logs/BUILD_MANIFEST.txt
+```
+
+The build manifest includes:
+- Build date and ETC version
+- Configuration snapshot (callsign, hostname, WiFi networks, APRS settings)
+- Number of successful customization steps
+- List of all operations performed
+
+Use the logs to debug issues like WiFi configuration, APRS settings, or any failed customizations.
 
 ## Directory Structure
 

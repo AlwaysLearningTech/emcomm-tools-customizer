@@ -2067,7 +2067,7 @@ embed_cache_files() {
         return 0
     fi
     
-    log "INFO" "Embedding cache files for future builds..."
+    log "INFO" "Embedding cache files and build logs for future builds..."
     
     # Create cache directory in /opt for the installed system
     local target_cache="${SQUASHFS_DIR}/opt/emcomm-customizer-cache"
@@ -2115,18 +2115,76 @@ embed_cache_files() {
         log "DEBUG" "No secrets.env found"
     fi
     
+    # Embed build logs for debugging and diagnostics
+    log "INFO" "Embedding build logs for post-install diagnostics..."
+    local target_logs="${SQUASHFS_DIR}/opt/emcomm-customizer-cache/logs"
+    mkdir -p "$target_logs"
+    
+    if [ -d "$LOG_DIR" ]; then
+        log "DEBUG" "Copying build logs to embedded cache..."
+        cp -v "$LOG_DIR"/*.log "$target_logs/" 2>/dev/null || log "DEBUG" "No log files to copy"
+        
+        # Create a manifest of this build
+        cat > "$target_logs/BUILD_MANIFEST.txt" <<BUILD_EOF
+EmComm Tools Customizer - Build Manifest
+=========================================
+
+Build Date: $(date +'%Y-%m-%d %H:%M:%S %Z')
+Build Mode: $RELEASE_MODE
+ETC Version: $RELEASE_TAG
+Ubuntu ISO: $UBUNTU_ISO_FILE
+Script Version: $(git -C "$SCRIPT_DIR" describe --tags --always 2>/dev/null || echo 'unknown')
+
+Configuration Summary:
+- Callsign: ${CALLSIGN:-N0CALL}
+- Hostname: ${MACHINE_NAME:-ETC-${CALLSIGN:-N0CALL}}
+- Username: ${USER_USERNAME:-${CALLSIGN,,}}
+- Timezone: ${TIMEZONE:-America/Denver}
+- WiFi Networks: $(grep -c "WIFI_SSID_" "$SECRETS_FILE" 2>/dev/null || echo 'unknown')
+- APRS Enabled: $([ -n "${ENABLE_APRS_IGATE:-}" ] && echo 'yes' || echo 'no')
+- Autologin: ${ENABLE_AUTOLOGIN:-no}
+- Additional Packages: ${ADDITIONAL_PACKAGES:-none}
+
+Build Log Locations:
+- All logs: ./logs/
+- Latest log: $LOG_FILE
+- On installed system: /opt/emcomm-customizer-cache/logs/
+- User copy location: ~/.emcomm-customizer/logs/ (after first boot)
+
+To access these logs post-install:
+  mkdir -p ~/.emcomm-customizer/logs
+  cp /opt/emcomm-customizer-cache/logs/* ~/.emcomm-customizer/logs/
+  less ~/.emcomm-customizer/logs/BUILD_MANIFEST.txt
+
+Build Steps Completed:
+BUILD_EOF
+
+        # Count successful log entries to show what completed
+        grep -c "\[SUCCESS\]" "$LOG_FILE" 2>/dev/null | xargs -I {} echo "  - {} successful operations" >> "$target_logs/BUILD_MANIFEST.txt"
+        grep "\[SUCCESS\]" "$LOG_FILE" 2>/dev/null | sed 's/^/    /' >> "$target_logs/BUILD_MANIFEST.txt" || true
+        
+        log "SUCCESS" "Build logs and manifest embedded"
+    else
+        log "DEBUG" "No log directory found"
+    fi
+    
     # Create a README explaining the cache
     cat > "$target_cache/README.txt" <<EOF
 EmComm Tools Customizer - Embedded Cache
 =========================================
 
 These files were embedded during ISO build so you can rebuild without
-re-downloading large files.
+re-downloading large files, and for diagnosing build issues.
 
 To use this cache for your next build:
   cp -r /opt/emcomm-customizer-cache/* ~/emcomm-tools-customizer/cache/
 
 Or run build-etc-iso.sh from /opt/emcomm-customizer-cache directly.
+
+Build Logs & Diagnostics:
+  - View build manifest: less /opt/emcomm-customizer-cache/logs/BUILD_MANIFEST.txt
+  - View full build log: less /opt/emcomm-customizer-cache/logs/*.log
+  - After first boot, copy to user home: cp -r /opt/emcomm-customizer-cache/logs ~/.emcomm-customizer/
 
 Files:
 $(find "$target_cache" -maxdepth 1 -type f ! -name 'README*' -exec ls -lh {} \; 2>/dev/null)
@@ -2134,7 +2192,7 @@ $(find "$target_cache" -maxdepth 1 -type f ! -name 'README*' -exec ls -lh {} \; 
 Build date: $(date +'%Y-%m-%d %H:%M:%S')
 EOF
     
-    log "SUCCESS" "Cache files embedded (use -m for minimal build without cache)"
+    log "SUCCESS" "Cache files and build logs embedded (use -m for minimal build without cache)"
 }
 
 create_build_manifest() {
