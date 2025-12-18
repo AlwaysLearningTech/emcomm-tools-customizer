@@ -70,7 +70,6 @@ Preseed file now **AUTOMATES** Ubuntu installer—hostname, username, password, 
 
 Remaining planned features for future releases:
 
-- **#6** - Anytone D578UV CAT control integration (rigctld systemd service)
 - **#3** - WiFi network connection validation and troubleshooting
 - **#2** - Post-install script for first-boot customizations
 
