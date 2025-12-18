@@ -1,7 +1,26 @@
 # Post-Installation Scripts
 
 These scripts run AFTER installing ETC from the custom ISO onto target hardware.
-They handle runtime-specific configurations that cannot be done during the ISO build.
+They handle runtime-specific configurations and verification that cannot be done during ISO build.
+
+## Quick Start: Verify Your Build
+
+After the Ubuntu installer completes and you boot into the desktop, run:
+
+```bash
+./post-install/01-verify-customizations.sh
+```
+
+This checks:
+- System configuration (hostname, timezone, locale)
+- EmComm Tools installation
+- WiFi network configuration
+- APRS setup
+- Desktop settings
+- Installed packages
+- Post-install tools
+
+**Output**: Pass/fail checklist with next steps and troubleshooting guidance.
 
 ## Current Status
 
