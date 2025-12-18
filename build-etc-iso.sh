@@ -1268,6 +1268,47 @@ EOF
     log "SUCCESS" "APRS configured for ${callsign}-${aprs_ssid} (igate=${enable_igate}, beacon=${enable_beacon})"
 }
 
+customize_radio_configs() {
+    log "INFO" "Adding radio configurations..."
+    
+    local radios_dir="${SQUASHFS_DIR}/opt/emcomm-tools/conf/radios.d"
+    
+    # Ensure radios directory exists
+    mkdir -p "$radios_dir"
+    
+    # Add Anytone D578UV configuration
+    log "DEBUG" "Adding Anytone D578UV configuration..."
+    cat > "${radios_dir}/anytone-d578uv.json" <<'EOF'
+{
+  "id": "anytone-d578uv",
+  "vendor": "Anytone",
+  "model": "D578UV (D-Star)",
+  "rigctrl": {
+    "id": "301",
+    "baud": "9600",
+    "ptt": "CM108"
+  },
+  "notes": [
+    "D-Star capable VHF/UHF radio",
+    "USB connection provides CAT control",
+    "CM108 PTT via USB audio device",
+    "Supports APRS operation with TNC",
+    "Default baud rate: 9600bps"
+  ],
+  "fieldNotes": [
+    "Connect D578UV via USB cable",
+    "Radio will appear as /dev/ttyUSB0 (or similar)",
+    "Audio device will enumerate as CM108-compatible",
+    "Use et-mode to select digital mode (APRS, D-Star, etc.)",
+    "Configure frequency/offset using radio display"
+  ]
+}
+EOF
+    
+    chmod 644 "${radios_dir}/anytone-d578uv.json"
+    log "SUCCESS" "Added Anytone D578UV radio configuration"
+}
+
 customize_user_and_autologin() {
     log "INFO" "Configuring user account..."
     
@@ -2247,6 +2288,10 @@ main() {
     log "DEBUG" "Step 5/13: customize_aprs"
     customize_aprs
     log "DEBUG" "Step 5/13: customize_aprs COMPLETED"
+    
+    log "DEBUG" "Step 5.5/13: customize_radio_configs"
+    customize_radio_configs
+    log "DEBUG" "Step 5.5/13: customize_radio_configs COMPLETED"
     
     log "DEBUG" "Step 6/13: customize_user_and_autologin"
     customize_user_and_autologin
