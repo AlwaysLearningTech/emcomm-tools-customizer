@@ -50,41 +50,32 @@ This customizer **respects upstream ETC architecture**. We:
 - **VARA license setup**: `.reg` files and import script created for post-install use
 - **Additional packages**: Development tools (git, nodejs, npm, uv) installable via configuration
 - **Cache system**: Downloaded ISOs cached for faster rebuilds
+- **Preseed automation**: Ubuntu 22.10 installer automated with hostname, username, password, timezone
+- **Anytone D578UV radio**: Radio configuration added to et-radio menu (rigctrl ID 301)
 
 ### ⚠️ Known Limitations (v1.0)
 
-**Hostname & User Account** - Currently **BYPASSED** due to Ubuntu installer behavior:
+Preseed file now **AUTOMATES** Ubuntu installer—hostname, username, password, and timezone are pre-configured.
 
-- The Ubuntu 22.10 installer runs after ISO boot and prompts for hostname/username
-- Our pre-build customizations are overwritten during this interactive setup phase
-- Users must manually enter values during Ubuntu installer (not automated)
+**Workflow (Current)**:
+1. Boot custom ISO
+2. Ubuntu installer runs **silently** with pre-configured hostname, username, password, timezone
+3. System boots directly to desktop (or login prompt if autologin disabled)
+4. All other customizations (WiFi, APRS, desktop settings, etc.) apply automatically
+5. **Zero manual prompts** during installation
 
-**Workaround (Current)**: Users must:
-1. Boot the custom ISO
-2. Go through Ubuntu installer (set hostname and username manually)
-3. All other customizations (WiFi, APRS, desktop settings, etc.) apply automatically
-
-**Priority Fix**: See GitHub Issues for tracking.
+**Advanced**: To customize preseed behavior further (partitioning, packages, etc.), edit the `customize_preseed()` function in `build-etc-iso.sh` and regenerate the ISO.
 
 ### Future Work (Tracked in GitHub Issues)
 
-All planned features for future releases are tracked as GitHub Issues:
+Remaining planned features for future releases:
 
-- **#8** - [HIGH PRIORITY] Preseed file for automated Ubuntu installer
 - **#7** - Build log preservation and embedding
-- **#6** - Anytone D578UV CAT control integration
-- **#5** - GPS auto-detection for grid square calculation
-- **#4** - USB radio auto-detection for CAT control setup
+- **#6** - Anytone D578UV CAT control integration (rigctld systemd service)
 - **#3** - WiFi network connection validation and troubleshooting
 - **#2** - Post-install script for first-boot customizations
 
 View all work: [GitHub Issues](https://github.com/AlwaysLearningTech/emcomm-tools-customizer/issues)
-
-Each issue includes:
-- Problem statement and proposed solution
-- Acceptance criteria (checklist)
-- Estimated effort
-- Prerequisites and dependencies
 
 ## Directory Structure
 
