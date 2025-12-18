@@ -925,11 +925,74 @@ EOF
     log "SUCCESS" "Hostname set to: $machine_name"
 }
 
+validate_wifi_config() {
+    log "INFO" "Validating WiFi configuration..."
+    
+    local wifi_count=0
+    local validation_errors=0
+    
+    # Scan for WiFi networks in secrets.env
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^WIFI_SSID_([A-Z0-9_]+)= ]]; then
+            local identifier="${BASH_REMATCH[1]}"
+            
+            local ssid_var="WIFI_SSID_${identifier}"
+            local password_var="WIFI_PASSWORD_${identifier}"
+            local ssid="${!ssid_var:-}"
+            local password="${!password_var:-}"
+            
+            # Skip template values
+            if [[ -z "$ssid" ]] || [[ "$ssid" == "YOUR_"* ]]; then
+                log "DEBUG" "Skipping template SSID: '$ssid'"
+                continue
+            fi
+            
+            wifi_count=$((wifi_count + 1))
+            
+            # Validate SSID format
+            if [ -z "$ssid" ]; then
+                log "ERROR" "WiFi $identifier: SSID is empty"
+                validation_errors=$((validation_errors + 1))
+            elif [ ${#ssid} -gt 32 ]; then
+                log "ERROR" "WiFi $identifier: SSID too long (max 32 chars): '$ssid'"
+                validation_errors=$((validation_errors + 1))
+            else
+                log "DEBUG" "✓ WiFi $identifier SSID valid: '$ssid'"
+            fi
+            
+            # Validate password
+            if [ -z "$password" ]; then
+                log "WARN" "WiFi $identifier: No password configured - will be skipped"
+                validation_errors=$((validation_errors + 1))
+            elif [ ${#password} -lt 8 ]; then
+                log "ERROR" "WiFi $identifier: Password too short (min 8 chars for WPA2)"
+                validation_errors=$((validation_errors + 1))
+            elif [ ${#password} -gt 63 ]; then
+                log "ERROR" "WiFi $identifier: Password too long (max 63 chars for WPA2)"
+                validation_errors=$((validation_errors + 1))
+            else
+                log "DEBUG" "✓ WiFi $identifier password valid (${#password} chars)"
+            fi
+        fi
+    done < "$SECRETS_FILE"
+    
+    if [ $wifi_count -eq 0 ]; then
+        log "WARN" "No WiFi networks found in configuration"
+    elif [ $validation_errors -gt 0 ]; then
+        log "WARN" "WiFi validation found $validation_errors error(s) - check above"
+    else
+        log "SUCCESS" "All $wifi_count WiFi network(s) validated successfully"
+    fi
+}
+
 customize_wifi() {
     log "INFO" "Configuring WiFi networks..."
     
     # shellcheck source=/dev/null
     source "$SECRETS_FILE"
+    
+    # Pre-build WiFi validation
+    validate_wifi_config
     
     local nm_dir="${SQUASHFS_DIR}/etc/NetworkManager/system-connections"
     log "DEBUG" "NetworkManager connections dir: $nm_dir"
@@ -2058,6 +2121,286 @@ EOF
     log "INFO" "  Run ~/add-ons/wikipedia/create-my-wikipedia.sh after first boot"
 }
 
+setup_wifi_diagnostics() {
+    log "INFO" "Creating WiFi diagnostic tools..."
+    
+    local addon_dir="${SQUASHFS_DIR}/etc/skel/add-ons/network"
+    mkdir -p "$addon_dir"
+    
+    # Create WiFi diagnostics script
+    local diag_script="${addon_dir}/wifi-diagnostics.sh"
+    log "DEBUG" "Creating WiFi diagnostics script: $diag_script"
+    
+    cat > "$diag_script" <<'WIFI_DIAG_EOF'
+#!/bin/bash
+# WiFi Diagnostics Tool
+# Check status and troubleshoot WiFi network connections
+
+set -e
+
+echo "=== EmComm Tools WiFi Diagnostics ==="
+echo ""
+
+# Check if NetworkManager is running
+echo "1. Checking NetworkManager status..."
+if systemctl is-active --quiet NetworkManager; then
+    echo "   ✓ NetworkManager is running"
+else
+    echo "   ✗ NetworkManager is NOT running - starting..."
+    sudo systemctl start NetworkManager
+fi
+
+# List configured connections
+echo ""
+echo "2. Configured WiFi Networks:"
+nmcli connection show --active | grep -i wifi || echo "   (No active WiFi connections)"
+echo ""
+echo "   All connections:"
+nmcli connection show | grep wifi || echo "   (No WiFi connections configured)"
+
+# List available networks
+echo ""
+echo "3. Available WiFi Networks:"
+echo "   (Scan will take a moment...)"
+nmcli device wifi list || echo "   (Unable to scan - check WiFi hardware)"
+
+# Check WiFi device status
+echo ""
+echo "4. WiFi Device Status:"
+nmcli device status | grep -i wifi || echo "   (No WiFi devices found)"
+
+# Check connection files
+echo ""
+echo "5. Connection Files in NetworkManager:"
+if [ -d /etc/NetworkManager/system-connections ]; then
+    echo "   Files found:"
+    ls -lh /etc/NetworkManager/system-connections/ 2>/dev/null || echo "   (No files)"
+else
+    echo "   ✗ Connection directory not found"
+fi
+
+# Test connectivity
+echo ""
+echo "6. Connectivity Test:"
+if ping -c 1 8.8.8.8 >/dev/null 2>&1; then
+    echo "   ✓ Internet connectivity verified"
+else
+    echo "   ✗ No internet connectivity"
+fi
+
+# Check system logs
+echo ""
+echo "7. Recent NetworkManager Logs:"
+journalctl -u NetworkManager -n 10 --no-pager 2>/dev/null || echo "   (Unable to read logs)"
+
+# Recommendations
+echo ""
+echo "=== Troubleshooting Tips ==="
+echo ""
+echo "If WiFi is not connecting:"
+echo "  1. Check SSID and password in /etc/NetworkManager/system-connections/"
+echo "  2. Restart NetworkManager: sudo systemctl restart NetworkManager"
+echo "  3. Check device: nmcli device wifi"
+echo "  4. View detailed logs: journalctl -u NetworkManager -f"
+echo ""
+echo "To manually add a network:"
+echo "  nmcli device wifi connect SSID --ask"
+echo ""
+echo "To modify an existing connection:"
+echo "  nmcli connection edit <connection-name>"
+echo ""
+WIFI_DIAG_EOF
+    chmod 755 "$diag_script"
+    log "DEBUG" "WiFi diagnostics script created"
+    
+    # Create WiFi connection validation script
+    local validate_script="${addon_dir}/validate-wifi-config.sh"
+    log "DEBUG" "Creating WiFi validation script: $validate_script"
+    
+    cat > "$validate_script" <<'WIFI_VALIDATE_EOF'
+#!/bin/bash
+# Validate WiFi Configuration
+# Compare build configuration against installed system
+
+echo "=== WiFi Configuration Validation ==="
+echo ""
+
+# Check if connection files exist
+CONN_DIR="/etc/NetworkManager/system-connections"
+if [ ! -d "$CONN_DIR" ]; then
+    echo "✗ Connection directory not found: $CONN_DIR"
+    exit 1
+fi
+
+echo "Checking configured WiFi networks:"
+CONN_COUNT=$(find "$CONN_DIR" -name "*.nmconnection" -type f | wc -l)
+
+if [ $CONN_COUNT -eq 0 ]; then
+    echo "  ✗ No WiFi networks configured!"
+    exit 1
+fi
+
+echo "  Found $CONN_COUNT connection(s)"
+echo ""
+
+# Check each connection
+for conn_file in "$CONN_DIR"/*.nmconnection; do
+    if [ ! -f "$conn_file" ]; then
+        continue
+    fi
+    
+    basename=$(basename "$conn_file")
+    ssid=$(grep "^ssid=" "$conn_file" 2>/dev/null || echo "UNKNOWN")
+    autoconnect=$(grep "^autoconnect=" "$conn_file" 2>/dev/null || echo "unknown")
+    
+    echo "Connection: $basename"
+    echo "  SSID: $ssid"
+    echo "  Autoconnect: $autoconnect"
+    echo ""
+done
+
+echo "=== Verification Steps ==="
+echo ""
+echo "1. Check if networks are available:"
+echo "   nmcli device wifi list"
+echo ""
+echo "2. Manually connect to test:"
+echo "   nmcli connection up <connection-name>"
+echo ""
+echo "3. View connection details:"
+echo "   nmcli connection show <connection-name>"
+echo ""
+echo "4. Check NetworkManager status:"
+echo "   systemctl status NetworkManager"
+echo ""
+WIFI_VALIDATE_EOF
+    chmod 755 "$validate_script"
+    log "DEBUG" "WiFi validation script created"
+    
+    # Create README
+    local readme="${addon_dir}/README-WIFI.md"
+    log "DEBUG" "Creating WiFi documentation: $readme"
+    
+    cat > "$readme" <<'WIFI_README_EOF'
+# WiFi Configuration & Troubleshooting
+
+This directory contains tools for WiFi network configuration and diagnostics.
+
+## Scripts
+
+### wifi-diagnostics.sh
+Comprehensive WiFi troubleshooting tool. Shows:
+- NetworkManager status
+- Configured networks and connections
+- Available WiFi networks
+- Connection status
+- System logs and error messages
+- Troubleshooting tips
+
+**Usage:**
+```bash
+~/add-ons/network/wifi-diagnostics.sh
+```
+
+### validate-wifi-config.sh
+Validates that WiFi networks were correctly configured from the build.
+
+**Usage:**
+```bash
+~/add-ons/network/validate-wifi-config.sh
+```
+
+## Manual WiFi Configuration
+
+### Add a new network
+```bash
+nmcli device wifi connect SSID --ask
+```
+
+### List available networks
+```bash
+nmcli device wifi list
+```
+
+### Connect to a saved network
+```bash
+nmcli connection up <connection-name>
+```
+
+### Edit existing connection
+```bash
+nmcli connection edit <connection-name>
+```
+
+### Delete a connection
+```bash
+nmcli connection delete <connection-name>
+```
+
+## Connection Files
+
+WiFi networks are stored in `/etc/NetworkManager/system-connections/` as `.nmconnection` files.
+
+Example structure:
+```
+[connection]
+id=MyNetwork
+type=wifi
+autoconnect=true
+
+[wifi]
+ssid=MyNetwork
+
+[wifi-security]
+key-mgmt=wpa-psk
+psk=password123
+
+[ipv4]
+method=auto
+
+[ipv6]
+method=auto
+```
+
+## Common Issues
+
+### Networks not showing up
+1. Check NetworkManager is running: `systemctl status NetworkManager`
+2. Restart NetworkManager: `sudo systemctl restart NetworkManager`
+3. Check logs: `journalctl -u NetworkManager -f`
+
+### Can't connect to network
+1. Verify password is correct
+2. Check SSID spelling (case-sensitive)
+3. Ensure WiFi hardware is enabled: `nmcli radio wifi on`
+4. Check RF interference/channel conflicts
+
+### Connection drops frequently
+1. Check WiFi signal strength: `nmcli device wifi list`
+2. Update network drivers if needed
+3. Check for interference (2.4GHz is crowded, try 5GHz)
+4. Review NetworkManager logs: `journalctl -u NetworkManager -f`
+
+## Security Notes
+
+- Passwords in connection files are readable by root only
+- Use WPA2/WPA3 encryption (not WEP)
+- Keep authentication credentials secure
+- Review build logs if connection fails mysteriously
+
+## References
+
+- nmcli reference: `man nmcli`
+- NetworkManager docs: https://networkmanager.dev/
+- WiFi security: https://en.wikipedia.org/wiki/IEEE_802.11
+WIFI_README_EOF
+    chmod 644 "$readme"
+    log "DEBUG" "WiFi documentation created"
+    
+    log "SUCCESS" "WiFi diagnostics tools created in ~/add-ons/network/"
+    log "INFO" "  Use ~/add-ons/network/wifi-diagnostics.sh to troubleshoot"
+}
+
 embed_cache_files() {
     # Embed cache files into the ISO so they're available for future builds
     # This is for users who build on the same machine they install to
@@ -2493,6 +2836,10 @@ main() {
     log "DEBUG" "Step 9/13: setup_wikipedia_tools"
     setup_wikipedia_tools
     log "DEBUG" "Step 9/13: setup_wikipedia_tools COMPLETED"
+    
+    log "DEBUG" "Step 9.5/13: setup_wifi_diagnostics"
+    setup_wifi_diagnostics
+    log "DEBUG" "Step 9.5/13: setup_wifi_diagnostics COMPLETED"
     
     log "DEBUG" "Step 10/13: customize_git_config"
     customize_git_config
