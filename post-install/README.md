@@ -147,6 +147,59 @@ kiwix-serve --port=8080 ~/wikipedia/ham-radio-wikipedia_*.zim
 # Open browser to http://localhost:8080
 ```
 
+### 03-install-chirp.sh
+
+**Purpose**: Install CHIRP (radio programming software) via pipx
+
+**Why Post-Install?** CHIRP must be installed via pipx (not apt) for:
+- Latest stable version from Python Package Index
+- Proper dependency isolation in virtual environment
+- Easy updates without system package conflicts
+- Required dependency: `python3-yttag`
+
+**Dependencies**:
+
+- `pipx` (Python package installer)
+- `python3-venv` (for virtual environments)
+- `python3-dev` (for building wheels)
+- `python3-yttag` (CHIRP's audio analysis library)
+
+**Usage**:
+
+```bash
+chmod +x 03-install-chirp.sh
+./03-install-chirp.sh
+
+# Or directly
+~/add-ons/post-install/03-install-chirp.sh
+```
+
+**What it does**:
+
+1. Verifies pipx is installed (installs if missing)
+2. Installs `python3-yttag` system package
+3. Uses pipx to install CHIRP in isolated environment
+4. Adds CHIRP to PATH via ~/.local/bin
+5. Verifies installation and displays version
+
+**Using CHIRP**:
+
+```bash
+# Launch CHIRP
+chirp
+
+# If CHIRP doesn't start, add to PATH:
+export PATH="$HOME/.local/bin:$PATH"
+chirp
+```
+
+**Why NOT apt?**
+
+- `chirp` package in Ubuntu repos is often outdated
+- apt installations can conflict with other packages
+- pipx provides isolation and automatic PATH management
+- Updates via `pipx upgrade chirp` are safer than system updates
+
 ## Future Post-Install Scripts (TODO)
 
 ### detect-gps-location.sh
@@ -172,9 +225,12 @@ control simultaneously. flrig is installed as a backup but limited to single-app
 
 If running multiple post-install scripts:
 
-1. `download-resources.sh` - Downloads offline documentation
-2. `detect-gps-location.sh` - GPS detection and grid square
-3. `configure-radio-cat.sh` - Radio hardware configuration
+1. `01-verify-customizations.sh` - Verify ISO build completed successfully
+2. `02-restore-user-backup.sh` - Restore user configuration (optional)
+3. `03-install-chirp.sh` - Install CHIRP radio programming software
+4. `download-resources.sh` - Downloads offline documentation
+5. `detect-gps-location.sh` - GPS detection and grid square (TODO)
+6. `configure-radio-cat.sh` - Radio hardware configuration (TODO)
 
 ## Logging
 
