@@ -1481,8 +1481,30 @@ customize_preseed() {
     local timezone="${TIMEZONE:-America/Denver}"
     local keyboard_layout="${KEYBOARD_LAYOUT:-us}"
     local locale="${LOCALE:-en_US.UTF-8}"
+    local install_disk="${INSTALL_DISK:-/dev/sda5}"
+    local install_swap="${INSTALL_SWAP:-/dev/sda6}"
+    local confirm_entire_disk="${CONFIRM_ENTIRE_DISK:-no}"
     
     log "DEBUG" "Preseed config: hostname='$machine_name', username='$username', timezone='$timezone'"
+    log "DEBUG" "Partition config: disk='$install_disk', swap='$install_swap', confirm_entire='$confirm_entire_disk'"
+    
+    # Safety check for entire-disk mode
+    if [[ "$install_disk" == /dev/* ]] && [[ "$install_disk" != *"p"* ]] && [[ "$install_disk" != *[0-9] ]]; then
+        # Looks like entire disk (e.g., /dev/sda, /dev/nvme0n1, not /dev/sda5 or /dev/nvme0n1p1)
+        if [[ "$confirm_entire_disk" != "yes" ]]; then
+            log "WARN" "INSTALL_DISK='$install_disk' appears to be an entire disk (DESTRUCTIVE!)"
+            log "WARN" "This will ERASE all partitions and create new ones with LVM"
+            log "WARN" "To confirm this is intentional, set CONFIRM_ENTIRE_DISK=\"yes\" in secrets.env"
+            log "ERROR" "Preseed generation aborted for safety. Fix secrets.env or confirm with CONFIRM_ENTIRE_DISK"
+            return 1
+        else
+            log "WARN" "ENTIRE DISK MODE CONFIRMED: Will format $install_disk with LVM"
+            log "WARN" "This will ERASE ALL DATA on $install_disk"
+        fi
+    elif [[ "$confirm_entire_disk" == "yes" ]]; then
+        log "WARN" "CONFIRM_ENTIRE_DISK=yes but INSTALL_DISK='$install_disk' is a partition (not entire disk)"
+        log "INFO" "Proceeding with partition-mode installation (safe for dual-boot)"
+    fi
     
     # Create preseed directory in ISO
     local preseed_dir="${SQUASHFS_DIR}/preseed"
@@ -1490,8 +1512,18 @@ customize_preseed() {
     mkdir -p "$preseed_dir"
     
     # Generate preseed file
+    # Generate preseed file with mode-specific partitioning
     local preseed_file="${preseed_dir}/custom.preseed"
     log "DEBUG" "Generating preseed file: $preseed_file"
+    
+    # Determine partition mode based on INSTALL_DISK format
+    local is_partition=0
+    if echo "$install_disk" | grep -qE 'p[0-9]+$|nvme[0-9]n[0-9]p[0-9]+$'; then
+        is_partition=1
+        log "INFO" "Partition mode detected: $install_disk (specific partition, safe for dual-boot)"
+    else
+        log "WARN" "Entire-disk mode detected: $install_disk (will auto-partition with LVM)"
+    fi
     
     # Hash password for preseed (format: SHA512 hash prefixed with $6$)
     local hashed_password=""
@@ -1535,21 +1567,19 @@ d-i passwd/user-password-crypted password PASSWORD_HASH_VAR
 # Root account (disable)
 d-i passwd/root-login boolean false
 
-# Partitioning (use LVM, entire disk)
-d-i partman-auto/method string lvm
-d-i partman-lvm/device_remove_lvm boolean true
-d-i partman-lvm/confirm boolean true
-d-i partman-lvm/confirm_nooverwrite boolean true
-d-i partman-auto/choose_recipe select atomic
-d-i partman-partitioning/confirm_write_new_label boolean true
+# Partitioning - MODE VARIES BY INSTALL_DISK
+# If INSTALL_DISK is a partition (e.g., /dev/sda5): use manual mode (safe dual-boot)
+# If INSTALL_DISK is entire disk (e.g., /dev/sda): use auto-partition with LVM
+PARTMAN_MODE_PLACEHOLDER
+d-i partman/confirm_write_new_label boolean true
 d-i partman/choose_partition select finish
 d-i partman/confirm boolean true
 d-i partman/confirm_nooverwrite boolean true
 
-# Grub bootloader
+# Grub bootloader (installs to target disk, respects other OSes)
 d-i grub-installer/only_debian boolean true
 d-i grub-installer/with_other_os boolean true
-d-i grub-installer/bootdev string /dev/sda
+d-i grub-installer/bootdev string INSTALL_DISK_VAR
 
 # Package selection (install GNOME desktop)
 tasksel tasksel/first multiselect ubuntu-desktop
@@ -1576,6 +1606,25 @@ EOF
     sed -i "s|FULLNAME_VAR|$fullname|g" "$preseed_file"
     sed -i "s|USERNAME_VAR|$username|g" "$preseed_file"
     sed -i "s|PASSWORD_HASH_VAR|$hashed_password|g" "$preseed_file"
+    sed -i "s|INSTALL_DISK_VAR|$install_disk|g" "$preseed_file"
+    
+    # Replace partitioning mode based on partition type
+    if [ $is_partition -eq 1 ]; then
+        log "DEBUG" "Using partition-mode preseed (safe for dual-boot)"
+        sed -i "s|PARTMAN_MODE_PLACEHOLDER|d-i partman-auto/method string regular|g" "$preseed_file"
+    else
+        log "DEBUG" "Using entire-disk mode preseed (auto-partition with LVM)"
+        local partman_mode=$(cat <<'PARTMAN_ENTIRE'
+d-i partman-auto/method string lvm
+d-i partman-lvm/device_remove_lvm boolean true
+d-i partman-lvm/confirm boolean true
+d-i partman-lvm/confirm_nooverwrite boolean true
+d-i partman-auto/choose_recipe select atomic
+d-i partman-partitioning/confirm_write_new_label boolean true
+PARTMAN_ENTIRE
+)
+        sed -i "s|PARTMAN_MODE_PLACEHOLDER|$partman_mode|g" "$preseed_file"
+    fi
     
     chmod 644 "$preseed_file"
     log "DEBUG" "Preseed file written successfully"
