@@ -2842,65 +2842,67 @@ main() {
     log "INFO" "=== Applying Customizations ==="
     log "DEBUG" "Starting customization phase..."
     
-    log "DEBUG" "Step 1/13: customize_hostname"
+    log "DEBUG" "Step 1/12: customize_hostname"
     customize_hostname
-    log "DEBUG" "Step 1/13: customize_hostname COMPLETED"
+    log "DEBUG" "Step 1/12: customize_hostname COMPLETED"
     
-    log "DEBUG" "Step 2/13: restore_user_backup"
-    restore_user_backup
-    log "DEBUG" "Step 2/13: restore_user_backup COMPLETED"
+    # NOTE: restore_user_backup moved to post-install (see post-install/02-restore-user-backup.sh)
+    # Reason: 611MB backup extraction hangs during ISO build - should run after OS boots
+    # log "DEBUG" "Step 2/12: restore_user_backup"
+    # restore_user_backup
+    # log "DEBUG" "Step 2/12: restore_user_backup COMPLETED"
     
-    log "DEBUG" "Step 3/13: customize_wifi"
+    log "DEBUG" "Step 2/12: customize_wifi"
     customize_wifi
-    log "DEBUG" "Step 3/13: customize_wifi COMPLETED"
+    log "DEBUG" "Step 3/12: customize_wifi COMPLETED"
     
-    log "DEBUG" "Step 4/13: customize_desktop"
+    log "DEBUG" "Step 4/12: customize_desktop"
     customize_desktop
-    log "DEBUG" "Step 4/13: customize_desktop COMPLETED"
+    log "DEBUG" "Step 4/12: customize_desktop COMPLETED"
     
-    log "DEBUG" "Step 5/13: customize_aprs"
+    log "DEBUG" "Step 5/12: customize_aprs"
     customize_aprs
-    log "DEBUG" "Step 5/13: customize_aprs COMPLETED"
+    log "DEBUG" "Step 5/12: customize_aprs COMPLETED"
     
     log "DEBUG" "Step 5.5/13: customize_radio_configs"
     customize_radio_configs
     log "DEBUG" "Step 5.5/13: customize_radio_configs COMPLETED"
     
-    log "DEBUG" "Step 6/13: customize_user_and_autologin"
+    log "DEBUG" "Step 6/12: customize_user_and_autologin"
     customize_user_and_autologin
-    log "DEBUG" "Step 6/13: customize_user_and_autologin COMPLETED"
+    log "DEBUG" "Step 6/12: customize_user_and_autologin COMPLETED"
     
     log "DEBUG" "Step 6.5/13: customize_preseed"
     customize_preseed
     log "DEBUG" "Step 6.5/13: customize_preseed COMPLETED"
     
-    log "DEBUG" "Step 7/13: customize_vara_license"
+    log "DEBUG" "Step 7/12: customize_vara_license"
     customize_vara_license
-    log "DEBUG" "Step 7/13: customize_vara_license COMPLETED"
+    log "DEBUG" "Step 7/12: customize_vara_license COMPLETED"
     
-    log "DEBUG" "Step 8/13: customize_pat"
+    log "DEBUG" "Step 8/12: customize_pat"
     customize_pat
-    log "DEBUG" "Step 8/13: customize_pat COMPLETED"
+    log "DEBUG" "Step 8/12: customize_pat COMPLETED"
     
-    log "DEBUG" "Step 9/13: setup_wikipedia_tools"
+    log "DEBUG" "Step 9/12: setup_wikipedia_tools"
     setup_wikipedia_tools
-    log "DEBUG" "Step 9/13: setup_wikipedia_tools COMPLETED"
+    log "DEBUG" "Step 9/12: setup_wikipedia_tools COMPLETED"
     
     log "DEBUG" "Step 9.5/13: setup_wifi_diagnostics"
     setup_wifi_diagnostics
     log "DEBUG" "Step 9.5/13: setup_wifi_diagnostics COMPLETED"
     
-    log "DEBUG" "Step 10/13: customize_git_config"
+    log "DEBUG" "Step 10/12: customize_git_config"
     customize_git_config
-    log "DEBUG" "Step 10/13: customize_git_config COMPLETED"
+    log "DEBUG" "Step 10/12: customize_git_config COMPLETED"
     
-    log "DEBUG" "Step 11/13: customize_power"
+    log "DEBUG" "Step 11/12: customize_power"
     customize_power
-    log "DEBUG" "Step 11/13: customize_power COMPLETED"
+    log "DEBUG" "Step 11/12: customize_power COMPLETED"
     
-    log "DEBUG" "Step 12/13: customize_timezone"
+    log "DEBUG" "Step 12/12: customize_timezone"
     customize_timezone
-    log "DEBUG" "Step 12/13: customize_timezone COMPLETED"
+    log "DEBUG" "Step 12/12: customize_timezone COMPLETED"
     
     log "DEBUG" "Step 13/14: customize_additional_packages"
     customize_additional_packages
