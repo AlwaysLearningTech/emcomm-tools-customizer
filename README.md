@@ -323,6 +323,41 @@ POWER_IDLE_BATTERY="suspend"      # Idle action on battery
 POWER_IDLE_TIMEOUT="900"          # Idle timeout (seconds)
 ```
 
+### Partition & Installation Modes
+
+If you're installing on a **dual-boot system** (Windows + ETC), use these settings to ensure the build script only modifies your ETC partition, not the entire disk:
+
+```bash
+# === PARTITION MODE (Dual-Boot Safe) ===
+# Install onto a specific partition (e.g., sda5, sda6)
+# This is SAFE for dual-boot systems - only that partition is modified
+INSTALL_DISK="/dev/sda5"          # Target partition (not entire disk!)
+INSTALL_SWAP="/dev/sda6"          # Swap partition (if separate)
+CONFIRM_ENTIRE_DISK="no"          # Keep as "no" for dual-boot
+
+# === ENTIRE-DISK MODE (Fresh Install Only) ===
+# WARNING: This will ERASE the entire disk and create new partitions with LVM
+# Only use this for dedicated ETC systems, not dual-boot
+# Uncomment to use entire-disk mode (NOT RECOMMENDED):
+# INSTALL_DISK="/dev/sda"           # Entire disk (DESTRUCTIVE!)
+# CONFIRM_ENTIRE_DISK="yes"         # MUST set to "yes" to enable entire-disk
+```
+
+**How partition detection works:**
+
+| INSTALL_DISK | Mode | Behavior | When to Use |
+|--------------|------|----------|-------------|
+| `/dev/sda5` | Partition | Uses manual partitioning for just this partition | Dual-boot (Windows + ETC) |
+| `/dev/sda` | Entire Disk | Auto-partitions entire disk with LVM, requires CONFIRM_ENTIRE_DISK="yes" | Fresh install, no dual-boot |
+| `/dev/nvme0n1p1` | Partition | Manual partitioning for this NVMe partition | Dual-boot with NVMe drive |
+| `/dev/nvme0n1` | Entire Disk | Auto-partitions entire NVMe disk, requires confirmation | Fresh NVMe install |
+
+**Safety features:**
+
+- Partition mode (`/dev/sda5`) uses **manual partitioning** during Ubuntu install (user confirms)
+- Entire-disk mode (`/dev/sda`) requires **CONFIRM_ENTIRE_DISK="yes"** - prevents accidental data loss
+- Build script validates INSTALL_DISK format and warns before generating preseed
+
 ### About VARA Licenses
 
 VARA is commercial software with **two separate products**:
@@ -360,6 +395,53 @@ pat connect emcomm    # Quick connect to your configured gateway
 ```
 
 After first boot, run `~/.config/pat/add-emcomm-alias.sh` to add the alias to your Pat config.
+
+### Post-Install User Configuration Restoration
+
+If you have a backup from a previous ETC installation, you can restore your configurations (callsign, WiFi passwords, APRS settings, maps, etc.) after the new system boots.
+
+**When to restore:**
+- You're rebuilding ETC on the same hardware and want to preserve your previous settings
+- You have a backup tarball from a previous installation: `etc-user-backup-*.tar.gz`
+
+**How to restore:**
+
+After the OS boots and you're logged in, run:
+
+```bash
+# Copy backup to home directory if not already there
+cp /path/to/etc-user-backup-*.tar.gz ~
+
+# Optional: List what will be restored
+tar tzf ~/etc-user-backup-*.tar.gz | head -20
+
+# Restore user configuration (interactive)
+~/add-ons/post-install/02-restore-user-backup.sh
+
+# Restore with Wine/VARA prefix (larger, use if you backed up VARA)
+~/add-ons/post-install/02-restore-user-backup.sh --wine
+```
+
+**What gets restored:**
+
+- `~/.config/emcomm-tools/` - ETC configuration (callsign, grid, user.json)
+- `~/.local/share/emcomm-tools/` - Maps, tilesets, application data
+- `~/.local/share/pat/` - Winlink Pat settings (mailbox passwords, aliases)
+- `~/.wine32/` - Wine prefix (optional, only if --wine flag used)
+
+**Options:**
+
+```bash
+./02-restore-user-backup.sh --help        # Show help
+
+./02-restore-user-backup.sh               # Restore user config only
+./02-restore-user-backup.sh -d ~/backups  # From specific directory
+./02-restore-user-backup.sh --wine        # Also restore Wine/VARA prefix
+./02-restore-user-backup.sh --verbose     # Show detailed output
+./02-restore-user-backup.sh --force       # Overwrite existing files
+```
+
+**Note:** User backups (611MB+) are **not** embedded in the ISO to avoid hanging the build process. They're restored post-install instead.
 
 ### Power Management Options
 
