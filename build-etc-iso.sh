@@ -1614,7 +1614,10 @@ EOF
         sed -i "s|PARTMAN_MODE_PLACEHOLDER|d-i partman-auto/method string regular|g" "$preseed_file"
     else
         log "DEBUG" "Using entire-disk mode preseed (auto-partition with LVM)"
-        local partman_mode=$(cat <<'PARTMAN_ENTIRE'
+        # Use a temporary file for multiline sed replacement
+        local partman_file
+        partman_file=$(mktemp)
+        cat > "$partman_file" << 'PARTMAN_ENTIRE'
 d-i partman-auto/method string lvm
 d-i partman-lvm/device_remove_lvm boolean true
 d-i partman-lvm/confirm boolean true
@@ -1622,8 +1625,9 @@ d-i partman-lvm/confirm_nooverwrite boolean true
 d-i partman-auto/choose_recipe select atomic
 d-i partman-partitioning/confirm_write_new_label boolean true
 PARTMAN_ENTIRE
-)
-        sed -i "s|PARTMAN_MODE_PLACEHOLDER|$partman_mode|g" "$preseed_file"
+        sed -i '/PARTMAN_MODE_PLACEHOLDER/r '"$partman_file" "$preseed_file"
+        sed -i '/PARTMAN_MODE_PLACEHOLDER/d' "$preseed_file"
+        rm -f "$partman_file"
     fi
     
     chmod 644 "$preseed_file"
