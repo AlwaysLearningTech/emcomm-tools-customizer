@@ -1345,23 +1345,24 @@ customize_radio_configs() {
 {
   "id": "anytone-d578uv",
   "vendor": "Anytone",
-  "model": "D578UV (D-Star)",
+  "model": "D578UV (DigiRig Mobile)",
   "rigctrl": {
     "id": "301",
     "baud": "9600",
     "ptt": "CM108"
   },
   "notes": [
-    "D-Star capable VHF/UHF radio",
-    "USB connection provides CAT control",
+    "D-Star capable VHF/UHF radio with CAT control",
+    "DigiRig Mobile provides USB-to-CAT interface",
     "CM108 PTT via USB audio device",
-    "Supports APRS operation with TNC",
+    "Supports APRS and digital modes",
     "Default baud rate: 9600bps"
   ],
   "fieldNotes": [
-    "Connect D578UV via USB cable",
-    "Radio will appear as /dev/ttyUSB0 (or similar)",
-    "Audio device will enumerate as CM108-compatible",
+    "Connect D578UV to DigiRig Mobile 6-pin connector",
+    "DigiRig USB connection to computer",
+    "Serial device: /dev/ttyUSB0 (or similar)",
+    "Audio device enumerates as CM108-compatible",
     "Use et-mode to select digital mode (APRS, D-Star, etc.)",
     "Configure frequency/offset using radio display"
   ]
