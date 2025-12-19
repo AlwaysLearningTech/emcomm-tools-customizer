@@ -1,269 +1,172 @@
-# Post-Installation Scripts
-
-These scripts run AFTER installing ETC from the custom ISO onto target hardware.
-They handle runtime-specific configurations and verification that cannot be done during ISO build.
-
-## Quick Start: Verify Your Build
+# Post-Installation
 
 After the Ubuntu installer completes and you boot into the desktop, run:
 
 ```bash
-./post-install/01-verify-customizations.sh
+./post-install.sh
 ```
 
-This checks:
-- System configuration (hostname, timezone, locale)
-- EmComm Tools installation
-- WiFi network configuration
-- APRS setup
-- Desktop settings
-- Installed packages
-- Post-install tools
+This is a comprehensive script that handles:
 
-**Output**: Pass/fail checklist with next steps and troubleshooting guidance.
+- ✅ **Verify** - Check hostname, WiFi, APRS, desktop settings
+- ✅ **Restore** - Recover user configuration from backup (optional)
+- ✅ **CHIRP** - Install radio programming software via pipx
 
-## Current Status
+## Quick Usage
 
-**Note**: Most customizations are now done directly in the `build-etc-iso.sh` script
-during ISO creation. Post-install scripts are reserved for:
-
-- ✅ Large optional downloads (to keep ISO size manageable)
-- ✅ Hardware-specific detection (GPS, radio models)
-- ✅ Runtime configuration that varies per deployment
-
-## Why Some Things Stay Post-Install
-
-| Script | Could run at build-time? | Why post-install? |
-|--------|--------------------------|-------------------|
-| `download-resources.sh` | Yes (network available in chroot) | Adds ~500MB to ISO, user may not want all sites |
-| `create-ham-wikipedia-zim.sh` | Partially (HTML yes, .zim needs zimwriterfs) | User may want different articles |
-| Future: GPS detection | No | Requires actual hardware |
-| Future: Radio detection | No | Requires actual hardware |
-
-**Design principle**: Keep ISO size reasonable. Let users opt-in to large downloads post-install.
-
-## Backup/Restore Workflow
-
-The build system automatically restores settings from an existing ETC installation
-if backup files are found in the `./cache/` directory.
-
-### How It Works
-
-1. **On your existing ETC system**, create backups:
-   ```bash
-   # User settings (callsign, grid, Pat mailbox, etc.)
-   et-user-backup
-   
-   # Wine/VARA (optional, if you have VARA installed)
-   ~/add-ons/wine/05-backup-wine-install.sh
-   ```
-
-2. **Copy the tarballs** to your build machine's `./cache/` directory:
-   ```bash
-   cp etc-user-backup-*.tar.gz /path/to/emcomm-tools-customizer/cache/
-   cp etc-wine-backup-*.tar.gz /path/to/emcomm-tools-customizer/cache/  # optional
-   ```
-
-3. **Build the ISO** - backups are automatically detected and restored
-
-4. **After installation**, your settings are pre-configured
-
-### Auto-Detection
-
-The build script automatically finds these files in `./cache/`:
-
-| File Pattern | Created By | Contains |
-|--------------|------------|----------|
-| `etc-user-backup-*.tar.gz` | `et-user-backup` | `~/.config/emcomm-tools/`, `~/.local/share/emcomm-tools/`, `~/.local/share/pat/` |
-| `etc-wine-backup-*.tar.gz` | `05-backup-wine-install.sh` | `~/.wine32/` (entire VARA installation) |
-
-If multiple backup files match, the most recent one is used.
-
-**Note**: Wine backups can be large (~500MB+). They're extracted to /etc/skel during
-build, so VARA will be pre-installed when you create a user account.
-
-## Available Scripts
-
-### download-resources.sh
-
-**Purpose**: Downloads offline documentation using ETC's `et-mirror.sh` command
-
-**Why Post-Install?** The `et-mirror.sh` command is part of ETC and only available
-after installation, not during ISO build.
-
-**Usage**:
+### Interactive Menu (Default)
 
 ```bash
-chmod +x download-resources.sh
-./download-resources.sh
+./post-install.sh
 ```
 
-**What it downloads**:
+Shows menu with options:
+1. Verify customizations
+2. Restore user backup
+3. Install CHIRP
+4. Run all
+5. Exit
 
-- Packet radio documentation (choisser.com, soundcardpacket.org)
-- AX.25 HOWTO and protocols
-- Ham radio technical references
-- Offline copies stored in `~/offline-www/`
-
-### create-ham-wikipedia-zim.sh
-
-**Purpose**: Creates a custom Wikipedia .zim file with ham radio articles
-
-**Why Post-Install?** Requires network access and zimwriterfs (installed by ETC).
-The build creates a wrapper script at `~/add-ons/wikipedia/create-my-wikipedia.sh`
-that calls this with your configured articles.
-
-**Usage**:
+### Command-Line Mode
 
 ```bash
-# Run the wrapper (uses your secrets.env articles or defaults)
-cd ~/add-ons/wikipedia
-./create-my-wikipedia.sh
+# Verify customizations only
+./post-install.sh --verify
 
-# Or run directly with custom articles
-./create-ham-wikipedia-zim.sh --articles "2-meter_band|70-centimeter_band|APRS"
+# Restore user backup
+./post-install.sh --restore
+
+# Restore user backup INCLUDING Wine/VARA
+./post-install.sh --restore-wine
+
+# Install CHIRP radio programming software
+./post-install.sh --chirp
+
+# Run everything
+./post-install.sh --all
+
+# Show help
+./post-install.sh --help
 ```
 
-**What it creates**:
-
-- Downloads specified Wikipedia articles via Wikipedia REST API
-- Creates `~/wikipedia/ham-radio-wikipedia_YYYYMM.zim`
-- Includes index page with all articles organized
-
-**Default articles**:
-
-- 2-meter band, 70-centimeter band, HF/VHF/UHF bands
-- GMRS, FRS, MURS, Citizens band radio
-- APRS, Winlink, DMR, D-STAR, System Fusion
-- Amateur radio emergency communications
-- Repeaters, simplex, antennas, propagation
-
-**Viewing the .zim file**:
+### Specify Backup Location
 
 ```bash
-# Start Kiwix server
-kiwix-serve --port=8080 ~/wikipedia/ham-radio-wikipedia_*.zim
-
-# Open browser to http://localhost:8080
+./post-install.sh --restore --dir ~/my-backups
 ```
 
-### 03-install-chirp.sh
+## What It Does
 
-**Purpose**: Install CHIRP (radio programming software) via pipx
+### 1. Verify Customizations
 
-**Why Post-Install?** CHIRP must be installed via pipx (not apt) for:
-- Latest stable version from Python Package Index
-- Proper dependency isolation in virtual environment
-- Easy updates without system package conflicts
-- Required dependency: `python3-yttag`
+Checks:
+- Hostname is set to `ETC-{CALLSIGN}`
+- EmComm Tools installed at `/opt/emcomm-tools`
+- direwolf available
+- Pat (Winlink) available
+- WiFi networks configured
+- APRS direwolf template configured
+- Dark mode enabled
+- Post-install markers present
 
-**Dependencies**:
+### 2. Restore User Backup
 
-- `pipx` (Python package installer)
-- `python3-venv` (for virtual environments)
-- `python3-dev` (for building wheels)
-- `python3-yttag` (CHIRP's audio analysis library)
+Restores from `etc-user-backup-*.tar.gz`:
+- `~/.config/emcomm-tools/` - ETC configuration
+- `~/.local/share/emcomm-tools/` - Maps, tilesets, app data
+- `~/.local/share/pat/` - Winlink Pat settings
 
-**Usage**:
+Optionally restores from `etc-wine-backup-*.tar.gz` with `--restore-wine`:
+- `~/.wine32/` - VARA/Wine prefix (interactive prompt)
+
+**Backup files searched in**: `cache/` directory (or `--dir` argument)
+
+### 3. Install CHIRP
+
+Installs [CHIRP](https://chirp.danplanet.com/) radio programming software:
+- Via pipx (Python virtual environment, NOT apt)
+- Installs `python3-yttag` dependency
+- Fallback to pip3 if pipx fails
+- Verifies installation and displays version
+
+Why pipx instead of apt?
+- Latest version from Python Package Index
+- Proper dependency isolation
+- No conflicts with system packages
+- Easy updates: `pipx upgrade chirp`
+
+**Launch CHIRP**: `chirp`
+
+## Backup Workflow
+
+### Creating Backups (on existing ETC system)
 
 ```bash
-chmod +x 03-install-chirp.sh
-./03-install-chirp.sh
+# User configuration backup
+et-user-backup
 
-# Or directly
-~/add-ons/post-install/03-install-chirp.sh
+# Wine/VARA backup (optional)
+~/add-ons/wine/05-backup-wine-install.sh
 ```
 
-**What it does**:
+### Using Backups in Build
 
-1. Verifies pipx is installed (installs if missing)
-2. Installs `python3-yttag` system package
-3. Uses pipx to install CHIRP in isolated environment
-4. Adds CHIRP to PATH via ~/.local/bin
-5. Verifies installation and displays version
+1. Copy tarballs to `cache/` on build machine
+2. Run build: `sudo ./build-etc-iso.sh -r stable`
+3. Build automatically detects and restores backups
+4. After installation, run `./post-install.sh --verify` to confirm
 
-**Using CHIRP**:
+## Logging
+
+Script output displayed to console. For diagnostics:
 
 ```bash
-# Launch CHIRP
-chirp
+# Verbose mode
+VERBOSE=1 ./post-install.sh --verify
+```
 
-# If CHIRP doesn't start, add to PATH:
+## Troubleshooting
+
+### "CHIRP not found after install"
+
+Add `~/.local/bin` to PATH:
+
+```bash
 export PATH="$HOME/.local/bin:$PATH"
 chirp
 ```
 
-**Why NOT apt?**
+Or install globally:
 
-- `chirp` package in Ubuntu repos is often outdated
-- apt installations can conflict with other packages
-- pipx provides isolation and automatic PATH management
-- Updates via `pipx upgrade chirp` are safer than system updates
-
-## Future Post-Install Scripts (TODO)
-
-### detect-gps-location.sh
-
-- Detects GPS hardware (USB, serial, Bluetooth)
-- Gets coordinates and converts to Maidenhead grid square
-- Updates et-user configuration automatically
-- Fallback to manual entry if no GPS detected
-
-### configure-radio-cat.sh
-
-- Auto-detects radio hardware via USB VID/PID
-- Identifies make/model (Anytone D578, BTech, Yaesu, Icom, etc.)
-- Configures CAT control via Hamlib/rigctld (preferred for multi-app sharing)
-- Sets up proper COM port assignments
-- Installs flrig as backup option
-
-**Note on D578 CAT Control**: Hamlib/rigctld is preferred for the Anytone D578UV
-because it allows multiple applications (fldigi, Pat, WSJT-X, etc.) to share CAT
-control simultaneously. flrig is installed as a backup but limited to single-app use.
-
-## Execution Order
-
-If running multiple post-install scripts:
-
-1. `01-verify-customizations.sh` - Verify ISO build completed successfully
-2. `02-restore-user-backup.sh` - Restore user configuration (optional)
-3. `03-install-chirp.sh` - Install CHIRP radio programming software
-4. `download-resources.sh` - Downloads offline documentation
-5. `detect-gps-location.sh` - GPS detection and grid square (TODO)
-6. `configure-radio-cat.sh` - Radio hardware configuration (TODO)
-
-## Logging
-
-All post-install scripts log to:
-
-```text
-~/.local/share/emcomm-tools-customizer/logs/
+```bash
+pipx install --global chirp
 ```
 
-Each script creates a timestamped log file for troubleshooting.
+### "Backup file not found"
 
-## Troubleshooting
+Backups should be in `cache/` directory:
 
-### "et-mirror.sh not found"
+```bash
+ls -lah cache/etc-*-backup-*.tar.gz
+```
 
-- **Cause**: Script run before ETC installation
-- **Fix**: Install ETC from the custom ISO first, then run post-install scripts
+If not present, place them there and run:
 
-### "GPS device not detected"
+```bash
+./post-install.sh --restore --dir ./cache
+```
 
-- **Cause**: GPS hardware not connected or drivers not loaded
-- **Fix**: Connect GPS device, run `dmesg | grep -i gps` to check for device
-- **Fallback**: Manually enter grid square with `et-user` command
+### "Cannot restore Wine backup"
 
-### "Radio not detected"
+Use interactive restore:
 
-- **Cause**: Radio not powered on, cable not connected, or unsupported model
-- **Fix**: Check cable, power, and run `lsusb` to verify USB device appears
-- **Fallback**: Manually configure radio settings in application (fldigi, Pat, etc.)
+```bash
+./post-install.sh --restore-wine
+```
+
+This prompts before extracting.
 
 ---
 
-**Remember**: Maximize build-etc-iso.sh customizations! Only add scripts here if
-they truly cannot run during ISO build.
-
 **73 de KD7DGF** 📻
+
