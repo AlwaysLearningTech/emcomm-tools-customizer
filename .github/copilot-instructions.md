@@ -12,6 +12,7 @@
 9. **UPDATE DOCUMENTATION IN-PLACE** - Modify existing README.md directly.
 10. **COMMIT BEFORE BUILDS** - ALWAYS remind user to commit and sync changes before starting a build. After build completes, user may overwrite OS with new ISO before syncing!
 11. **SUDO PASSWORD ALERT** - When a terminal command requires sudo and prompts for password, STOP immediately and notify the user. User often doesn't notice terminal prompts while chat is processing.
+12. **NO TEE IN BUILD COMMANDS** - Never use `tee` in build scripts when running with sudo (causes hangs/timeouts). Output goes to logs/ automatically.
 
 ## Troubleshooting Priority
 - **Priority is a working build** - If a non-core component breaks the build, ask whether to attempt repair or defer to next revision.
