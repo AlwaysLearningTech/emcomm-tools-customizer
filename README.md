@@ -35,7 +35,7 @@ This customizer **respects upstream ETC architecture**. We:
 
 **ETC Architecture**: ETC uses runtime template processing. When you run `et-direwolf`, `et-yaac`, or `et-winlink`, these wrapper scripts read from `~/.config/emcomm-tools/user.json` and generate configs dynamically. We pre-populate `user.json` so you skip the `et-user` prompt on first boot.
 
-**APRS Customization**: We modify ETC's direwolf template at `/opt/emcomm-tools/conf/template.d/packet/direwolf.aprs-digipeater.conf` to add iGate and beacon settings while preserving the `{{ET_CALLSIGN}}` and `{{ET_AUDIO_DEVICE}}` placeholders that ETC substitutes at runtime.
+**APRS Configuration**: APRS customization via direwolf template modification has been disabled in this version to preserve compatibility with Pat/Winlink-packet mode. ETC's upstream direwolf templates handle all modes correctly. Users can customize APRS settings post-install if needed. See "Future Work" section for plans to re-enable this feature safely.
 
 ## Release Status: v1.0 (First Working Build)
 
@@ -43,11 +43,12 @@ This customizer **respects upstream ETC architecture**. We:
 
 - **Build process**: Fully automated ETC ISO customization via xorriso/squashfs
 - **WiFi configuration**: Networks are pre-configured in NetworkManager
-- **APRS setup**: direwolf iGate/beacon templates customized and ready for runtime use
+- **D578 CAT Control**: DigiRig Mobile configuration for CAT control (et-mode packet/Winlink compatible)
 - **User config**: `~/.config/emcomm-tools/user.json` pre-populated with callsign, grid, Winlink password
 - **Desktop settings**: Dark mode, scaling, accessibility, display, power management, timezone all applied
 - **Git config**: User name/email configured
 - **VARA license setup**: `.reg` files and import script created for post-install use
+- **Single post-install script**: Verification, backup restoration, and CHIRP installation via pipx
 - **Additional packages**: Development tools (git, nodejs, npm, uv) installable via configuration
 - **Cache system**: Downloaded ISOs cached for faster rebuilds
 - **Preseed automation**: Ubuntu 22.10 installer automated with hostname, username, password, timezone
