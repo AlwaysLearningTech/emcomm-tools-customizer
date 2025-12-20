@@ -1926,18 +1926,50 @@ customize_additional_packages() {
     setup_chroot_mounts
     trap 'cleanup_chroot_mounts' EXIT
     
-    # Update apt cache first
+    # Remove problematic Brave repo
+    log "INFO" "Removing Brave browser repository..."
+    rm -f "${SQUASHFS_DIR}/etc/apt/sources.list.d/brave-browser-release.sources"
+    rm -f "${SQUASHFS_DIR}/etc/apt/sources.list.d/brave-browser-release.list"
+    
+    # Add Microsoft Edge repository
+    log "INFO" "Adding Microsoft Edge repository..."
+    mkdir -p "${SQUASHFS_DIR}/etc/apt/keyrings"
+    
+    # Download and install Microsoft GPG key
+    chroot "${SQUASHFS_DIR}" sh -c 'curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > /etc/apt/keyrings/microsoft-edge-stable.gpg' 2>&1 | tail -2 | tee -a "$LOG_FILE"
+    
+    # Add Edge repository
+    cat > "${SQUASHFS_DIR}/etc/apt/sources.list.d/microsoft-edge-stable.list" << 'EDGE_REPO'
+deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft-edge-stable.gpg] https://packages.microsoft.com/repos/edge stable main
+EDGE_REPO
+    chmod 644 "${SQUASHFS_DIR}/etc/apt/sources.list.d/microsoft-edge-stable.list"
+    
+    # Update apt cache first (includes new Edge repo)
     log "INFO" "Updating package cache..."
     chroot "${SQUASHFS_DIR}" apt-get update 2>&1 | tail -5 | tee -a "$LOG_FILE"
     
-    # Install packages
-    log "INFO" "Installing packages: $additional_packages"
+    # Install packages (including microsoft-edge-stable)
+    local all_packages="${additional_packages} microsoft-edge-stable"
+    log "INFO" "Installing packages: $all_packages"
     # Use -y to auto-confirm, -qq for less output
-    # Note: DO NOT quote $additional_packages - we need word splitting for separate package names
-    if chroot "${SQUASHFS_DIR}" apt-get install -y -qq $additional_packages 2>&1 | tee -a "$LOG_FILE"; then
+    # Note: DO NOT quote $all_packages - we need word splitting for separate package names
+    if chroot "${SQUASHFS_DIR}" apt-get install -y -qq $all_packages 2>&1 | tee -a "$LOG_FILE"; then
         log "SUCCESS" "Packages installed successfully"
     else
         log "WARN" "Some packages may have failed to install - see log for details"
+    fi
+    
+    # Install CHIRP via pipx (radio programming software)
+    log "INFO" "Installing CHIRP radio programmer via pipx..."
+    
+    # First ensure pipx and python3-yttag are available
+    chroot "${SQUASHFS_DIR}" apt-get install -y -qq pipx python3-yttag 2>&1 | tail -3 | tee -a "$LOG_FILE"
+    
+    # Install CHIRP globally via pipx
+    if chroot "${SQUASHFS_DIR}" bash -c 'pipx install chirp 2>&1 | tail -10'; then
+        log "SUCCESS" "CHIRP installed successfully"
+    else
+        log "WARN" "CHIRP installation had issues - may need manual setup"
     fi
     
     cleanup_chroot_mounts
