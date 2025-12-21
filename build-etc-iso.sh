@@ -1926,34 +1926,28 @@ customize_additional_packages() {
     setup_chroot_mounts
     trap 'cleanup_chroot_mounts' EXIT
     
-    # Remove problematic Brave repo
-    log "INFO" "Removing Brave browser repository..."
+    # CRITICAL: Fix Ubuntu 22.10 EOL apt sources BEFORE any apt operations
+    log "INFO" "Fixing Ubuntu 22.10 (Kinetic) EOL apt sources..."
+    chroot "${SQUASHFS_DIR}" sed -i 's/archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+    chroot "${SQUASHFS_DIR}" sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+    
+    # Remove problematic Brave repo and conflicting Edge repos
+    log "INFO" "Removing Brave browser and conflicting Microsoft Edge repositories..."
     rm -f "${SQUASHFS_DIR}/etc/apt/sources.list.d/brave-browser-release.sources"
     rm -f "${SQUASHFS_DIR}/etc/apt/sources.list.d/brave-browser-release.list"
+    rm -f "${SQUASHFS_DIR}/etc/apt/sources.list.d/microsoft-edge-release.sources"
+    rm -f "${SQUASHFS_DIR}/etc/apt/sources.list.d/microsoft-edge-dev.list"
     
-    # Add Microsoft Edge repository
-    log "INFO" "Adding Microsoft Edge repository..."
-    mkdir -p "${SQUASHFS_DIR}/etc/apt/keyrings"
-    
-    # Download and install Microsoft GPG key
-    chroot "${SQUASHFS_DIR}" sh -c 'curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > /etc/apt/keyrings/microsoft-edge-stable.gpg' 2>&1 | tail -2 | tee -a "$LOG_FILE"
-    
-    # Add Edge repository
-    cat > "${SQUASHFS_DIR}/etc/apt/sources.list.d/microsoft-edge-stable.list" << 'EDGE_REPO'
-deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft-edge-stable.gpg] https://packages.microsoft.com/repos/edge stable main
-EDGE_REPO
-    chmod 644 "${SQUASHFS_DIR}/etc/apt/sources.list.d/microsoft-edge-stable.list"
-    
-    # Update apt cache first (includes new Edge repo)
+    # Update apt cache first (before any repos are added)
     log "INFO" "Updating package cache..."
     chroot "${SQUASHFS_DIR}" apt-get update 2>&1 | tail -5 | tee -a "$LOG_FILE"
     
-    # Install packages (including microsoft-edge-stable)
+    # Install packages (including microsoft-edge-stable if available)
     local all_packages="${additional_packages} microsoft-edge-stable"
     log "INFO" "Installing packages: $all_packages"
     # Use -y to auto-confirm, -qq for less output
     # Note: DO NOT quote $all_packages - we need word splitting for separate package names
-    if chroot "${SQUASHFS_DIR}" apt-get install -y -qq $all_packages 2>&1 | tee -a "$LOG_FILE"; then
+    if chroot "${SQUASHFS_DIR}" apt-get install -y -qq $all_packages 2>&1 | tail -10 | tee -a "$LOG_FILE"; then
         log "SUCCESS" "Packages installed successfully"
     else
         log "WARN" "Some packages may have failed to install - see log for details"
