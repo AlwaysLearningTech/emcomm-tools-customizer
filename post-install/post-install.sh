@@ -299,7 +299,41 @@ install_chirp() {
     fi
 }
 
-# Edge Browser (installed during build, function available for updates)
+# Edge Browser (install post-build since requires external PPA)
+install_edge() {
+    print_header "Installing Microsoft Edge Browser"
+    
+    print_info "Adding Microsoft Edge repository..."
+    
+    # Add Microsoft GPG key
+    if ! sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys BC528686B50D79E339D3721CEB3E94ADBE1229CF 2>&1 | tail -3; then
+        print_warn "Could not add GPG key via keyserver, trying curl method..."
+        curl https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > microsoft.gpg
+        sudo install -D -o root -g root -m 644 microsoft.gpg /etc/apt/keyrings/microsoft.gpg
+        rm -f microsoft.gpg
+    fi
+    
+    # Add Edge repository
+    if [ ! -f "/etc/apt/sources.list.d/microsoft-edge-dev.list" ]; then
+        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/edge stable main" \
+            | sudo tee /etc/apt/sources.list.d/microsoft-edge-dev.list > /dev/null
+    fi
+    
+    # Update and install
+    print_info "Updating package cache..."
+    sudo apt-get update -qq 2>&1 | tail -3
+    
+    print_info "Installing microsoft-edge-stable..."
+    if sudo apt-get install -y -qq microsoft-edge-stable 2>&1 | tail -5; then
+        print_success "Microsoft Edge installed successfully"
+        return 0
+    else
+        print_error "Microsoft Edge installation failed"
+        return 1
+    fi
+}
+
+# Edge Browser Update
 update_edge() {
     print_header "Updating Microsoft Edge Browser"
     
@@ -321,7 +355,8 @@ show_menu() {
     echo "1) Verify customizations"
     echo "2) Restore user backup"
     echo "3) Restore Wine/VARA backup"
-    echo "4) Update Microsoft Edge browser"
+    echo "4) Install Microsoft Edge browser"
+    echo "5) Update Microsoft Edge browser"
     echo "q) Quit"
     echo ""
 }
@@ -329,13 +364,14 @@ show_menu() {
 interactive_menu() {
     while true; do
         show_menu
-        read -p "Select option (1-4, q): " choice
+        read -p "Select option (1-5, q): " choice
         
         case "$choice" in
             1) run_verification ;;
             2) run_restore ;;
             3) restore_wine_backup ;;
-            4) update_edge ;;
+            4) install_edge ;;
+            5) update_edge ;;
             q) 
                 print_info "Exiting post-install"
                 exit 0
@@ -360,20 +396,21 @@ Options:
   --verify              Run verification only
   --restore             Restore user backup
   --restore-wine        Restore Wine/VARA backup
+  --install-edge        Install Microsoft Edge browser
   --update-edge         Update Microsoft Edge browser
   --all                 Run all functions
   --dir <path>          Custom backup directory (default: current dir)
   -v, --verbose         Verbose output
   -h, --help            Show this help message
 
-Note: CHIRP and Microsoft Edge are pre-installed during the ISO build.
-      Use --update-edge to get the latest Edge version post-install.
-      Use install_chirp function if manual CHIRP installation is needed.
+Note: CHIRP is pre-installed during the ISO build.
+      Microsoft Edge can be installed post-install due to Ubuntu 22.10 EOL.
 
 Examples:
   ./post-install.sh                    # Interactive menu
   ./post-install.sh --verify           # Verification only
   ./post-install.sh --all              # Run all functions
+  ./post-install.sh --install-edge     # Install Edge browser
   ./post-install.sh --dir /path/to/backups --restore
 
 EOF
@@ -395,6 +432,10 @@ parse_args() {
                 restore_wine_backup
                 exit 0
                 ;;
+            --install-edge)
+                install_edge
+                exit 0
+                ;;
             --update-edge)
                 update_edge
                 exit 0
@@ -402,7 +443,7 @@ parse_args() {
             --all)
                 run_verification
                 run_restore
-                update_edge
+                install_edge
                 exit 0
                 ;;
             --dir)

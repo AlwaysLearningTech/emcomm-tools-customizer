@@ -1942,8 +1942,8 @@ customize_additional_packages() {
     log "INFO" "Updating package cache..."
     chroot "${SQUASHFS_DIR}" apt-get update 2>&1 | tail -5 | tee -a "$LOG_FILE"
     
-    # Install packages (including microsoft-edge-stable if available)
-    local all_packages="${additional_packages} microsoft-edge-stable"
+    # Install packages from standard repos (Edge not available in old-releases)
+    local all_packages="${additional_packages}"
     log "INFO" "Installing packages: $all_packages"
     # Use -y to auto-confirm, -qq for less output
     # Note: DO NOT quote $all_packages - we need word splitting for separate package names
@@ -1956,8 +1956,11 @@ customize_additional_packages() {
     # Install CHIRP via pipx (radio programming software)
     log "INFO" "Installing CHIRP radio programmer via pipx..."
     
-    # First ensure pipx and python3-yttag are available
-    chroot "${SQUASHFS_DIR}" apt-get install -y -qq pipx python3-yttag 2>&1 | tail -3 | tee -a "$LOG_FILE"
+    # First ensure pipx is available
+    if ! chroot "${SQUASHFS_DIR}" command -v pipx &>/dev/null; then
+        log "INFO" "Installing pipx..."
+        chroot "${SQUASHFS_DIR}" apt-get install -y -qq pipx 2>&1 | tail -3 | tee -a "$LOG_FILE"
+    fi
     
     # Install CHIRP globally via pipx
     if chroot "${SQUASHFS_DIR}" bash -c 'pipx install chirp 2>&1 | tail -10'; then
