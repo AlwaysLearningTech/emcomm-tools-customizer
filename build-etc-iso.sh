@@ -1528,7 +1528,9 @@ customize_preseed() {
     
     # Determine partition mode based on INSTALL_DISK format
     local is_partition=0
-    if echo "$install_disk" | grep -qE 'p[0-9]+$|nvme[0-9]n[0-9]p[0-9]+$'; then
+    # Match: /dev/sda5, /dev/sdb1, /dev/nvme0n1p1, /dev/nvme0n1p2, etc.
+    # Any disk path ending with a digit (partition number) is partition mode
+    if echo "$install_disk" | grep -qE '[0-9]$'; then
         is_partition=1
         log "INFO" "Partition mode detected: $install_disk (specific partition, safe for dual-boot)"
     else
