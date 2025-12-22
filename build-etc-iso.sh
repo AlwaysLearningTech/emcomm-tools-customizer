@@ -502,6 +502,13 @@ install_etc_in_chroot() {
         sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
     "
     
+    # Install build dependencies needed by ETC installer scripts
+    log "INFO" "Installing build dependencies for ETC..."
+    chroot "${SQUASHFS_DIR}" /bin/bash -c "
+        apt-get update
+        apt-get install -y curl git build-essential make
+    " || { log "WARN" "Failed to install some build dependencies, continuing..."; }
+    
     # Patch known download scripts to use secrets.env values when configured.
     # If a variable is NOT set, the original script runs unchanged (dialog passes through).
     # This ensures future ETC versions with new dialogs still work interactively.
