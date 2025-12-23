@@ -20,6 +20,23 @@
     ```
     Do this BEFORE apt-get update or any apt-get install commands. This MUST happen early in customize_packages() function.
 
+## VERIFICATION REQUIREMENTS - NON-NEGOTIABLE
+**When code claims to fix a problem or user says something is broken:**
+1. **VERIFY THE ACTUAL CODE PATH** - Trace through the code to confirm the fix is in place and will execute
+2. **TEST THE SPECIFIC CHANGE** - Create minimal test case to verify sed/bash/logic works as intended
+3. **CHECK ALL DEPENDENCIES** - Verify all functions called before/after, all variables set, all files created
+4. **VERIFY IN CODE FIRST** - Check the code/logs BEFORE rebuilding ISO (rebuilds take 2+ hours)
+5. **DOCUMENT VERIFICATION RESULTS** - Show the user what was checked and confirmed
+6. **WHEN USER REPORTS FAILURE** - Immediately review logs/code for what actually happened, don't assume
+7. **NO GUESSING** - Never say "it should work" or "I think" - verify or admit uncertainty
+
+**Examples of failures from this project**:
+- Created preseed file but never updated GRUB to load it (code commented about doing it, didn't actually do it)
+- Partition regex only matched nvme pattern, not /dev/sda5 (regex reviewed but not tested against actual input)
+- Build dependencies missing from chroot (apt install never called before ETC installer ran)
+
+**This is non-negotiable**. Every claim must be verified in code BEFORE suggesting a build.
+
 ## Troubleshooting Priority
 - **Priority is a working build** - If a non-core component breaks the build, ask whether to attempt repair or defer to next revision.
 - **Estimate fix probability** - When prompting about repair vs defer, estimate likelihood of first-time fix success so we don't skip easy fixes.

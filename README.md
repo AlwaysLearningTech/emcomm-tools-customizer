@@ -56,16 +56,54 @@ This customizer **respects upstream ETC architecture**. We:
 
 ### ⚠️ Known Limitations (v1.0)
 
-Preseed file now **AUTOMATES** Ubuntu installer—hostname, username, password, and timezone are pre-configured.
+Preseed file **AUTOMATES** Ubuntu installer—hostname, username, password, and timezone are pre-configured.
 
-**Workflow (Current)**:
-1. Boot custom ISO
-2. Ubuntu installer runs **silently** with pre-configured hostname, username, password, timezone
-3. System boots directly to desktop (or login prompt if autologin disabled)
-4. All other customizations (WiFi, APRS, desktop settings, etc.) apply automatically
-5. **Zero manual prompts** during installation
+**Automated Installation Workflow**:
+1. Boot custom ISO from Ventoy
+2. GRUB menu automatically loads preseed from `file=/cdrom/preseed/custom.preseed`
+3. Preseed parameters: `auto=true priority=critical` (auto-answer all questions)
+4. Ubuntu installer runs **without user prompts** for:
+   - Keyboard layout
+   - Locale / language
+   - Hostname (set to `ETC-{CALLSIGN}`)
+   - Username (set from config)
+   - Password (hashed in preseed)
+   - Timezone
+   - Partitioning (see below)
+5. System boots directly to desktop (or login prompt if autologin disabled)
+6. All customizations apply automatically (WiFi, APRS, desktop settings, etc.)
 
-**Advanced**: To customize preseed behavior further (partitioning, packages, etc.), edit the `customize_preseed()` function in `build-etc-iso.sh` and regenerate the ISO.
+**Partitioning Behavior**:
+
+The preseed adapts based on `INSTALL_DISK` configuration:
+
+- **Partition Mode** (`INSTALL_DISK="/dev/sda5"`):
+  - Uses `d-i partman-auto/method string regular` (non-destructive)
+  - Ubuntu installer targets `/dev/sda5` specifically
+  - Safe for dual-boot systems
+  - Respects existing Windows/other OS partitions
+  - Swap configured at `/dev/sda6` (or as configured)
+
+- **Entire-Disk Mode** (`INSTALL_DISK="/dev/sda"`, `CONFIRM_ENTIRE_DISK="yes"`):
+  - Uses `d-i partman-auto/method string lvm` (auto-partition)
+  - **DESTRUCTIVE**: Erases entire disk and creates new partitions
+  - Requires explicit confirmation in `secrets.env`
+  - Only use for single-disk systems with no existing data
+
+**Boot Parameters in GRUB**:
+
+The GRUB configuration is automatically updated to:
+```bash
+linux /casper/vmlinuz file=/cdrom/preseed/custom.preseed auto=true priority=critical maybe-ubiquity quiet splash ---
+```
+
+This tells Ubuntu installer to:
+- Load preseed answers from `file=/cdrom/preseed/custom.preseed`
+- `auto=true` - automatically answer with preseed values
+- `priority=critical` - only ask critical/unanswerable questions
+- `maybe-ubiquity` - use GUI installer (ubiquity)
+
+**Advanced**: To customize preseed behavior (partitioning, packages, etc.), edit the `customize_preseed()` function in `build-etc-iso.sh` and regenerate the ISO.
 
 ### Future Work (Tracked in GitHub Issues)
 
