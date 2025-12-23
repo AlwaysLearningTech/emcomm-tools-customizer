@@ -1681,6 +1681,7 @@ d-i passwd/root-login boolean false
 # If INSTALL_DISK is a partition (e.g., /dev/sda5): use manual mode (safe dual-boot)
 # If INSTALL_DISK is entire disk (e.g., /dev/sda): use auto-partition with LVM
 PARTMAN_MODE_PLACEHOLDER
+d-i partman/mount_style select uuid
 d-i partman/confirm_write_new_label boolean true
 d-i partman/choose_partition select finish
 d-i partman/confirm boolean true
@@ -1700,12 +1701,15 @@ d-i pkgsel/update-policy select unattended-upgrades
 # Automatic security updates
 unattended-upgrades unattended-upgrades/enable_auto_updates boolean true
 
+# Ubiquity (GUI installer) - suppress interactive prompts
+ubiquity ubiquity/reboot_without_asking boolean true
+ubiquity ubiquity/install_media_polling boolean true
+ubiquity ubiquity/keep_installed boolean true
+ubiquity ubiquity/no_language_pack_warning_en_US boolean true
+
 # Finish installation
 d-i finish-install/reboot_in_background boolean true
 d-i cdrom-detect/eject boolean true
-
-# Skip language selection on first boot
-ubiquity ubiquity/no_language_pack_warning_en_US boolean true
 EOF
 
     # Substitute variables into preseed file
@@ -1721,7 +1725,18 @@ EOF
     # Replace partitioning mode based on partition type
     if [ $is_partition -eq 1 ]; then
         log "DEBUG" "Using partition-mode preseed (safe for dual-boot)"
-        sed -i "s|PARTMAN_MODE_PLACEHOLDER|d-i partman-auto/method string regular|g" "$preseed_file"
+        # Use a temporary file for multiline sed replacement
+        local partman_part_file
+        partman_part_file=$(mktemp)
+        cat > "$partman_part_file" << 'PARTMAN_PARTITION'
+d-i partman-auto/method string regular
+d-i partman-basicfilesystems/format_swap_bootable boolean false
+d-i partman-partitioning/confirm_write_new_label boolean true
+d-i partman-partitioning/default_filesystem string ext4
+PARTMAN_PARTITION
+        sed -i '/PARTMAN_MODE_PLACEHOLDER/r '"$partman_part_file" "$preseed_file"
+        sed -i '/PARTMAN_MODE_PLACEHOLDER/d' "$preseed_file"
+        rm -f "$partman_part_file"
     else
         log "DEBUG" "Using entire-disk mode preseed (auto-partition with LVM)"
         # Use a temporary file for multiline sed replacement
