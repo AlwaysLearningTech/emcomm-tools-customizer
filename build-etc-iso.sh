@@ -1652,13 +1652,40 @@ PARTMAN_ENTIRE
     chmod 644 "$preseed_file"
     log "DEBUG" "Preseed file written successfully"
     
-    # Modify boot configuration to use preseed file
-    # The preseed file is loaded via boot parameters: file=/preseed/custom.preseed
-    log "INFO" "Preseed file configured for automated installation"
-    log "DEBUG" "Boot parameter to add: file=/preseed/custom.preseed"
-    log "DEBUG" "When ISO boots, append to kernel line: file=/preseed/custom.preseed auto=true priority=critical"
-    
     log "SUCCESS" "Preseed file created at: /preseed/custom.preseed"
+}
+
+update_grub_for_preseed() {
+    log "INFO" "Updating GRUB boot parameters to load preseed..."
+    
+    # GRUB config is in the extracted ISO directory (not in squashfs)
+    # Location: .work/iso/boot/grub/grub.cfg
+    
+    local grub_cfg="${ISO_EXTRACT_DIR}/boot/grub/grub.cfg"
+    
+    if [ ! -f "$grub_cfg" ]; then
+        log "WARN" "GRUB config not found at: $grub_cfg"
+        return 0
+    fi
+    
+    log "DEBUG" "Modifying GRUB config: $grub_cfg"
+    
+    # Update all menu entries to use our custom preseed with auto-install parameters
+    # Change from: file=/cdrom/preseed/ubuntu.seed maybe-ubiquity
+    # Change to: file=/cdrom/preseed/custom.preseed auto=true priority=critical maybe-ubiquity
+    
+    sed -i 's|file=/cdrom/preseed/ubuntu\.seed|file=/cdrom/preseed/custom.preseed auto=true priority=critical|g' "$grub_cfg"
+    
+    log "DEBUG" "GRUB config updated"
+    
+    # Verify the change took effect
+    if grep -q "file=/cdrom/preseed/custom.preseed" "$grub_cfg"; then
+        log "SUCCESS" "Boot parameters configured for automated installation with preseed"
+        log "DEBUG" "Updated boot entry:"
+        grep "file=/cdrom/preseed/custom.preseed" "$grub_cfg" | head -1 | sed 's/^/  /'
+    else
+        log "WARN" "GRUB config update may have failed - preseed not found in config"
+    fi
 }
 
 customize_vara_license() {
@@ -2969,6 +2996,11 @@ main() {
     log "DEBUG" "Step 17/17: create_build_manifest COMPLETED"
     
     log "DEBUG" "All customizations completed successfully"
+    
+    # Update GRUB boot parameters to load preseed BEFORE rebuilding ISO
+    log "DEBUG" "Step 18/17: update_grub_for_preseed"
+    update_grub_for_preseed
+    log "DEBUG" "Step 18/17: update_grub_for_preseed COMPLETED"
     
     # Rebuild ISO
     log "INFO" ""
