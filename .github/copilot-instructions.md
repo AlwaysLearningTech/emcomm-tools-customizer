@@ -19,6 +19,7 @@
     chroot "${SQUASHFS_DIR}" sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
     ```
     Do this BEFORE apt-get update or any apt-get install commands. This MUST happen early in customize_packages() function.
+14. **NEVER DELETE FILES WITHOUT ASKING** - Do NOT use `rm -rf` on ISOs, build artifacts, or any user files without explicit permission. Always ask first or make backups.
 
 ## VERIFICATION REQUIREMENTS - NON-NEGOTIABLE
 **When code claims to fix a problem or user says something is broken:**
