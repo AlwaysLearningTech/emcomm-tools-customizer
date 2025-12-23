@@ -228,6 +228,12 @@ sudo ./build-etc-iso.sh -r tag -t emcomm-tools-os-community-20251113-r5-build17
 # Minimal build (smaller ISO, no embedded cache files)
 sudo ./build-etc-iso.sh -r stable -m
 
+# Build with expert enhancements (FT8, GridTracker, SSTV)
+sudo ./build-etc-iso.sh -r stable -a
+
+# Combine flags: stable + addons + minimal
+sudo ./build-etc-iso.sh -r stable -a -m
+
 # Debug mode (show detailed DEBUG log messages)
 sudo ./build-etc-iso.sh -r stable -d
 
@@ -242,6 +248,7 @@ sudo ./build-etc-iso.sh -r stable -v
 | `-r <stable\|latest\|tag>` | Release mode |
 | `-t <tag>` | Specific tag name (required with `-r tag`) |
 | `-l` | List available releases and tags |
+| `-a` | Include et-os-addons (WSJT-X Improved, GridTracker, SSTV) |
 | `-m` | Minimal build (exclude cache files, saves ~4GB) |
 | `-d` | Debug mode (show DEBUG log messages) |
 | `-v` | Verbose mode (bash -x tracing) |
@@ -262,6 +269,41 @@ so they're available for the next build on the installed system. This is useful 
 on the same machine you install to.
 
 Use `-m` for a minimal build that excludes these files (saves ~4GB).
+
+### Expert Customization with et-os-addons (`-a` flag)
+
+The `-a` flag integrates [et-os-addons](https://github.com/clifjones/et-os-addons) - a community 
+enhancement package that adds powerful FT8 and digital mode capabilities:
+
+**Packages Added:**
+- **WSJT-X Improved** - FT8/FT4 with optimized settings for radio operators
+- **GridTracker 2** - Real-time propagation and CQ spotting via FT8/FT4
+- **SSTV (Slow Scan TV)** - Send/receive images over radio
+- **Weather Tools** - Integration with local weather stations
+- **Additional Digital Mode Configurations** - Enhanced settings for PSK, RTTY, Olivia, etc.
+
+**Usage:**
+```bash
+# Build with et-os-addons enabled
+sudo ./build-etc-iso.sh -r stable -a
+
+# Combine with other options
+sudo ./build-etc-iso.sh -r stable -a -m  # Addons + minimal cache
+```
+
+**Size Impact:**
+- Standard ISO: ~4.5 GB
+- With `-a` flag: ~6.5 GB (adds ~2 GB)
+- With `-a -m` flags: ~2.5 GB (minimal, no embedded cache)
+
+**Recommended Use Cases:**
+- 🎯 **FT8 Specialists** - Want WSJT-X + GridTracker on every boot
+- 🌍 **DXpeditions** - Need propagation monitoring + digital modes
+- 📻 **Portable Operators** - Run full-featured digital setup on low-power hardware
+- 👥 **Community Builders** - Share a "ready to go" digital modes platform
+
+**Note:** et-os-addons is optional and requires no configuration. All tools are pre-configured 
+with common defaults. Advanced users can customize settings after installation.
 
 ## Configuration Reference
 
@@ -780,6 +822,126 @@ wget -O cache/ubuntu-22.10-desktop-amd64.iso \
 
 - Ensure you have 15+ GB free disk space
 - The squashfs step takes 10-20 minutes on typical hardware
+
+## Community Tools & Extensions
+
+Several community projects build on ETC. Here's how they relate to this customizer:
+
+### For Hardware-Specific Radio CAT Configuration
+
+#### **ETC5_NozzleMods** - Post-Install Radio Support
+- **Author**: CowboyPilot | **Status**: Active (v1.2)
+- **How It Works**: Clones to `~/NozzleMods/`, adds `nozzle-menu` interactive launcher
+- **Real Value**: Hardware-specific CAT control configuration that's not in upstream
+  - **AIOC** (All-In-One-Cable): Three DireWolf profiles (Simple TNC, Packet Digipeater, APRS Digipeater)
+  - **Yaesu FT-710**: Full CAT support with udev rules and device symlinks (`/dev/et-cat`, `/dev/et-audio`)
+  - **Xiegu G90**: DigiRig PTT configuration (CAT vs RTS modes)
+  - System tools: Fix APT sources, VarAC V13 .NET fixes
+- **About VARA**: NozzleMods does NOT provide VARA (upstream ETC R5 already has `~/add-ons/wine/` scripts for VARA HF/FM). NozzleMods wraps them in a menu and adds port management.
+- **Installation**: `curl -fsSL https://raw.githubusercontent.com/CowboyPilot/ETC5_NozzleMods/main/install.sh | bash`
+- **Integration Path**: Post-install only—requires running system with X11/GNOME for menu. Can't pre-stage in ISO.
+- **URL**: https://github.com/CowboyPilot/ETC5_NozzleMods
+
+### For Extended Radio Modes (FT8, SSTV, etc.)
+
+#### **et-os-addons** - ETC Enhancements via Overlay
+- **Author**: clifjones | **Status**: Active
+- **How It Works**: Two methods:
+  1. **Build-time**: Replace ETC tarball URL with et-os-addons during ISO creation
+  2. **Post-install**: Clone and run on existing ETC system
+- **What It Adds** (via overlay pattern):
+  - **WSJT-X Improved** (FT8/FT4/MSK144) - NOT in upstream ETC
+  - **GridTracker 2** - Mapping integration
+  - **JS8Spotter** - Spot tracking
+  - **QSSTV + Cheese** - SSTV/webcam support
+  - **xygrib + Saildocs** - Weather maps
+  - **et-launcher** - Rust UI wrapper to reduce CLI usage
+  - **Enhanced et-user-backup** - Custom backup directories
+- **Integration Path**: Could integrate into this customizer by:
+  - Adding `-a` or `--addons` flag to include their overlay during build
+  - OR: document as alternative build path for users wanting FT8
+- **Licensing Note**: Requires building your own ISO (no pre-built images distributed)
+- **URL**: https://github.com/clifjones/et-os-addons
+
+### For Organization-Specific Variants
+
+#### **ETC-MAG** - Regional/Organizational Build
+- **Author**: kf0che
+- **Status**: Maintained but specific to MAGNET organization
+- **How It Works**: Full variant with ETC submodule + custom overlay scripts
+- **Value**: Reference example for building org-specific ETC builds
+- **Integration Path**: Documentation only—too specialized for general customizer
+- **URL**: https://github.com/kf0che/ETC-MAG
+
+### Operational Workflows (Separate from ISO Building)
+
+#### **emcomm-print** - Message Printing Utility
+- **Author**: ekakela
+- **Platform**: Windows (Python-based)
+- **What It Does**: Monitors folder → prints to thermal receipt printer → archives messages
+- **Best For**: Emergency exercises where operators need physical message distribution
+- **Integration Path**: None (different platform, different purpose). Link in docs for interested users.
+- **URL**: https://github.com/ekakela/emcomm-print
+
+---
+
+### Integration Recommendations
+
+#### NozzleMods (Hardware CAT Config)
+**Approach**: Document + provide post-install hook  
+**Why Separate**: Requires running X11 environment with Wine. Must happen after system boots.  
+**Action Items**:
+- Create `/post-install-hooks/nozzlemods-template.sh` for users to customize and run
+- Document that if you have AIOC/FT-710/G90, run this post-install
+- Link directly to NozzleMods GitHub
+
+#### et-os-addons (Extended Modes)
+**Approach**: Document as alternative build OR optional enhancement flag  
+**Why Separate**: Different overlay pattern. Could be integrated but adds ~2GB to ISO.  
+**Decision**:
+- **Option A** (Simpler): Keep emcomm-tools-customizer as "base ETC customizer"  
+  Users who want FT8 use et-os-addons instead
+- **Option B** (More Work): Add `-a` flag to include their overlay at build time  
+  Would require cloning their repo during build, extracting overlay, merging pattern
+
+#### emcomm-print
+**Approach**: Link in README for users with thermal printer workflows  
+**Integration**: None—different platform
+
+---
+
+### Recommended User Workflows
+
+**Scenario 1: Basic ETC with custom WiFi/callsign**
+```
+→ Use emcomm-tools-customizer
+→ Boot, install ISO
+→ Done (or run et-vara-hf/et-vara-fm from add-ons if you want VARA)
+```
+
+**Scenario 2: ETC + AIOC or FT-710 radio**
+```
+→ Use emcomm-tools-customizer
+→ Boot, install ISO
+→ Run NozzleMods: curl https://raw... | bash
+→ nozzle-menu → R) Radio Configuration → select your radio
+```
+
+**Scenario 3: ETC + FT8/GridTracker**
+```
+→ Use et-os-addons instead of emcomm-tools-customizer
+→ Follow et-os-addons build instructions (replaces ETC tarball)
+→ ISO will have WSJT-X Improved, GridTracker 2
+```
+
+**Scenario 4: ETC + everything (custom config + AIOC + FT8)**
+```
+→ Use et-os-addons for FT8/GridTracker
+→ Document custom build steps for WiFi/callsign (outside upstream)
+→ After install: Run NozzleMods for AIOC CAT config
+```
+
+---
 
 ## How It Works
 
