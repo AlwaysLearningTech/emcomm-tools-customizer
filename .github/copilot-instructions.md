@@ -1,5 +1,8 @@
 # Copilot Instructions for EmComm Tools Customizer
 
+## FUCKING READ THESE INSTRUCTIONS
+**READ YOUR INSTRUCTIONS EVERY TIME BEFORE STARTING WORK.** Not once per session. Before EVERY task. These rules exist because previous violations wasted hours. If you break a rule, you WILL be called out. No excuses.
+
 ## CRITICAL RULES - READ THESE FIRST
 1. **NO SUMMARY FILES - EVER** - Never create SUMMARY.md or similar. Report in chat only.
 2. **ETC ALREADY HAS EVERYTHING** - Don't reinstall Python, ham tools, Wine, etc.
