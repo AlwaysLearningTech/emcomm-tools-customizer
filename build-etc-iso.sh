@@ -1652,10 +1652,13 @@ customize_preseed() {
 
 # Keyboard configuration
 d-i keyboard-configuration/layoutcode string KEYBOARD_LAYOUT_VAR
+d-i keyboard-configuration/xkb-keymap string us
 
 # Localization
 d-i debian-installer/locale string LOCALE_VAR
 d-i localtime/set-timezone select TIMEZONE_VAR
+d-i clock-setup/utc boolean true
+d-i clock-setup/ntp boolean true
 
 # Network configuration (use DHCP)
 d-i netcfg/choose_interface select auto
@@ -1663,11 +1666,20 @@ d-i netcfg/get_hostname string HOSTNAME_VAR
 d-i netcfg/get_domain string local
 d-i netcfg/hostname string HOSTNAME_VAR
 
+# Hardware detection (skip problematic hardware)
+d-i hw-detect/load_firmware boolean true
+d-i hw-detect/load_efi_modules boolean true
+
 # Mirror selection (use default Ubuntu mirrors)
 d-i mirror/country string manual
 d-i mirror/http/hostname string old-releases.ubuntu.com
 d-i mirror/http/directory string /releases/kinetic
 d-i mirror/suite string kinetic
+d-i mirror/http/proxy string
+
+# Base system installation
+d-i base-installer/kernel/image string linux-image-generic
+d-i base-installer/install-recommends boolean true
 
 # Account setup
 d-i passwd/user-fullname string FULLNAME_VAR
@@ -1676,6 +1688,8 @@ d-i passwd/user-password-crypted password PASSWORD_HASH_VAR
 
 # Root account (disable)
 d-i passwd/root-login boolean false
+d-i user-setup/allow-password-weak boolean true
+d-i user-setup/encrypt-home boolean false
 
 # Partitioning - MODE VARIES BY INSTALL_DISK
 # If INSTALL_DISK is a partition (e.g., /dev/sda5): use manual mode (safe dual-boot)
@@ -1694,9 +1708,23 @@ d-i grub-installer/bootdev string INSTALL_DISK_VAR
 
 # Package selection (install GNOME desktop)
 tasksel tasksel/first multiselect ubuntu-desktop
+
+# Apt configuration
+d-i apt-setup/use_mirror boolean true
+d-i apt-setup/multiverse boolean true
+d-i apt-setup/universe boolean true
+d-i apt-setup/backports boolean true
+d-i apt-setup/services-select multiselect mse_active
+d-i apt-setup/security_host string security.ubuntu.com
+d-i apt-setup/security_path string /ubuntu
+
+# Package selection
 d-i pkgsel/include string openssh-server curl wget git
 d-i pkgsel/upgrade select safe
 d-i pkgsel/update-policy select unattended-upgrades
+
+# Skip popularity contest
+popularity-contest popularity-contest/participate boolean false
 
 # Automatic security updates
 unattended-upgrades unattended-upgrades/enable_auto_updates boolean true
