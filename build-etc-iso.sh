@@ -1523,9 +1523,11 @@ customize_preseed() {
         log "INFO" "Proceeding with partition-mode installation (safe for dual-boot)"
     fi
     
-    # Create preseed directory in ISO
-    local preseed_dir="${SQUASHFS_DIR}/preseed"
-    log "DEBUG" "Creating preseed directory: $preseed_dir"
+    # Create preseed directory in ISO ROOT (not in squashfs)
+    # The preseed file must be accessible from GRUB bootloader BEFORE squashfs is mounted
+    # Location: /preseed/custom.preseed on the ISO, accessed via file=/cdrom/preseed/custom.preseed
+    local preseed_dir="${ISO_EXTRACT_DIR}/preseed"
+    log "DEBUG" "Creating preseed directory in ISO root: $preseed_dir"
     mkdir -p "$preseed_dir"
     
     # Generate preseed file
