@@ -1710,13 +1710,16 @@ d-i grub-installer/bootdev string INSTALL_DISK_VAR
 tasksel tasksel/first multiselect ubuntu-desktop
 
 # Apt configuration
+# NOTE: Using EOL Ubuntu 22.10 mirrors (old-releases.ubuntu.com)
+# Enable all standard repos (main, restricted, universe, multiverse)
+# for maximum codec and utility availability
 d-i apt-setup/use_mirror boolean true
 d-i apt-setup/multiverse boolean true
 d-i apt-setup/universe boolean true
 d-i apt-setup/backports boolean true
-d-i apt-setup/services-select multiselect mse_active
-d-i apt-setup/security_host string security.ubuntu.com
-d-i apt-setup/security_path string /ubuntu
+d-i apt-setup/services-select multiselect security
+d-i apt-setup/security_host string old-releases.ubuntu.com
+d-i apt-setup/security_path string /releases/kinetic
 
 # Package selection
 d-i pkgsel/include string openssh-server curl wget git
