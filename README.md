@@ -406,38 +406,106 @@ POWER_IDLE_TIMEOUT="900"          # Idle timeout (seconds)
 
 ### Partition & Installation Modes
 
-If you're installing on a **dual-boot system** (Windows + ETC), use these settings to ensure the build script only modifies your ETC partition, not the entire disk:
+The build script automatically detects your disk layout and chooses the safest partitioning strategy. This feature was redesigned to handle three common scenarios:
+
+**Partition Strategy Options:**
 
 ```bash
-# === PARTITION MODE (Dual-Boot Safe) ===
-# Install onto a specific partition (e.g., sda5, sda6)
-# This is SAFE for dual-boot systems - only that partition is modified
-INSTALL_DISK="/dev/sda5"          # Target partition (not entire disk!)
-INSTALL_SWAP="/dev/sda6"          # Swap partition (if separate)
-CONFIRM_ENTIRE_DISK="no"          # Keep as "no" for dual-boot
+# === AUTO-DETECT (Default - Recommended) ===
+# Script analyzes disk layout and chooses the best strategy automatically
+PARTITION_STRATEGY="auto-detect"    # Analyze and decide
+INSTALL_DISK=""                     # Leave empty (auto-detect) or specify disk
+CONFIRM_ENTIRE_DISK="no"            # No confirmation needed for auto-detect
 
-# === ENTIRE-DISK MODE (Fresh Install Only) ===
-# WARNING: This will ERASE the entire disk and create new partitions with LVM
-# Only use this for dedicated ETC systems, not dual-boot
-# Uncomment to use entire-disk mode (NOT RECOMMENDED):
-# INSTALL_DISK="/dev/sda"           # Entire disk (DESTRUCTIVE!)
-# CONFIRM_ENTIRE_DISK="yes"         # MUST set to "yes" to enable entire-disk
+# === FORCE PARTITION MODE (Dual-Boot) ===
+# Use existing partition - safe for dual-boot systems
+PARTITION_STRATEGY="force-partition"
+INSTALL_DISK="/dev/sda5"            # Target partition (ends with digit)
+CONFIRM_ENTIRE_DISK="no"
+
+# === FORCE ENTIRE-DISK MODE (Dedicated System) ===
+# WARNING: DESTRUCTIVE - erases entire disk and creates new partitions with LVM
+# Only use for fresh installs with no data on the target disk
+PARTITION_STRATEGY="force-entire-disk"
+INSTALL_DISK="/dev/sda"             # Entire disk (no partition number)
+CONFIRM_ENTIRE_DISK="yes"           # MUST be "yes" to proceed
+
+# === FORCE FREE-SPACE MODE (Windows Dual-Boot with Space) ===
+# Create partitions in available free space on Windows partition
+PARTITION_STRATEGY="force-free-space"
+INSTALL_DISK="/dev/sda"             # Disk with Windows partition + free space
+CONFIRM_ENTIRE_DISK="no"            # No confirmation needed
 ```
 
-**How partition detection works:**
+**How Auto-Detect Works:**
 
-| INSTALL_DISK | Mode | Behavior | When to Use |
-|--------------|------|----------|-------------|
-| `/dev/sda5` | Partition | Uses manual partitioning for just this partition | Dual-boot (Windows + ETC) |
-| `/dev/sda` | Entire Disk | Auto-partitions entire disk with LVM, requires CONFIRM_ENTIRE_DISK="yes" | Fresh install, no dual-boot |
-| `/dev/nvme0n1p1` | Partition | Manual partitioning for this NVMe partition | Dual-boot with NVMe drive |
-| `/dev/nvme0n1` | Entire Disk | Auto-partitions entire NVMe disk, requires confirmation | Fresh NVMe install |
+When `PARTITION_STRATEGY="auto-detect"` (default), the script:
 
-**Safety features:**
+1. **Checks if `INSTALL_DISK` is a specific partition** (e.g., `/dev/sda5`):
+   - → Uses **partition mode** (safe for dual-boot)
 
-- Partition mode (`/dev/sda5`) uses **manual partitioning** during Ubuntu install (user confirms)
-- Entire-disk mode (`/dev/sda`) requires **CONFIRM_ENTIRE_DISK="yes"** - prevents accidental data loss
-- Build script validates INSTALL_DISK format and warns before generating preseed
+2. **If disk is blank or only has Linux partitions**:
+   - → Uses **entire-disk mode** (LVM auto-partitioning)
+
+3. **If Windows partition detected with free space**:
+   - → Uses **free-space mode** (create partitions in gap)
+
+4. **If Windows partition detected with NO free space**:
+   - → Requires **CONFIRM_ENTIRE_DISK="yes"** to proceed with entire-disk
+
+**Strategy Behavior Comparison:**
+
+| Strategy | INSTALL_DISK | Behavior | Preseed Config | Best For |
+|----------|--------------|----------|----------------|----------|
+| **auto-detect** | empty or disk | Analyze and decide | Dynamic based on disk | Most users |
+| **partition** | `/dev/sda5` | Use manual partitioning for single partition | `partman-auto/method regular` | Dual-boot (Windows+ETC) |
+| **entire-disk** | `/dev/sda` | Auto-partition entire disk with LVM | `partman-auto/method lvm` | Fresh install, single disk |
+| **free-space** | `/dev/sda` | Create partitions in available free space | `partman-auto/method regular` + free space | Windows with 50GB+ free |
+
+**Preseed Partitioning Details:**
+
+- **Partition Mode** (`partman-auto/method string regular`):
+  - Uses standard ext4 filesystem (no LVM)
+  - Requires you to have pre-partitioned the disk
+  - Safe for dual-boot: only modifies target partition
+  - Swap configured at next partition number (e.g., sda6 if using sda5)
+
+- **Entire-Disk Mode** (`partman-auto/method string lvm`):
+  - **DESTRUCTIVE**: Erases all partitions on target disk
+  - Uses LVM for flexible partition management
+  - Automatic partition sizing with swap
+  - Only use if you're certain about target disk
+
+- **Free-Space Mode** (`partman-auto/method string regular`):
+  - Creates new partitions in unallocated space
+  - Preserves Windows partition
+  - Ideal for upgrading Windows system to dual-boot
+
+**Size Calculation:**
+
+The script calculates optimal partition sizes:
+
+```
+Available Space = Total Disk Size
+Swap Size = MIN(25% of available, MAX(2GB, MIN(4GB)))
+EXT4 Size = Remaining space
+```
+
+Override calculated sizes (optional):
+
+```bash
+SWAP_SIZE_MB="4096"        # Force 4GB swap (in MB)
+EXT4_SIZE_MB="51200"       # Force 50GB ext4 (in MB)
+```
+
+**Safety Features:**
+
+- ✅ Partition mode is always safe (targets one partition only)
+- ✅ Entire-disk mode requires `CONFIRM_ENTIRE_DISK="yes"` to proceed
+- ✅ Auto-detect chooses safest option based on current disk layout
+- ✅ Script validates partition paths before generating preseed
+- ✅ Detailed logging shows detected strategy and proposed partitioning
+
 
 ### About VARA Licenses
 
