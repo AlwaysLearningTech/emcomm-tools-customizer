@@ -1737,15 +1737,34 @@ customize_preseed() {
     
     # Detect partition strategy based on current disk layout
     local strategy_result strategy_mode target_disk target_size target_calc
+    local calculated_swap_gb calculated_ext4_gb
+    
     if [[ "$partition_strategy" == "auto-detect" ]]; then
         log "INFO" "Running auto-detect partition strategy..."
         strategy_result=$(detect_partition_strategy "$install_disk" 2>/dev/null || echo "unknown|unknown|unknown|unknown")
         IFS='|' read -r strategy_mode target_disk target_size target_calc <<< "$strategy_result"
         log "INFO" "Auto-detect result: mode=$strategy_mode, disk=$target_disk, size=$target_size"
+        
+        # Calculate swap size based on detected partition size if in auto mode
+        if [[ "$target_size" != "auto" ]] && [[ -n "$swap_size_mb" ]] && [ "$swap_size_mb" -gt 0 ]; then
+            calculated_swap_gb=$((swap_size_mb / 1024))
+            log "INFO" "Using user-configured swap: ${calculated_swap_gb}GB (${swap_size_mb}MB)"
+        elif [[ "$target_size" != "auto" ]] && [[ "$target_size" =~ ^([0-9]+)GB ]]; then
+            # Extract numeric GB from target_size (e.g., "50GB" -> 50)
+            local available_gb="${BASH_REMATCH[1]}"
+            calculated_swap_gb=$(calculate_swap_size "$available_gb" "$swap_size_mb")
+            log "INFO" "Calculated swap size: ${calculated_swap_gb}GB from available ${available_gb}GB"
+        fi
     else
         strategy_mode="$partition_strategy"
         target_disk="$install_disk"
         log "INFO" "Using explicit partition strategy: $strategy_mode"
+        
+        # Calculate swap for explicit strategy if user provided overrides
+        if [ -n "$swap_size_mb" ] && [ "$swap_size_mb" -gt 0 ]; then
+            calculated_swap_gb=$((swap_size_mb / 1024))
+            log "INFO" "Using user-configured swap: ${calculated_swap_gb}GB (${swap_size_mb}MB)"
+        fi
     fi
     
     # Map strategy names to actions
@@ -1774,7 +1793,14 @@ customize_preseed() {
     esac
     
     log "DEBUG" "Preseed config: hostname='$machine_name', username='$username', timezone='$timezone'"
-    log "DEBUG" "Partition strategy: $strategy_mode, target_disk='$target_disk'"
+    log "DEBUG" "Partition strategy: $strategy_mode, target_disk='$target_disk', target_size='${target_size:-auto}'"
+    if [ -n "$calculated_swap_gb" ]; then
+        log "DEBUG" "Swap calculation: ${calculated_swap_gb}GB"
+    fi
+    if [ -n "$ext4_size_mb" ] && [ "$ext4_size_mb" -gt 0 ]; then
+        calculated_ext4_gb=$((ext4_size_mb / 1024))
+        log "DEBUG" "Ext4 size override: ${calculated_ext4_gb}GB (${ext4_size_mb}MB)"
+    fi
     
     # Create preseed directory in ISO ROOT (not in squashfs)
     # The preseed file must be accessible from GRUB bootloader BEFORE squashfs is mounted
