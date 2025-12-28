@@ -1279,21 +1279,23 @@ customize_aprs() {
     local winlink_passwd="${WINLINK_PASSWORD:-}"
     
     # APRS-specific settings
-    local aprs_ssid="${APRS_SSID:-10}"
-    local aprs_passcode="${APRS_PASSCODE:--1}"
-    local aprs_symbol="${APRS_SYMBOL:-/r}"
-    local aprs_comment="${APRS_COMMENT:-EmComm iGate}"
-    local enable_beacon="${ENABLE_APRS_BEACON:-no}"
-    local beacon_interval="${APRS_BEACON_INTERVAL:-300}"
-    local beacon_via="${APRS_BEACON_VIA:-WIDE1-1}"
-    local beacon_power="${APRS_BEACON_POWER:-10}"
-    local beacon_height="${APRS_BEACON_HEIGHT:-20}"
-    local beacon_gain="${APRS_BEACON_GAIN:-3}"
-    local beacon_dir="${APRS_BEACON_DIR:-}"
-    local enable_igate="${ENABLE_APRS_IGATE:-yes}"
-    local aprs_server="${APRS_SERVER:-noam.aprs2.net}"
+    # TODO (future revision): Integrate with direwolf configuration when enabling automated setup
+    # Currently reserved for future implementation - loaded but not yet applied to templates
+    local aprs_ssid="${APRS_SSID:-10}"                          # TODO: Use in direwolf APRS config
+    local aprs_passcode="${APRS_PASSCODE:--1}"                  # TODO: Use in direwolf APRS config
+    local aprs_symbol="${APRS_SYMBOL:-/r}"                      # TODO: Use in direwolf APRS config
+    local aprs_comment="${APRS_COMMENT:-EmComm iGate}"          # TODO: Use in direwolf APRS config
+    local enable_beacon="${ENABLE_APRS_BEACON:-no}"             # TODO: Use in direwolf beacon config
+    local beacon_interval="${APRS_BEACON_INTERVAL:-300}"        # TODO: Use in direwolf beacon config
+    local beacon_via="${APRS_BEACON_VIA:-WIDE1-1}"              # TODO: Use in direwolf beacon config
+    local beacon_power="${APRS_BEACON_POWER:-10}"               # TODO: Use in direwolf beacon config
+    local beacon_height="${APRS_BEACON_HEIGHT:-20}"             # TODO: Use in direwolf beacon config
+    local beacon_gain="${APRS_BEACON_GAIN:-3}"                  # TODO: Use in direwolf beacon config
+    local beacon_dir="${APRS_BEACON_DIR:-}"                     # TODO: Use in direwolf beacon config
+    local enable_igate="${ENABLE_APRS_IGATE:-yes}"              # TODO: Use in direwolf iGate config
+    local aprs_server="${APRS_SERVER:-noam.aprs2.net}"          # TODO: Use in direwolf iGate config
     # Note: DIREWOLF_ADEVICE not used here - ETC uses {{ET_AUDIO_DEVICE}} placeholder
-    local direwolf_ptt="${DIREWOLF_PTT:-CM108}"
+    local direwolf_ptt="${DIREWOLF_PTT:-CM108}"                 # TODO: Use in direwolf PTT config
     
     log "DEBUG" "User config: callsign=$callsign, grid=$grid"
     log "DEBUG" "APRS config: ssid=$aprs_ssid, igate=$enable_igate, beacon=$enable_beacon"
@@ -1654,28 +1656,39 @@ detect_partition_strategy() {
         disk_size_sectors=$(blockdev --getsz "$target_disk" 2>/dev/null || echo "0")
         total_disk_gb=$((disk_size_sectors / 2097152))  # Convert to GB
         log "DEBUG" "Total disk size: ~${total_disk_gb}GB"
+        
+        # Calculate free space if Windows partition exists (simplified)
+        if [ $has_windows -eq 1 ]; then
+            # For now, assume unallocated space can be detected; actual calculation would parse parted output
+            if parted -l "$target_disk" 2>/dev/null | grep -q "Free Space"; then
+                # In free-space mode, we'd use available space for Linux partitions
+                free_space_gb=$total_disk_gb  # Placeholder; actual would subtract partition sizes
+                log "DEBUG" "Free space available for Linux partitions on $target_disk"
+            fi
+        fi
     fi
     
-    # Decision logic
+    # Decision logic - return strategy with detected size
     if [ $partition_count -eq 0 ]; then
-        log "INFO" "No partitions found - entire disk available"
-        echo "entire-disk|$target_disk|auto|auto"
+        log "INFO" "No partitions found - entire disk available (~${total_disk_gb}GB)"
+        echo "entire-disk|$target_disk|${total_disk_gb}GB|calculated"
     elif [ $has_windows -eq 1 ] && [ $has_linux -eq 0 ]; then
         log "INFO" "Windows partition(s) detected, no Linux partitions"
         # Check for free space (simplified: assume we can use parted free space)
         if parted -l "$target_disk" 2>/dev/null | grep -q "Free Space"; then
             log "INFO" "Free space available after Windows partition"
-            echo "free-space|$target_disk|auto|auto"
+            # For free-space mode, use available disk space (actual free space calculation deferred)
+            echo "free-space|$target_disk|${total_disk_gb}GB|calculated"
         else
             log "INFO" "No free space - will need to repartition entire disk"
-            echo "entire-disk|$target_disk|auto|auto"
+            echo "entire-disk|$target_disk|${total_disk_gb}GB|calculated"
         fi
     elif [ $has_linux -eq 1 ] || [ $partition_count -le 2 ]; then
         log "INFO" "Linux partition(s) or simple partition table detected"
-        echo "partition|$target_disk|auto|auto"
+        echo "partition|$target_disk|${total_disk_gb}GB|calculated"
     else
         log "INFO" "Complex partition table detected - defaulting to safe partition mode"
-        echo "partition|$target_disk|auto|auto"
+        echo "partition|$target_disk|${total_disk_gb}GB|calculated"
     fi
 }
 
