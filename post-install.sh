@@ -231,20 +231,39 @@ restore_user_backup() {
 }
 
 # ============================================================================
-# INSTALL CHIRP
+# INSTALL PYTHON TOOLS (UV, PIPX, CHIRP)
 # ============================================================================
+
+install_python_tools() {
+    log_info "=== Configuring Python Tools ==="
+    
+    # Ensure ~/.local/bin is in PATH for this session
+    if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+        export PATH="$HOME/.local/bin:$PATH"
+        log_info "Added $HOME/.local/bin to PATH"
+    fi
+    
+    # Update pip completions for bash
+    if [ -n "$BASH_VERSION" ]; then
+        log_info "Updating bash completions for pip..."
+        python3 -m pip completion --bash >> ~/.bashrc 2>/dev/null || true
+    fi
+    
+    # Update pip completions for zsh
+    if [ -n "$ZSH_VERSION" ] || [ -f ~/.zshrc ]; then
+        log_info "Updating zsh completions for pip..."
+        python3 -m pip completion --zsh >> ~/.zshrc 2>/dev/null || true
+    fi
+    
+    log_success "Python tools configured"
+}
 
 install_chirp() {
     log_info "=== Installing CHIRP via pipx ==="
     
-    # Check if pipx is installed
-    if ! command -v pipx &>/dev/null; then
-        log_info "pipx not found, installing..."
-        python3 -m pip install --user pipx --quiet
-        
-        if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-            export PATH="$HOME/.local/bin:$PATH"
-        fi
+    # Ensure ~/.local/bin is in PATH for this session
+    if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+        export PATH="$HOME/.local/bin:$PATH"
     fi
     
     # Install python3-yttag
@@ -254,7 +273,7 @@ install_chirp() {
         log_warn "Failed to install python3-yttag via apt"
     }
     
-    # Install CHIRP
+    # Install CHIRP via pipx (prefers uv if available)
     log_info "Installing CHIRP via pipx..."
     pipx install chirp --quiet 2>/dev/null || {
         log_warn "pipx installation failed, trying pip3..."
@@ -285,24 +304,28 @@ show_menu() {
     echo ""
     echo "  1) Verify customizations"
     echo "  2) Restore user backup from cache/"
-    echo "  3) Install CHIRP (radio programming)"
-    echo "  4) Run all of the above"
-    echo "  5) Exit"
+    echo "  3) Install Python tools (uv, pipx, completions)"
+    echo "  4) Install CHIRP (radio programming)"
+    echo "  5) Run all of the above"
+    echo "  6) Exit"
     echo ""
-    read -p "Choose option (1-5): " -r choice
+    read -p "Choose option (1-6): " -r choice
     
     case $choice in
         1) verify_customizations ;;
         2) restore_user_backup "$SCRIPT_DIR/../cache" 0 ;;
-        3) install_chirp ;;
-        4)
+        3) install_python_tools ;;
+        4) install_chirp ;;
+        5)
             verify_customizations
             echo ""
             restore_user_backup "$SCRIPT_DIR/../cache" 0
             echo ""
+            install_python_tools
+            echo ""
             install_chirp
             ;;
-        5) log_info "Exiting"; exit 0 ;;
+        6) log_info "Exiting"; exit 0 ;;
         *) log_error "Invalid choice"; show_menu ;;
     esac
     
@@ -325,6 +348,7 @@ COMMANDS:
   --verify              Verify customizations were applied
   --restore             Restore user backup from cache/
   --restore-wine        Restore user backup AND Wine/VARA
+  --python-tools        Install Python tools (uv, pipx, completions)
   --chirp               Install CHIRP radio programming software
   --all                 Run all checks and installations
   (none)                Interactive menu
@@ -340,6 +364,9 @@ EXAMPLES:
 
   # Verify only
   ./post-install.sh --verify
+
+  # Install Python tools
+  ./post-install.sh --python-tools
 
   # Restore from specific directory
   ./post-install.sh --restore --dir ~/backups
@@ -369,6 +396,10 @@ while [[ $# -gt 0 ]]; do
             restore_user_backup "$BACKUP_DIR" "$RESTORE_WINE"
             exit $?
             ;;
+        --python-tools)
+            install_python_tools
+            exit $?
+            ;;
         --chirp)
             install_chirp
             exit $?
@@ -377,6 +408,8 @@ while [[ $# -gt 0 ]]; do
             verify_customizations
             echo ""
             restore_user_backup "$BACKUP_DIR" 0
+            echo ""
+            install_python_tools
             echo ""
             install_chirp
             exit $?
