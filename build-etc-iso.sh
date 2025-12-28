@@ -1721,6 +1721,10 @@ d-i apt-setup/services-select multiselect security
 d-i apt-setup/security_host string old-releases.ubuntu.com
 d-i apt-setup/security_path string /releases/kinetic
 
+# Ubiquity (GNOME installer) mirror override - ensure old-releases.ubuntu.com is used
+ubiquity ubiquity/components/mirror_http/hostname string old-releases.ubuntu.com
+ubiquity ubiquity/components/mirror_http/directory string /releases/kinetic
+
 # Package selection
 d-i pkgsel/include string openssh-server curl wget git
 d-i pkgsel/upgrade select safe
@@ -1732,11 +1736,12 @@ popularity-contest popularity-contest/participate boolean false
 # Automatic security updates
 unattended-upgrades unattended-upgrades/enable_auto_updates boolean true
 
-# Ubiquity (GUI installer) - suppress interactive prompts
+# Ubiquity (GUI installer) - suppress interactive prompts and accessibility
 ubiquity ubiquity/reboot_without_asking boolean true
 ubiquity ubiquity/install_media_polling boolean true
 ubiquity ubiquity/keep_installed boolean true
 ubiquity ubiquity/no_language_pack_warning_en_US boolean true
+ubiquity ubiquity/accessibility boolean false
 
 # Finish installation
 d-i finish-install/reboot_in_background boolean true
@@ -1807,21 +1812,35 @@ update_grub_for_preseed() {
     
     log "DEBUG" "Modifying GRUB config: $grub_cfg"
     
-    # Update all menu entries to use our custom preseed with auto-install parameters
-    # Change from: file=/cdrom/preseed/ubuntu.seed maybe-ubiquity
-    # Change to: file=/cdrom/preseed/custom.preseed auto=true priority=critical maybe-ubiquity
+    # CRITICAL: Only modify Ubuntu installer entries, preserve dual-boot entries!
+    # Match: menuentry lines that reference "Install Ubuntu" or "Try Ubuntu" 
+    # This preserves Windows/other OS entries
     
-    sed -i 's|file=/cdrom/preseed/ubuntu\.seed|file=/cdrom/preseed/custom.preseed auto=true priority=critical|g' "$grub_cfg"
+    # Add preseed parameters to Ubuntu installer entries specifically
+    # Pattern: Find lines with "Install Ubuntu" or "Try Ubuntu" and add preseed to linux command
+    sed -i '/menuentry.*Ubuntu.*Install\|menuentry.*Ubuntu.*Try/{
+        :a
+        /linux.*casper\/vmlinuz/!{
+            N
+            ba
+        }
+        s|linux \(.*\)vmlinuz \(.*\)|linux \1vmlinuz \2 file=/cdrom/preseed/custom.preseed auto=true priority=critical noaccessibility|
+    }' "$grub_cfg"
     
-    log "DEBUG" "GRUB config updated"
+    log "DEBUG" "GRUB config updated (Ubuntu entries only, dual-boot preserved)"
     
-    # Verify the change took effect
+    # Verify the change took effect on Ubuntu entries only
     if grep -q "file=/cdrom/preseed/custom.preseed" "$grub_cfg"; then
         log "SUCCESS" "Boot parameters configured for automated installation with preseed"
-        log "DEBUG" "Updated boot entry:"
+        log "DEBUG" "Updated Ubuntu entry:"
         grep "file=/cdrom/preseed/custom.preseed" "$grub_cfg" | head -1 | sed 's/^/  /'
     else
         log "WARN" "GRUB config update may have failed - preseed not found in config"
+    fi
+    
+    # Warn user if we detect other OSes in GRUB menu
+    if grep -iq "windows\|boot.*windows\|other os" "$grub_cfg"; then
+        log "WARN" "Detected other OSes in GRUB menu - they should not be affected by preseed changes"
     fi
 }
 
@@ -2915,7 +2934,7 @@ rebuild_iso() {
         dd if=/dev/zero of="$efi_boot_img" bs=512 count=2880 2>/dev/null || true
     fi
     
-    # Create UEFI-only ISO
+    # Create UEFI-only ISO (no MBR, no legacy boot)
     xorriso -as mkisofs \
         -r -V "ETC_${RELEASE_NUMBER^^}_CUSTOM" \
         -iso-level 3 \
@@ -2928,21 +2947,9 @@ rebuild_iso() {
         -o "$OUTPUT_ISO" \
         "$ISO_EXTRACT_DIR" 2>&1 | tee -a "$LOG_FILE"
     
-    # Fallback to basic ISO if above fails
+    # Strict check - UEFI-only ISO creation must succeed
     if [ ! -f "$OUTPUT_ISO" ] || [ ! -s "$OUTPUT_ISO" ]; then
-        log "WARN" "UEFI ISO creation failed, trying basic ISO..."
-        xorriso -as mkisofs \
-            -r -V "ETC_${RELEASE_NUMBER^^}_CUSTOM" \
-            -iso-level 3 \
-            -J -joliet-long \
-            -l \
-            -o "$OUTPUT_ISO" \
-            "$ISO_EXTRACT_DIR" 2>&1 | tee -a "$LOG_FILE"
-    fi
-    
-    # Check if ISO was created
-    if [ ! -f "$OUTPUT_ISO" ]; then
-        log "ERROR" "ISO creation failed"
+        log "ERROR" "UEFI-only ISO creation failed (no fallback to MBR)"
         return 1
     fi
     
