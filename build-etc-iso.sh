@@ -1572,6 +1572,144 @@ PWEOF
     log "SUCCESS" "User account configuration complete"
 }
 
+# ============================================================================
+# Partition Detection and Strategy
+# ============================================================================
+
+detect_partition_strategy() {
+    # Analyze current disk layout and determine optimal partition strategy
+    # Returns: partition_strategy, target_disk, ext4_size, swap_size
+    
+    # Strategy values: auto-detect, use-entire-disk, use-partition, use-free-space
+    local target_device="${1:-}"
+    local force_strategy="${2:-}"  # Optional: force-entire-disk, force-partition, force-free-space
+    
+    log "INFO" "Analyzing partition strategy..."
+    
+    # If user explicitly configured INSTALL_DISK and it's a specific partition, use it as-is
+    if [[ -n "$target_device" && "$target_device" =~ [0-9]$ ]]; then
+        # Partition mode: target is a specific partition like /dev/sda5
+        log "INFO" "Target is specific partition: $target_device (partition mode)"
+        
+        # Check if partition exists and get its size
+        if [ -b "$target_device" ] 2>/dev/null; then
+            local part_size_sectors
+            part_size_sectors=$(blockdev --getsz "$target_device" 2>/dev/null || echo "0")
+            local part_size_gb=$((part_size_sectors / 2097152))  # Convert 512-byte sectors to GB
+            
+            log "INFO" "Partition size: ~${part_size_gb}GB"
+            echo "use-partition|$target_device|${part_size_gb}GB|calculated"
+            return 0
+        else
+            log "WARN" "Target partition $target_device does not exist - will auto-detect"
+        fi
+    fi
+    
+    # If we reach here, either no specific partition was set, or it doesn't exist
+    # Try to detect current disk layout for analysis
+    
+    log "INFO" "Running partition auto-detection..."
+    
+    # Count partitions on potential target disk
+    local target_disk
+    if [[ -n "$target_device" && "$target_device" =~ ^/dev/[a-z] ]]; then
+        target_disk="$target_device"
+    else
+        # Find first non-removable disk
+        target_disk=$(lsblk -d -n -o NAME,TYPE | grep "disk" | head -1 | awk '{print $1}')
+        target_disk="/dev/$target_disk"
+    fi
+    
+    if [ -z "$target_disk" ] || [ ! -b "$target_disk" ]; then
+        log "WARN" "Could not determine target disk - defaulting to partition mode"
+        echo "unknown|unknown|unknown|unknown"
+        return 1
+    fi
+    
+    log "DEBUG" "Target disk for analysis: $target_disk"
+    
+    # Analyze partition table
+    local partition_count
+    partition_count=$(parted -l "$target_disk" 2>/dev/null | grep -c "^ " || echo "0")
+    
+    local has_windows=0
+    local has_linux=0
+    local total_disk_gb=0
+    local free_space_gb=0
+    
+    # Check for Windows/Linux partitions
+    if parted -l "$target_disk" 2>/dev/null | grep -qi "ntfs\|fat32\|microsoft"; then
+        has_windows=1
+        log "INFO" "Detected Windows partition on $target_disk"
+    fi
+    
+    if parted -l "$target_disk" 2>/dev/null | grep -qi "ext4\|ext3\|btrfs"; then
+        has_linux=1
+        log "INFO" "Detected Linux partition on $target_disk"
+    fi
+    
+    # Get disk size
+    if command -v blockdev &>/dev/null; then
+        local disk_size_sectors
+        disk_size_sectors=$(blockdev --getsz "$target_disk" 2>/dev/null || echo "0")
+        total_disk_gb=$((disk_size_sectors / 2097152))  # Convert to GB
+        log "DEBUG" "Total disk size: ~${total_disk_gb}GB"
+    fi
+    
+    # Decision logic
+    if [ $partition_count -eq 0 ]; then
+        log "INFO" "No partitions found - entire disk available"
+        echo "entire-disk|$target_disk|auto|auto"
+    elif [ $has_windows -eq 1 ] && [ $has_linux -eq 0 ]; then
+        log "INFO" "Windows partition(s) detected, no Linux partitions"
+        # Check for free space (simplified: assume we can use parted free space)
+        if parted -l "$target_disk" 2>/dev/null | grep -q "Free Space"; then
+            log "INFO" "Free space available after Windows partition"
+            echo "free-space|$target_disk|auto|auto"
+        else
+            log "INFO" "No free space - will need to repartition entire disk"
+            echo "entire-disk|$target_disk|auto|auto"
+        fi
+    elif [ $has_linux -eq 1 ] || [ $partition_count -le 2 ]; then
+        log "INFO" "Linux partition(s) or simple partition table detected"
+        echo "partition|$target_disk|auto|auto"
+    else
+        log "INFO" "Complex partition table detected - defaulting to safe partition mode"
+        echo "partition|$target_disk|auto|auto"
+    fi
+}
+
+calculate_swap_size() {
+    # Calculate ideal swap based on available RAM
+    # Input: total_size_gb (space available for ext4+swap)
+    # Output: swap_size_gb
+    
+    local available_gb="${1:-0}"
+    local override_mb="${2:-}"  # Optional override from SWAP_SIZE_MB
+    
+    if [ -n "$override_mb" ] && [ "$override_mb" -gt 0 ]; then
+        # User override
+        local override_gb=$((override_mb / 1024))
+        log "INFO" "Using user-configured swap size: ${override_gb}GB"
+        echo "$override_gb"
+        return 0
+    fi
+    
+    # Auto-calculate based on available space and best practices
+    # Conservative approach: use 2-4GB for modern systems, or 25% of available, whichever is less
+    
+    local swap_gb=$((available_gb / 4))  # 25% of available space
+    
+    if [ $swap_gb -lt 2 ]; then
+        swap_gb=2
+    elif [ $swap_gb -gt 4 ]; then
+        swap_gb=4
+    fi
+    
+    log "INFO" "Calculated swap size: ${swap_gb}GB (from ${available_gb}GB available)"
+    echo "$swap_gb"
+}
+
 customize_preseed() {
     log "INFO" "Generating preseed file for automated Ubuntu installer..."
     
@@ -1587,30 +1725,56 @@ customize_preseed() {
     local timezone="${TIMEZONE:-America/Denver}"
     local keyboard_layout="${KEYBOARD_LAYOUT:-us}"
     local locale="${LOCALE:-en_US.UTF-8}"
-    local install_disk="${INSTALL_DISK:-/dev/sda5}"
-    local install_swap="${INSTALL_SWAP:-/dev/sda6}"
+    
+    # Partition strategy variables (new)
+    local partition_strategy="${PARTITION_STRATEGY:-auto-detect}"
+    local install_disk="${INSTALL_DISK:-}"           # May be empty for auto-detect
+    local swap_size_mb="${SWAP_SIZE_MB:-}"
+    local ext4_size_mb="${EXT4_SIZE_MB:-}"
     local confirm_entire_disk="${CONFIRM_ENTIRE_DISK:-no}"
     
-    log "DEBUG" "Preseed config: hostname='$machine_name', username='$username', timezone='$timezone'"
-    log "DEBUG" "Partition config: disk='$install_disk', swap='$install_swap', confirm_entire='$confirm_entire_disk'"
+    log "DEBUG" "Partition strategy: $partition_strategy"
     
-    # Safety check for entire-disk mode
-    if [[ "$install_disk" == /dev/* ]] && [[ "$install_disk" != *"p"* ]] && [[ "$install_disk" != *[0-9] ]]; then
-        # Looks like entire disk (e.g., /dev/sda, /dev/nvme0n1, not /dev/sda5 or /dev/nvme0n1p1)
-        if [[ "$confirm_entire_disk" != "yes" ]]; then
-            log "WARN" "INSTALL_DISK='$install_disk' appears to be an entire disk (DESTRUCTIVE!)"
-            log "WARN" "This will ERASE all partitions and create new ones with LVM"
-            log "WARN" "To confirm this is intentional, set CONFIRM_ENTIRE_DISK=\"yes\" in secrets.env"
-            log "ERROR" "Preseed generation aborted for safety. Fix secrets.env or confirm with CONFIRM_ENTIRE_DISK"
-            return 1
-        else
-            log "WARN" "ENTIRE DISK MODE CONFIRMED: Will format $install_disk with LVM"
-            log "WARN" "This will ERASE ALL DATA on $install_disk"
-        fi
-    elif [[ "$confirm_entire_disk" == "yes" ]]; then
-        log "WARN" "CONFIRM_ENTIRE_DISK=yes but INSTALL_DISK='$install_disk' is a partition (not entire disk)"
-        log "INFO" "Proceeding with partition-mode installation (safe for dual-boot)"
+    # Detect partition strategy based on current disk layout
+    local strategy_result strategy_mode target_disk target_size target_calc
+    if [[ "$partition_strategy" == "auto-detect" ]]; then
+        log "INFO" "Running auto-detect partition strategy..."
+        strategy_result=$(detect_partition_strategy "$install_disk" 2>/dev/null || echo "unknown|unknown|unknown|unknown")
+        IFS='|' read -r strategy_mode target_disk target_size target_calc <<< "$strategy_result"
+        log "INFO" "Auto-detect result: mode=$strategy_mode, disk=$target_disk, size=$target_size"
+    else
+        strategy_mode="$partition_strategy"
+        target_disk="$install_disk"
+        log "INFO" "Using explicit partition strategy: $strategy_mode"
     fi
+    
+    # Map strategy names to actions
+    case "$strategy_mode" in
+        use-partition|partition|force-partition)
+            log "INFO" "Using partition mode (safe for dual-boot)"
+            strategy_mode="partition"
+            ;;
+        use-entire-disk|entire-disk|force-entire-disk)
+            log "WARN" "Using entire-disk mode (DESTRUCTIVE)"
+            if [[ "$confirm_entire_disk" != "yes" ]]; then
+                log "ERROR" "Entire-disk mode requires CONFIRM_ENTIRE_DISK=\"yes\" in secrets.env"
+                log "ERROR" "This will ERASE all partitions. Please review carefully and confirm."
+                return 1
+            fi
+            strategy_mode="entire-disk"
+            ;;
+        use-free-space|free-space|force-free-space)
+            log "INFO" "Using free-space mode (create partitions in available space)"
+            strategy_mode="free-space"
+            ;;
+        *)
+            log "WARN" "Unknown strategy: $strategy_mode - defaulting to partition mode"
+            strategy_mode="partition"
+            ;;
+    esac
+    
+    log "DEBUG" "Preseed config: hostname='$machine_name', username='$username', timezone='$timezone'"
+    log "DEBUG" "Partition strategy: $strategy_mode, target_disk='$target_disk'"
     
     # Create preseed directory in ISO ROOT (not in squashfs)
     # The preseed file must be accessible from GRUB bootloader BEFORE squashfs is mounted
@@ -1619,21 +1783,9 @@ customize_preseed() {
     log "DEBUG" "Creating preseed directory in ISO root: $preseed_dir"
     mkdir -p "$preseed_dir"
     
-    # Generate preseed file
-    # Generate preseed file with mode-specific partitioning
+    # Generate preseed file with strategy-based partitioning
     local preseed_file="${preseed_dir}/custom.preseed"
     log "DEBUG" "Generating preseed file: $preseed_file"
-    
-    # Determine partition mode based on INSTALL_DISK format
-    local is_partition=0
-    # Match: /dev/sda5, /dev/sdb1, /dev/nvme0n1p1, /dev/nvme0n1p2, etc.
-    # Any disk path ending with a digit (partition number) is partition mode
-    if echo "$install_disk" | grep -qE '[0-9]$'; then
-        is_partition=1
-        log "INFO" "Partition mode detected: $install_disk (specific partition, safe for dual-boot)"
-    else
-        log "WARN" "Entire-disk mode detected: $install_disk (will auto-partition with LVM)"
-    fi
     
     # Hash password for preseed (format: SHA512 hash prefixed with $6$)
     local hashed_password=""
@@ -1756,45 +1908,83 @@ EOF
     sed -i "s|FULLNAME_VAR|$fullname|g" "$preseed_file"
     sed -i "s|USERNAME_VAR|$username|g" "$preseed_file"
     sed -i "s|PASSWORD_HASH_VAR|$hashed_password|g" "$preseed_file"
-    sed -i "s|INSTALL_DISK_VAR|$install_disk|g" "$preseed_file"
+    sed -i "s|INSTALL_DISK_VAR|${target_disk:-/dev/sda}|g" "$preseed_file"
     
-    # Replace partitioning mode based on partition type
-    if [ $is_partition -eq 1 ]; then
-        log "DEBUG" "Using partition-mode preseed (safe for dual-boot)"
-        # Use a temporary file for multiline sed replacement
-        local partman_part_file
-        partman_part_file=$(mktemp)
-        cat > "$partman_part_file" << 'PARTMAN_PARTITION'
+    # Generate partitioning preseed based on detected strategy
+    local partman_config_file
+    partman_config_file=$(mktemp)
+    
+    case "$strategy_mode" in
+        partition)
+            log "INFO" "Configuring preseed for partition mode (existing partition, safe for dual-boot)"
+            cat > "$partman_config_file" << 'PARTMAN_CONFIG'
+# Partition mode: Use existing partition
+# Safe for dual-boot - will only modify specified partition
+d-i partman/disk_separator boolean false
+d-i partman/mount_style select uuid
 d-i partman-auto/method string regular
-d-i partman-basicfilesystems/format_swap_bootable boolean false
-d-i partman-partitioning/confirm_write_new_label boolean true
 d-i partman-partitioning/default_filesystem string ext4
-PARTMAN_PARTITION
-        sed -i '/PARTMAN_MODE_PLACEHOLDER/r '"$partman_part_file" "$preseed_file"
-        sed -i '/PARTMAN_MODE_PLACEHOLDER/d' "$preseed_file"
-        rm -f "$partman_part_file"
-    else
-        log "DEBUG" "Using entire-disk mode preseed (auto-partition with LVM)"
-        # Use a temporary file for multiline sed replacement
-        local partman_file
-        partman_file=$(mktemp)
-        cat > "$partman_file" << 'PARTMAN_ENTIRE'
+d-i partman-partitioning/confirm_write_new_label boolean true
+d-i partman-basicfilesystems/format_swap_bootable boolean false
+d-i partman/choose_partition select finish
+d-i partman/confirm boolean true
+d-i partman/confirm_nooverwrite boolean true
+PARTMAN_CONFIG
+            ;;
+        entire-disk)
+            log "INFO" "Configuring preseed for entire-disk mode (DESTRUCTIVE - will format entire disk with LVM)"
+            cat > "$partman_config_file" << 'PARTMAN_CONFIG'
+# Entire-disk mode: Auto-partition with LVM
+# DESTRUCTIVE: Erases all existing partitions
+d-i partman-auto/disk string INSTALL_DISK_VAR
 d-i partman-auto/method string lvm
 d-i partman-lvm/device_remove_lvm boolean true
 d-i partman-lvm/confirm boolean true
 d-i partman-lvm/confirm_nooverwrite boolean true
 d-i partman-auto/choose_recipe select atomic
 d-i partman-partitioning/confirm_write_new_label boolean true
-PARTMAN_ENTIRE
-        sed -i '/PARTMAN_MODE_PLACEHOLDER/r '"$partman_file" "$preseed_file"
-        sed -i '/PARTMAN_MODE_PLACEHOLDER/d' "$preseed_file"
-        rm -f "$partman_file"
-    fi
+d-i partman/confirm boolean true
+d-i partman/confirm_nooverwrite boolean true
+PARTMAN_CONFIG
+            ;;
+        free-space)
+            log "INFO" "Configuring preseed for free-space mode (create partitions in available space)"
+            cat > "$partman_config_file" << 'PARTMAN_CONFIG'
+# Free-space mode: Create partitions in available space
+# Safe for dual-boot - preserves Windows partition
+d-i partman/disk_separator boolean false
+d-i partman/mount_style select uuid
+d-i partman-auto/method string regular
+d-i partman-partitioning/default_filesystem string ext4
+d-i partman-partitioning/confirm_write_new_label boolean true
+d-i partman-basicfilesystems/format_swap_bootable boolean false
+d-i partman/choose_partition select finish
+d-i partman/confirm boolean true
+d-i partman/confirm_nooverwrite boolean true
+PARTMAN_CONFIG
+            ;;
+        *)
+            log "WARN" "Unknown partition strategy: $strategy_mode - using safe partition mode"
+            cat > "$partman_config_file" << 'PARTMAN_CONFIG'
+d-i partman-auto/method string regular
+d-i partman-partitioning/default_filesystem string ext4
+d-i partman-partitioning/confirm_write_new_label boolean true
+d-i partman/confirm boolean true
+d-i partman/confirm_nooverwrite boolean true
+PARTMAN_CONFIG
+            ;;
+    esac
+    
+    # Replace partitioning placeholder with strategy-specific config
+    sed -i '/PARTMAN_MODE_PLACEHOLDER/r '"$partman_config_file" "$preseed_file"
+    sed -i '/PARTMAN_MODE_PLACEHOLDER/d' "$preseed_file"
+    rm -f "$partman_config_file"
     
     chmod 644 "$preseed_file"
     log "DEBUG" "Preseed file written successfully"
     
     log "SUCCESS" "Preseed file created at: /preseed/custom.preseed"
+    log "INFO" "Partition strategy: $strategy_mode"
 }
 
 update_grub_for_preseed() {
