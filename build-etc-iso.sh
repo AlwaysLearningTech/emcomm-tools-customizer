@@ -1652,7 +1652,7 @@ customize_preseed() {
 
 # Keyboard configuration
 d-i keyboard-configuration/layoutcode string KEYBOARD_LAYOUT_VAR
-d-i keyboard-configuration/xkb-keymap string us
+d-i keyboard-configuration/xkb-keymap string KEYBOARD_LAYOUT_VAR
 
 # Localization
 d-i debian-installer/locale string LOCALE_VAR
