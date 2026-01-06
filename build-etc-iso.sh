@@ -1580,11 +1580,10 @@ PWEOF
 
 detect_partition_strategy() {
     # Analyze current disk layout and determine optimal partition strategy
-    # Returns: partition_strategy, target_disk, ext4_size, swap_size
+    # Returns: strategy|target_disk|size_gb|calc_status
     
-    # Strategy values: auto-detect, use-entire-disk, use-partition, use-free-space
+    # Strategy values: entire-disk, partition, free-space, unknown
     local target_device="${1:-}"
-    local force_strategy="${2:-}"  # Optional: force-entire-disk, force-partition, force-free-space
     
     log "INFO" "Analyzing partition strategy..."
     
@@ -1637,7 +1636,6 @@ detect_partition_strategy() {
     local has_windows=0
     local has_linux=0
     local total_disk_gb=0
-    local free_space_gb=0
     
     # Check for Windows/Linux partitions
     if parted -l "$target_disk" 2>/dev/null | grep -qi "ntfs\|fat32\|microsoft"; then
@@ -1656,39 +1654,29 @@ detect_partition_strategy() {
         disk_size_sectors=$(blockdev --getsz "$target_disk" 2>/dev/null || echo "0")
         total_disk_gb=$((disk_size_sectors / 2097152))  # Convert to GB
         log "DEBUG" "Total disk size: ~${total_disk_gb}GB"
-        
-        # Calculate free space if Windows partition exists (simplified)
-        if [ $has_windows -eq 1 ]; then
-            # For now, assume unallocated space can be detected; actual calculation would parse parted output
-            if parted -l "$target_disk" 2>/dev/null | grep -q "Free Space"; then
-                # In free-space mode, we'd use available space for Linux partitions
-                free_space_gb=$total_disk_gb  # Placeholder; actual would subtract partition sizes
-                log "DEBUG" "Free space available for Linux partitions on $target_disk"
-            fi
-        fi
     fi
     
     # Decision logic - return strategy with detected size
-    if [ $partition_count -eq 0 ]; then
+    if [ "$partition_count" -eq 0 ]; then
         log "INFO" "No partitions found - entire disk available (~${total_disk_gb}GB)"
-        echo "entire-disk|$target_disk|${total_disk_gb}GB|calculated"
+        echo "entire-disk|$target_disk|${total_disk_gb}GB"
     elif [ $has_windows -eq 1 ] && [ $has_linux -eq 0 ]; then
         log "INFO" "Windows partition(s) detected, no Linux partitions"
         # Check for free space (simplified: assume we can use parted free space)
         if parted -l "$target_disk" 2>/dev/null | grep -q "Free Space"; then
             log "INFO" "Free space available after Windows partition"
-            # For free-space mode, use available disk space (actual free space calculation deferred)
-            echo "free-space|$target_disk|${total_disk_gb}GB|calculated"
+            # For free-space mode, use available disk space
+            echo "free-space|$target_disk|${total_disk_gb}GB"
         else
             log "INFO" "No free space - will need to repartition entire disk"
-            echo "entire-disk|$target_disk|${total_disk_gb}GB|calculated"
+            echo "entire-disk|$target_disk|${total_disk_gb}GB"
         fi
-    elif [ $has_linux -eq 1 ] || [ $partition_count -le 2 ]; then
+    elif [ "$has_linux" -eq 1 ] || [ "$partition_count" -le 2 ]; then
         log "INFO" "Linux partition(s) or simple partition table detected"
-        echo "partition|$target_disk|${total_disk_gb}GB|calculated"
+        echo "partition|$target_disk|${total_disk_gb}GB"
     else
         log "INFO" "Complex partition table detected - defaulting to safe partition mode"
-        echo "partition|$target_disk|${total_disk_gb}GB|calculated"
+        echo "partition|$target_disk|${total_disk_gb}GB"
     fi
 }
 
@@ -1749,13 +1737,13 @@ customize_preseed() {
     log "DEBUG" "Partition strategy: $partition_strategy"
     
     # Detect partition strategy based on current disk layout
-    local strategy_result strategy_mode target_disk target_size target_calc
+    local strategy_result strategy_mode target_disk target_size
     local calculated_swap_gb calculated_ext4_gb
     
     if [[ "$partition_strategy" == "auto-detect" ]]; then
         log "INFO" "Running auto-detect partition strategy..."
-        strategy_result=$(detect_partition_strategy "$install_disk" 2>/dev/null || echo "unknown|unknown|unknown|unknown")
-        IFS='|' read -r strategy_mode target_disk target_size target_calc <<< "$strategy_result"
+        strategy_result=$(detect_partition_strategy "$install_disk" 2>/dev/null || echo "unknown|unknown|0GB")
+        IFS='|' read -r strategy_mode target_disk target_size <<< "$strategy_result"
         log "INFO" "Auto-detect result: mode=$strategy_mode, disk=$target_disk, size=$target_size"
         
         # Calculate swap size based on detected partition size if in auto mode
@@ -2367,7 +2355,7 @@ customize_additional_packages() {
     local all_packages="${additional_packages}"
     log "INFO" "Installing packages: $all_packages"
     # Use -y to auto-confirm, -qq for less output
-    # Note: DO NOT quote $all_packages - we need word splitting for separate package names
+    # shellcheck disable=SC2086
     if chroot "${SQUASHFS_DIR}" apt-get install -y -qq $all_packages 2>&1 | tail -10 | tee -a "$LOG_FILE"; then
         log "SUCCESS" "Packages installed successfully"
     else
@@ -3184,8 +3172,6 @@ rebuild_iso() {
     
     local iso_size
     iso_size=$(du -h "$OUTPUT_ISO" | cut -f1)
-    local iso_size_bytes
-    iso_size_bytes=$(stat -f%z "$OUTPUT_ISO" 2>/dev/null || stat -c%s "$OUTPUT_ISO" 2>/dev/null)
     
     # Estimate final size with component breakdown
     log "INFO" "=== ISO Size Breakdown ==="
@@ -3194,7 +3180,7 @@ rebuild_iso() {
     local ubuntu_iso="${CACHE_DIR}/${UBUNTU_ISO_FILE}"
     if [ -f "$ubuntu_iso" ]; then
         ubuntu_size=$(stat -c%s "$ubuntu_iso" 2>/dev/null || stat -f%z "$ubuntu_iso" 2>/dev/null)
-        log "INFO" "  Ubuntu ISO embedded: $(numfmt --to=iec-i --suffix=B $ubuntu_size 2>/dev/null || echo "~4GB")"
+        log "INFO" "  Ubuntu ISO embedded: $(numfmt --to=iec-i --suffix=B "$ubuntu_size" 2>/dev/null || echo "~4GB")"
     fi
     
     local wine_size=0
@@ -3202,13 +3188,13 @@ rebuild_iso() {
     wine_backup=$(find "$CACHE_DIR" -maxdepth 1 -name "etc-wine-backup*.tar.gz" -type f | sort -r | head -1)
     if [ -n "$wine_backup" ] && [ -f "$wine_backup" ]; then
         wine_size=$(stat -c%s "$wine_backup" 2>/dev/null || stat -f%z "$wine_backup" 2>/dev/null)
-        log "INFO" "  Wine backup: $(numfmt --to=iec-i --suffix=B $wine_size 2>/dev/null || du -h "$wine_backup" | cut -f1)"
+        log "INFO" "  Wine backup: $(numfmt --to=iec-i --suffix=B "$wine_size" 2>/dev/null || du -h "$wine_backup" | cut -f1)"
     fi
     
     local secrets_size=0
     if [ -f "$SECRETS_FILE" ]; then
         secrets_size=$(stat -c%s "$SECRETS_FILE" 2>/dev/null || stat -f%z "$SECRETS_FILE" 2>/dev/null)
-        log "INFO" "  secrets.env: $(numfmt --to=iec-i --suffix=B $secrets_size 2>/dev/null || du -h "$SECRETS_FILE" | cut -f1)"
+        log "INFO" "  secrets.env: $(numfmt --to=iec-i --suffix=B "$secrets_size" 2>/dev/null || du -h "$SECRETS_FILE" | cut -f1)"
     fi
     
     log "INFO" "  Final ISO: $iso_size"
