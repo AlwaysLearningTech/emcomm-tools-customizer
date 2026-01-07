@@ -1337,117 +1337,85 @@ EOF
     chmod 644 "$user_json"
     log "DEBUG" "user.json written"
     
-    # === 2. Modify ETC's direwolf template with iGate/beacon settings ===
-    # NOTE: Disabled - modifying the template causes conflicts with Pat/Winlink-packet mode
-    # ETC's et-mode provides different direwolf configs for different modes (APRS vs Packet)
-    # Our customizations should not override those, as they break Winlink compatibility
-    # Users can customize APRS settings post-install if needed
+    # === 2. Modify ETC's direwolf APRS template with iGate/beacon settings ===
+    # ETC's et-mode provides different direwolf configs for different modes:
+    #   - direwolf.aprs-digipeater.conf (APRS mode) 
+    #   - direwolf.packet-digipeater.conf (Packet/Winlink mode)
+    # Modifying the APRS template does NOT affect Packet mode, so no compatibility issue
+    # Users can select APRS or Packet mode independently in et-mode
     
-    log "DEBUG" "Skipping direwolf template modification (ETC upstream config is correct)"
-    return 0
+    local template_dir="${SQUASHFS_DIR}/opt/emcomm-tools/conf/template.d/packet"
+    local aprs_template="${template_dir}/direwolf.aprs-digipeater.conf"
     
-    # ============= OLD CODE (DISABLED) =============
-    # The following code broke et-mode packet/Winlink compatibility
-    # Left here for reference if reverting is needed
+    if [ ! -d "$template_dir" ]; then
+        log "WARN" "ETC template directory not found: $template_dir"
+        log "WARN" "Skipping direwolf template modification"
+        return 0
+    fi
     
-    # local template_dir="${SQUASHFS_DIR}/opt/emcomm-tools/conf/template.d/packet"
-    # local aprs_template="${template_dir}/direwolf.aprs-digipeater.conf"
-    # 
-    # if [ ! -d "$template_dir" ]; then
-    #     log "WARN" "ETC template directory not found: $template_dir"
-    #     log "WARN" "Skipping direwolf template modification"
-    #     return 0
-    # fi
-    # 
-    # # Backup original template
-    # if [ -f "$aprs_template" ]; then
-    #     cp "$aprs_template" "${aprs_template}.orig"
-    #     log "DEBUG" "Backed up original template"
-    # fi
-    # 
-    # # Extract symbol table and code (e.g., "/r" -> table="/", code="r")
-    # local symbol_table="${aprs_symbol:0:1}"
-    # local symbol_code="${aprs_symbol:1:1}"
-    # 
-    # # Create modified template with iGate/beacon settings
-    # # Keep {{ET_CALLSIGN}} and {{ET_AUDIO_DEVICE}} for ETC's runtime substitution
-    # cat > "$aprs_template" <<EOF
-    # # Direwolf APRS Digipeater/iGate Configuration
-    # # Template modified by EmComm Tools Customizer
-    # # ETC substitutes {{ET_CALLSIGN}} and {{ET_AUDIO_DEVICE}} at runtime
-    # 
-    # # Audio device (substituted by et-direwolf at runtime)
-    # ADEVICE {{ET_AUDIO_DEVICE}}
-    # CHANNEL 0
-    # 
-    # # Callsign with SSID (substituted by et-direwolf, we append SSID)
-    # MYCALL {{ET_CALLSIGN}}-${aprs_ssid}
-    # 
-    # # PTT configuration
-    # PTT ${direwolf_ptt}
-    # 
-    # # Modem settings for APRS (1200 baud)
-    # MODEM 1200
-    # 
-    # EOF
-    # 
-    # # Add iGate configuration if enabled
-    # if [[ "$enable_igate" == "yes" ]]; then
-    #     cat >> "$aprs_template" <<EOF
-    # # ============================================
-    # # iGate Configuration (RF to Internet gateway)
-    # # ============================================
-    # IGSERVER ${aprs_server}
-    # IGLOGIN {{ET_CALLSIGN}} ${aprs_passcode}
-    # 
-    # EOF
-    #     log "DEBUG" "Added iGate settings to template"
-    # fi
-    # 
-    # # Add beacon configuration if enabled
-    # if [[ "$enable_beacon" == "yes" ]]; then
-    #     # Build PHG string if we have the values
-    #     local phg_string=""
-    #     if [[ -n "$beacon_power" && -n "$beacon_height" && -n "$beacon_gain" ]]; then
-    #         phg_string="power=${beacon_power} height=${beacon_height} gain=${beacon_gain}"
-    #         if [[ -n "$beacon_dir" ]]; then
-    #             phg_string="${phg_string} dir=${beacon_dir}"
-    #         fi
-    #     fi
-    #     
-    #     cat >> "$aprs_template" <<EOF
-    # # ============================================
-    # # Position Beacon Configuration
-    # # ============================================
-    # # Use GPS for position (requires gpsd running)
-    # GPSD
-    # 
-    # # Smart beaconing: adjusts rate based on speed/heading
-    # # fast_speed mph, fast_rate sec, slow_speed mph, slow_rate sec, turn_angle, turn_time sec, turn_slope
-    # SMARTBEACONING 30 60 2 1800 15 15 255
-    # 
-    # # Fallback fixed beacon if no GPS
-    # PBEACON delay=1 every=${beacon_interval} symbol="${symbol_table}${symbol_code}" ${phg_string} \\
-    #     comment="${aprs_comment}" via=${beacon_via}
-    # 
-    # EOF
-    #     log "DEBUG" "Added beacon settings to template (PHG: ${phg_string:-none})"
-    # fi
-    # 
-    # # Add digipeater configuration
-    # cat >> "$aprs_template" <<EOF
-    # # ============================================
-    # # Digipeater Configuration
-    # # ============================================
-    # # Standard APRS digipeating with path tracing
-    # DIGIPEAT 0 0 ^WIDE[3-7]-[1-7]$|^TEST$ ^WIDE[12]-[12]$ TRACE
-    # DIGIPEAT 0 0 ^WIDE[12]-[12]$ ^WIDE[12]-[12]$ TRACE
-    # 
-    # EOF
-    # 
-    # chmod 644 "$aprs_template"
-    # log "SUCCESS" "Modified ETC direwolf template: direwolf.aprs-digipeater.conf"
-    # log "SUCCESS" "APRS configured for ${callsign}-${aprs_ssid} (igate=${enable_igate}, beacon=${enable_beacon})"
+    # Backup original template
+    if [ -f "$aprs_template" ]; then
+        cp "$aprs_template" "${aprs_template}.orig"
+        log "DEBUG" "Backed up original template to ${aprs_template}.orig"
+    fi
+    
+    # Extract symbol table and code (e.g., "/r" -> table="/", code="r")
+    local symbol_table="${aprs_symbol:0:1}"
+    local symbol_code="${aprs_symbol:1:1}"
+    
+    # Build PHG string if we have beacon settings
+    local phg_string=""
+    if [[ "$enable_beacon" == "yes" && -n "$beacon_power" && -n "$beacon_height" && -n "$beacon_gain" ]]; then
+        phg_string="power=${beacon_power} height=${beacon_height} gain=${beacon_gain}"
+        if [[ -n "$beacon_dir" ]]; then
+            phg_string="${phg_string} dir=${beacon_dir}"
+        fi
+    fi
+    
+    # Create modified template with iGate/beacon settings
+    cat > "$aprs_template" <<EOF
+# Direwolf APRS Digipeater/iGate Configuration
+# Modified by EmComm Tools Customizer
+ADEVICE {{ET_AUDIO_DEVICE}}
+CHANNEL 0
+MYCALL {{ET_CALLSIGN}}-${aprs_ssid}
+MODEM 1200
+PTT RIG 2 localhost:4532
+AGWPORT 8000
+KISSPORT 8001
+EOF
+    
+    # Add iGate if enabled
+    if [[ "$enable_igate" == "yes" ]]; then
+        cat >> "$aprs_template" <<EOF
+IGSERVER ${aprs_server}
+IGLOGIN {{ET_CALLSIGN}}-${aprs_ssid} ${aprs_passcode}
+EOF
+        log "DEBUG" "Added iGate to APRS template"
+    fi
+    
+    # Add beacon if enabled
+    if [[ "$enable_beacon" == "yes" ]]; then
+        cat >> "$aprs_template" <<EOF
+PBEACON delay=1 every=${beacon_interval} overlay=S symbol="${symbol_table}${symbol_code}" ${phg_string} comment="${aprs_comment}" via=${beacon_via}
+SMARTBEACONING 30 60 2 1800 15 15 255
+EOF
+        log "DEBUG" "Added beacon to APRS template (${beacon_interval}s interval)"
+    else
+        cat >> "$aprs_template" <<EOF
+PBEACON delay=1 every=300 symbol="/r" comment="${aprs_comment}" via=WIDE1-1
+EOF
+    fi
+    
+    # Add digipeater config
+    cat >> "$aprs_template" <<EOF
+DIGIPEAT 0 0 ^WIDE[3-7]-[1-7]\$|^TEST\$ ^WIDE[12]-[12]\$ TRACE
+DIGIPEAT 0 0 ^WIDE[12]-[12]\$ ^WIDE[12]-[12]\$ TRACE
+IGTXLIMIT 6 10
+EOF
+    
+    chmod 644 "$aprs_template"
+    log "SUCCESS" "Modified APRS template: ${callsign}-${aprs_ssid} (igate=${enable_igate}, beacon=${enable_beacon})"
 }
 
 customize_radio_configs() {

@@ -33,10 +33,6 @@ This customizer **respects upstream ETC architecture**. We:
 - Don't change package selections or install additional software
 - Don't pre-install VARA or Wine prefix (these require a desktop session post-install)
 
-**ETC Architecture**: ETC uses runtime template processing. When you run `et-direwolf`, `et-yaac`, or `et-winlink`, these wrapper scripts read from `~/.config/emcomm-tools/user.json` and generate configs dynamically. We pre-populate `user.json` so you skip the `et-user` prompt on first boot.
-
-**APRS Configuration**: APRS customization via direwolf template modification has been disabled in this version to preserve compatibility with Pat/Winlink-packet mode. ETC's upstream direwolf templates handle all modes correctly. Users can customize APRS settings post-install if needed. See "Future Work" section for plans to re-enable this feature safely.
-
 ## Release Status: v1.0 (First Working Build)
 
 ### ✅ What's Working
