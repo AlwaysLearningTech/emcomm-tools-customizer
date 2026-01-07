@@ -1419,15 +1419,13 @@ EOF
 }
 
 customize_radio_configs() {
-    log "INFO" "Adding radio configurations..."
+    log "INFO" "Configuring ham radio CAT control (Anytone D578UV default)..."
     
     local radios_dir="${SQUASHFS_DIR}/opt/emcomm-tools/conf/radios.d"
-    
-    # Ensure radios directory exists
     mkdir -p "$radios_dir"
     
-    # Add Anytone D578UV configuration
-    log "DEBUG" "Adding Anytone D578UV configuration..."
+    # Anytone D578UV is core - always configure it
+    log "DEBUG" "Adding Anytone D578UV (DigiRig Mobile) CAT control..."
     cat > "${radios_dir}/anytone-d578uv.json" <<'EOF'
 {
   "id": "anytone-d578uv",
@@ -1442,22 +1440,90 @@ customize_radio_configs() {
     "D-Star capable VHF/UHF radio with CAT control",
     "DigiRig Mobile provides USB-to-CAT interface",
     "CM108 PTT via USB audio device",
-    "Supports APRS and digital modes",
+    "Supports APRS and digital modes (D-Star, DMR, YSF)",
     "Default baud rate: 9600bps"
   ],
   "fieldNotes": [
     "Connect D578UV to DigiRig Mobile 6-pin connector",
     "DigiRig USB connection to computer",
-    "Serial device: /dev/ttyUSB0 (or similar)",
+    "Serial device auto-mapped to /dev/et-cat",
     "Audio device enumerates as CM108-compatible",
     "Use et-mode to select digital mode (APRS, D-Star, etc.)",
-    "Configure frequency/offset using radio display"
+    "Configure frequency/offset using radio display",
+    "PTT control via CM108 USB audio device"
   ]
 }
 EOF
     
     chmod 644 "${radios_dir}/anytone-d578uv.json"
-    log "SUCCESS" "Added Anytone D578UV radio configuration"
+    
+    # Set Anytone as active radio by default (core functionality)
+    ln -sf "${radios_dir}/anytone-d578uv.json" "${radios_dir}/active-radio.json"
+    log "DEBUG" "Set active radio: anytone-d578uv"
+    
+    # Create udev rule for /dev/et-cat symlink (predictable CAT device name)
+    local udev_dir="${SQUASHFS_DIR}/etc/udev/rules.d"
+    mkdir -p "$udev_dir"
+    
+    log "DEBUG" "Creating udev rule for /dev/et-cat symlink..."
+    cat > "${udev_dir}/99-emcomm-tools-cat.rules" <<'EOF'
+# EmComm Tools CAT Device Symlink
+# Maps DigiRig and other CAT devices to predictable /dev/et-cat symlink
+
+# DigiRig Mobile (CP2102 USB-UART bridge)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="et-cat"
+
+# Generic CH340 (common in budget CAT cables)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="et-cat"
+
+# Prolific PL2303 (common in older CAT cables)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="067b", ATTRS{idProduct}=="2303", SYMLINK+="et-cat"
+
+# FTDI FT232 (common in professional CAT cables)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", SYMLINK+="et-cat"
+EOF
+    
+    chmod 644 "${udev_dir}/99-emcomm-tools-cat.rules"
+    
+    # Create systemd service for rigctld (ham radio CAT control daemon)
+    local systemd_dir="${SQUASHFS_DIR}/etc/systemd/system"
+    mkdir -p "$systemd_dir"
+    
+    log "DEBUG" "Creating systemd service for rigctld..."
+    cat > "${systemd_dir}/rigctld.service" <<'EOF'
+[Unit]
+Description=HAMlib Rig Control Daemon for EmComm Tools
+Documentation=https://www.hamlib.org/
+Requires=network.target
+After=network.target udev.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/emcomm-tools/bin:/opt/emcomm-tools/sbin"
+
+# Start wrapper script which handles radio config and rigctld invocation
+ExecStart=/opt/emcomm-tools/sbin/wrapper-rigctld.sh start
+
+# Restart on failure
+Restart=on-failure
+RestartSec=5
+
+# Allow time for radio to be powered on
+TimeoutStartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    chmod 644 "${systemd_dir}/rigctld.service"
+    
+    # Enable rigctld for auto-start at boot
+    chroot "${SQUASHFS_DIR}" systemctl enable rigctld.service 2>/dev/null || \
+        log "WARN" "Could not enable rigctld in chroot (service will start on first boot)"
+    
+    log "SUCCESS" "Ham radio CAT control enabled: rigctld listens on localhost:4532"
 }
 
 customize_user_and_autologin() {
