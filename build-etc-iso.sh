@@ -2115,6 +2115,51 @@ update_grub_for_preseed() {
     if grep -iq "windows\|boot.*windows\|other os" "$grub_cfg"; then
         log "WARN" "Detected other OSes in GRUB menu - they should not be affected by preseed changes"
     fi
+    
+    # === Set default GRUB entry to EmComm Tools (Ubuntu "Install" entry) ===
+    # Find the menu entry ID for Ubuntu Install and set it as default
+    set_grub_default_entry "$grub_cfg"
+}
+
+set_grub_default_entry() {
+    local grub_cfg="$1"
+    
+    log "INFO" "Setting default GRUB boot entry to EmComm Tools Community..."
+    
+    # Find the Ubuntu Install entry and extract its ID
+    # GRUB menu entries have the format: menuentry 'Title' --id=ID {
+    local ubuntu_install_id
+    ubuntu_install_id=$(grep -m1 "menuentry.*Ubuntu.*Install" "$grub_cfg" | grep -oP "(?<=--id=)[^ }]+")
+    
+    if [ -z "$ubuntu_install_id" ]; then
+        # Fallback: just look for any Ubuntu menuentry ID
+        ubuntu_install_id=$(grep -m1 "menuentry.*Ubuntu" "$grub_cfg" | grep -oP "(?<=--id=)[^ }]+")
+    fi
+    
+    if [ -z "$ubuntu_install_id" ]; then
+        log "WARN" "Could not find Ubuntu entry ID in GRUB config - default entry may not be changed"
+        return 1
+    fi
+    
+    # Check if GRUB_DEFAULT line already exists
+    if grep -q "^set default=" "$grub_cfg"; then
+        # Replace existing default
+        sed -i "s/^set default=.*/set default=\"$ubuntu_install_id\"/" "$grub_cfg"
+        log "DEBUG" "Updated existing GRUB default: $ubuntu_install_id"
+    else
+        # Add new default line after the first line (shebang or comment)
+        sed -i "1a set default=\"$ubuntu_install_id\"" "$grub_cfg"
+        log "DEBUG" "Added GRUB default: $ubuntu_install_id"
+    fi
+    
+    # Verify the change
+    if grep -q "set default=\"$ubuntu_install_id\"" "$grub_cfg"; then
+        log "SUCCESS" "Default GRUB entry set to: $ubuntu_install_id (Ubuntu/EmComm Tools)"
+        return 0
+    else
+        log "WARN" "Failed to set GRUB default entry"
+        return 1
+    fi
 }
 
 customize_vara_license() {
