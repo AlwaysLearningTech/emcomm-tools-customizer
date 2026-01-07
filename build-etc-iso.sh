@@ -1306,7 +1306,6 @@ customize_aprs() {
     local beacon_dir="${APRS_BEACON_DIR:-}"
     local enable_igate="${ENABLE_APRS_IGATE:-yes}"
     local aprs_server="${APRS_SERVER:-noam.aprs2.net}"
-    # Note: DIREWOLF_ADEVICE not used here - ETC uses {{ET_AUDIO_DEVICE}} placeholder
     local direwolf_ptt="${DIREWOLF_PTT:-CM108}"
     
     log "DEBUG" "User config: callsign=$callsign, grid=$grid"
@@ -1337,12 +1336,20 @@ EOF
     chmod 644 "$user_json"
     log "DEBUG" "user.json written"
     
-    # === 2. Modify ETC's direwolf APRS template with iGate/beacon settings ===
-    # ETC's et-mode provides different direwolf configs for different modes:
-    #   - direwolf.aprs-digipeater.conf (APRS mode) 
-    #   - direwolf.packet-digipeater.conf (Packet/Winlink mode)
-    # Modifying the APRS template does NOT affect Packet mode, so no compatibility issue
-    # Users can select APRS or Packet mode independently in et-mode
+    # === 2. Modify ETC's direwolf APRS template ===
+    # CRITICAL: ETC's et-direwolf wrapper does sed replacements on EVERY LAUNCH:
+    #   sed "s|{{ET_CALLSIGN}}|${CALLSIGN}|g"
+    #   sed "s|{{ET_AUDIO_DEVICE}}|${DIREWOLF_AUDIO_DEVICE}|g"
+    # 
+    # We MUST preserve {{ET_CALLSIGN}} and {{ET_AUDIO_DEVICE}} placeholders!
+    # We ADD iGate/beacon settings as hardcoded values (sed won't touch them).
+    # This means iGate server, beacon interval, and symbol are set at ISO build time
+    # and persist until the next rebuild (not runtime-configurable).
+    #
+    # Template files:
+    #   - direwolf.aprs-digipeater.conf (APRS mode only)
+    #   - direwolf.packet-digipeater.conf (Packet/Winlink mode only)
+    # Modifying APRS template does NOT affect Packet mode - separate templates!
     
     local template_dir="${SQUASHFS_DIR}/opt/emcomm-tools/conf/template.d/packet"
     local aprs_template="${template_dir}/direwolf.aprs-digipeater.conf"
@@ -1359,63 +1366,45 @@ EOF
         log "DEBUG" "Backed up original template to ${aprs_template}.orig"
     fi
     
-    # Extract symbol table and code (e.g., "/r" -> table="/", code="r")
-    local symbol_table="${aprs_symbol:0:1}"
-    local symbol_code="${aprs_symbol:1:1}"
+    local temp_conf
+    temp_conf=$(mktemp)
     
-    # Build PHG string if we have beacon settings
-    local phg_string=""
-    if [[ "$enable_beacon" == "yes" && -n "$beacon_power" && -n "$beacon_height" && -n "$beacon_gain" ]]; then
-        phg_string="power=${beacon_power} height=${beacon_height} gain=${beacon_gain}"
+    # Start with original template
+    cp "$aprs_template" "$temp_conf"
+    
+    # Remove any existing IGSERVER/IGLOGIN lines
+    sed -i '/^IGSERVER/d' "$temp_conf"
+    sed -i '/^IGLOGIN/d' "$temp_conf"
+    
+    # Add iGate if enabled (insert after PTT line for proper direwolf parsing)
+    if [[ "$enable_igate" == "yes" ]]; then
+        sed -i "/^PTT RIG 2 localhost:4532/a IGSERVER ${aprs_server}\nIGLOGIN {{ET_CALLSIGN}}-${aprs_ssid} ${aprs_passcode}" "$temp_conf"
+        log "DEBUG" "Added iGate to APRS template: server=${aprs_server}, passcode=${aprs_passcode}"
+    fi
+    
+    # Optionally modify PBEACON with custom settings
+    if [[ "$enable_beacon" == "yes" ]]; then
+        # Build PHG string (power/height/gain)
+        local phg_string="power=${beacon_power} height=${beacon_height} gain=${beacon_gain}"
         if [[ -n "$beacon_dir" ]]; then
             phg_string="${phg_string} dir=${beacon_dir}"
         fi
+        
+        # Parse symbol (e.g., "/r" -> table="/", code="r")
+        local symbol_table="${aprs_symbol:0:1}"
+        local symbol_code="${aprs_symbol:1:1}"
+        
+        # Replace existing PBEACON line with custom one
+        sed -i "s|^PBEACON .*|PBEACON delay=1 every=${beacon_interval} overlay=S symbol=\"${symbol_table}${symbol_code}\" ${phg_string} comment=\"${aprs_comment}\" via=${beacon_via}|" "$temp_conf"
+        log "DEBUG" "Modified PBEACON: interval=${beacon_interval}s, symbol=${aprs_symbol}, phg=${phg_string}"
     fi
     
-    # Create modified template with iGate/beacon settings
-    cat > "$aprs_template" <<EOF
-# Direwolf APRS Digipeater/iGate Configuration
-# Modified by EmComm Tools Customizer
-ADEVICE {{ET_AUDIO_DEVICE}}
-CHANNEL 0
-MYCALL {{ET_CALLSIGN}}-${aprs_ssid}
-MODEM 1200
-PTT RIG 2 localhost:4532
-AGWPORT 8000
-KISSPORT 8001
-EOF
-    
-    # Add iGate if enabled
-    if [[ "$enable_igate" == "yes" ]]; then
-        cat >> "$aprs_template" <<EOF
-IGSERVER ${aprs_server}
-IGLOGIN {{ET_CALLSIGN}}-${aprs_ssid} ${aprs_passcode}
-EOF
-        log "DEBUG" "Added iGate to APRS template"
-    fi
-    
-    # Add beacon if enabled
-    if [[ "$enable_beacon" == "yes" ]]; then
-        cat >> "$aprs_template" <<EOF
-PBEACON delay=1 every=${beacon_interval} overlay=S symbol="${symbol_table}${symbol_code}" ${phg_string} comment="${aprs_comment}" via=${beacon_via}
-SMARTBEACONING 30 60 2 1800 15 15 255
-EOF
-        log "DEBUG" "Added beacon to APRS template (${beacon_interval}s interval)"
-    else
-        cat >> "$aprs_template" <<EOF
-PBEACON delay=1 every=300 symbol="/r" comment="${aprs_comment}" via=WIDE1-1
-EOF
-    fi
-    
-    # Add digipeater config
-    cat >> "$aprs_template" <<EOF
-DIGIPEAT 0 0 ^WIDE[3-7]-[1-7]\$|^TEST\$ ^WIDE[12]-[12]\$ TRACE
-DIGIPEAT 0 0 ^WIDE[12]-[12]\$ ^WIDE[12]-[12]\$ TRACE
-IGTXLIMIT 6 10
-EOF
-    
+    # Move modified template into place
+    mv "$temp_conf" "$aprs_template"
     chmod 644 "$aprs_template"
+    
     log "SUCCESS" "Modified APRS template: ${callsign}-${aprs_ssid} (igate=${enable_igate}, beacon=${enable_beacon})"
+    log "DEBUG" "Placeholders {{ET_CALLSIGN}} and {{ET_AUDIO_DEVICE}} preserved for ETC runtime substitution"
 }
 
 customize_radio_configs() {
