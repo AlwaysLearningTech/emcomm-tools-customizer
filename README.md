@@ -65,7 +65,6 @@ This customizer **respects upstream ETC architecture**. We:
 - **Additional packages**: Development tools (git, nodejs, npm, uv) installable via configuration
 - **Cache system**: Downloaded ISOs cached for faster rebuilds
 - **Preseed automation**: Ubuntu 22.10 installer automated with hostname, username, password, timezone
-- **Automatic boot**: Default GRUB entry set to Ubuntu/EmComm Tools (skips boot menu for quick startup)
 - **Anytone D578UV radio**: Radio configuration added to et-radio menu (rigctrl ID 301)
 
 ### ⚠️ Known Limitations (v1.0)
@@ -74,10 +73,11 @@ Preseed file **AUTOMATES** Ubuntu installer—hostname, username, password, and 
 
 **Automated Installation Workflow**:
 1. Boot custom ISO from Ventoy
-2. **GRUB default entry is set to Ubuntu/EmComm Tools** (skips boot menu, no user input needed)
-3. GRUB loads preseed from `file=/cdrom/preseed/custom.preseed`
-4. Preseed parameters: `auto=true priority=critical` (auto-answer all questions)
-5. Ubuntu installer runs **without user prompts** for:
+2. GRUB menu shows all available OSes (dual-boot preserved)
+3. Select Ubuntu/EmComm Tools entry from menu
+4. GRUB loads preseed from `file=/cdrom/preseed/custom.preseed`
+5. Preseed parameters: `auto=true priority=critical` (auto-answer all questions)
+6. Ubuntu installer runs **without user prompts** for:
    - Keyboard layout
    - Locale / language
    - Hostname (set to `ETC-{CALLSIGN}`)
@@ -85,8 +85,8 @@ Preseed file **AUTOMATES** Ubuntu installer—hostname, username, password, and 
    - Password (hashed in preseed)
    - Timezone
    - Partitioning (see below)
-6. System boots directly to desktop (or login prompt if autologin disabled)
-7. All customizations apply automatically (WiFi, APRS, desktop settings, CAT control, etc.)
+7. System boots directly to desktop (or login prompt if autologin disabled)
+8. All customizations apply automatically (WiFi, APRS, desktop settings, CAT control, etc.)
 
 **Partitioning Behavior**:
 
