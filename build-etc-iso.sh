@@ -1134,7 +1134,7 @@ customize_wifi() {
             local conn_file="${nm_dir}/${ssid}.nmconnection"
             log "DEBUG" "Creating connection file: $conn_file"
             
-            # Create connection file
+            # Create connection file (matching NetworkManager keyfile format)
             cat > "$conn_file" <<EOF
 [connection]
 id=$ssid
@@ -1147,6 +1147,7 @@ mode=infrastructure
 ssid=$ssid
 
 [wifi-security]
+auth-alg=open
 key-mgmt=wpa-psk
 psk=$password
 
