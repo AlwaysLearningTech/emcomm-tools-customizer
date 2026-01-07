@@ -1260,10 +1260,24 @@ sleep-display-ac='${screen_blank_timeout}'
 sleep-display-battery='${screen_blank_timeout}'
 EOF
 
-    # Skip dconf database compilation - it will compile automatically on first boot
-    # Running dconf update in chroot can hang due to missing dbus/system services
+    # Compile dconf database so GNOME recognizes the settings on first boot
+    log "INFO" "Compiling dconf database..."
+    
+    # dconf needs the database compiled from the keyfiles for GNOME to use them
+    # We attempt to run dconf update with proper error handling
+    if chroot "${SQUASHFS_DIR}" command -v dconf &>/dev/null; then
+        # Try to compile dconf database with timeout to prevent hangs
+        if timeout 15 chroot "${SQUASHFS_DIR}" \
+            sh -c 'dconf update 2>&1 || true' | tee -a "$LOG_FILE"; then
+            log "DEBUG" "dconf database update completed"
+        else
+            log "DEBUG" "dconf update timed out (expected in chroot without full dbus)"
+        fi
+    else
+        log "DEBUG" "dconf not available in chroot - keyfiles will be compiled on first boot"
+    fi
+    
     log "DEBUG" "dconf settings written to $dconf_file"
-    log "DEBUG" "Database will be compiled automatically on first boot"
     log "SUCCESS" "Desktop preferences configured (${color_scheme}, ${scaling}x)"
 }
 
@@ -2321,14 +2335,19 @@ customize_additional_packages() {
     source "$SECRETS_FILE"
     log "DEBUG" "Sourced secrets file for package config"
     
+    # Core development packages (always installed)
+    local core_packages="nodejs npm"
+    
+    # Additional packages from secrets.env
     local additional_packages="${ADDITIONAL_PACKAGES:-}"
     
-    if [ -z "$additional_packages" ]; then
-        log "INFO" "No additional packages configured"
-        return 0
+    # Combine core + additional packages
+    local all_user_packages="$core_packages"
+    if [ -n "$additional_packages" ]; then
+        all_user_packages="$all_user_packages $additional_packages"
     fi
     
-    log "DEBUG" "Packages to install: $additional_packages"
+    log "DEBUG" "Packages to install: $all_user_packages"
     
     # Install packages in chroot
     setup_chroot_mounts
@@ -2351,7 +2370,7 @@ customize_additional_packages() {
     chroot "${SQUASHFS_DIR}" apt-get update 2>&1 | tail -5 | tee -a "$LOG_FILE"
     
     # Install packages from standard repos (Edge not available in old-releases)
-    local all_packages="${additional_packages}"
+    local all_packages="${all_user_packages}"
     log "INFO" "Installing packages: $all_packages"
     # Use -y to auto-confirm, -qq for less output
     # Note: DO NOT quote $all_packages - we need word splitting for separate package names
