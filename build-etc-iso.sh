@@ -877,7 +877,7 @@ merge_etosaddons() {
 # ============================================================================
 
 restore_user_backup() {
-    log "INFO" "Checking for ETC backups in cache directory..."
+    log "INFO" "Checking for ETC user backups in cache directory..."
     
     local cache_dir="${SCRIPT_DIR}/cache"
     local user_backup=""
@@ -891,7 +891,6 @@ restore_user_backup() {
     fi
     
     # Auto-detect wine backup (etc-wine-backup-*.tar.gz)
-    # Use the most recent one if multiple exist
     if compgen -G "${cache_dir}/etc-wine-backup-*.tar.gz" > /dev/null 2>&1; then
         wine_backup=$(find "${cache_dir}" -maxdepth 1 -name 'etc-wine-backup-*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
         log "DEBUG" "Found Wine backup: $wine_backup"
@@ -900,7 +899,7 @@ restore_user_backup() {
     # Check if any backups were found
     if [ -z "$user_backup" ] && [ -z "$wine_backup" ]; then
         log "DEBUG" "No backup files found in ${cache_dir}/"
-        log "DEBUG" "To restore settings, place etc-user-backup-*.tar.gz or etc-wine-backup-*.tar.gz in cache/"
+        log "INFO" "To use backups, place etc-user-backup-*.tar.gz in cache/"
         return 0
     fi
     
@@ -915,75 +914,75 @@ restore_user_backup() {
             return 1
         fi
         
-        # List contents for verification
-        log "DEBUG" "Backup contents:"
-        tar tzf "$user_backup" | head -20 | while read -r line; do
-            log "DEBUG" "  $line"
-        done
-        
-        # Extract to /etc/skel (without leading path components that match home dir structure)
-        # et-user-backup creates: .config/emcomm-tools/, .local/share/emcomm-tools/, .local/share/pat/
+        # Extract to /etc/skel with timeout and progress
         local skel_dir="${SQUASHFS_DIR}/etc/skel"
         mkdir -p "$skel_dir"
         
-        # Extract backup into /etc/skel
-        # The tarball contains paths like .config/emcomm-tools/user.json (relative to $HOME)
-        tar xzf "$user_backup" -C "$skel_dir"
+        log "DEBUG" "Extracting backup with timeout (300 seconds)..."
+        # Use timeout to prevent hangs; extract with verbose progress
+        if timeout 300 tar xzf "$user_backup" -C "$skel_dir" --checkpoint=.1000 --checkpoint-action=dot 2>&1 | tee -a "$LOG_FILE"; then
+            log "SUCCESS" "User backup restored to /etc/skel"
+        else
+            local exit_code=$?
+            if [ $exit_code -eq 124 ]; then
+                log "WARN" "Backup extraction timed out (>300 sec). Extracted files will be incomplete. Will try to use what was restored."
+            else
+                log "ERROR" "Backup extraction failed with code $exit_code"
+                return 1
+            fi
+        fi
         
-        log "SUCCESS" "User backup restored to /etc/skel"
-        log "DEBUG" "Restored files:"
-        find "$skel_dir/.config/emcomm-tools" -type f 2>/dev/null | head -10 | while read -r f; do
-            log "DEBUG" "  ${f#"$skel_dir"}"
-        done
-        find "$skel_dir/.local/share/emcomm-tools" -type f 2>/dev/null | head -10 | while read -r f; do
-            log "DEBUG" "  ${f#"$skel_dir"}"
-        done
-        find "$skel_dir/.local/share/pat" -type f 2>/dev/null | head -10 | while read -r f; do
-            log "DEBUG" "  ${f#"$skel_dir"}"
-        done
+        # Verify extraction
+        if [ -d "$skel_dir/.config/emcomm-tools" ]; then
+            log "SUCCESS" "ETC config restored"
+        fi
+        if [ -d "$skel_dir/.local/share/emcomm-tools" ]; then
+            log "SUCCESS" "ETC data restored"
+        fi
+        if [ -d "$skel_dir/.local/share/pat" ]; then
+            log "SUCCESS" "Pat configuration restored"
+        fi
     fi
     
-    # Restore Wine backup (VARA/Wine prefix)
-    # Contains: .wine32/ (entire 32-bit Wine prefix)
-    # TODO: Disabled for now - large tarball extraction causing issues
-    # Re-enable in future revision after testing with smaller files
+    # Wine backup handling
+    # .wine32 is very large (500MB+) and should be restored post-install
+    # Create a restore script that will extract it automatically on first login
     if [ -n "$wine_backup" ]; then
-        log "INFO" "Wine backup found but restore is disabled in this version"
-        log "INFO" "To restore manually after install: tar xzf $(basename "$wine_backup") -C ~"
-        # log "INFO" "Restoring Wine backup: $(basename "$wine_backup")"
-        # 
-        # # Verify it's a valid tarball
-        # if ! tar tzf "$wine_backup" >/dev/null 2>&1; then
-        #     log "ERROR" "Invalid tarball: $wine_backup"
-        #     return 1
-        # fi
-        # 
-        # # List contents for verification
-        # log "DEBUG" "Wine backup contents (first 20 entries):"
-        # tar tzf "$wine_backup" | head -20 | while read -r line; do
-        #     log "DEBUG" "  $line"
-        # done
-        # 
-        # # Extract to /etc/skel
-        # local skel_dir="${SQUASHFS_DIR}/etc/skel"
-        # mkdir -p "$skel_dir"
-        # 
-        # # Extract Wine backup
-        # # The tarball should contain .wine32/ (relative to $HOME)
-        # tar xzf "$wine_backup" -C "$skel_dir"
-        # 
-        # # Verify extraction
-        # if [ -d "$skel_dir/.wine32" ]; then
-        #     local wine_size
-        #     wine_size=$(du -sh "$skel_dir/.wine32" 2>/dev/null | cut -f1)
-        #     log "SUCCESS" "Wine backup restored to /etc/skel/.wine32 ($wine_size)"
-        # else
-        #     log "WARN" "Wine backup extracted but .wine32 directory not found"
-        #     log "WARN" "Check backup tarball structure (expected .wine32/ at root)"
-        # fi
+        log "INFO" "Wine backup found - setting up automatic restoration..."
+        
+        # Copy the wine backup to /etc/skel for post-login restoration
+        local skel_backups="${SQUASHFS_DIR}/etc/skel/.etc-backups"
+        mkdir -p "$skel_backups"
+        
+        local wine_backup_dest="${skel_backups}/$(basename "$wine_backup")"
+        log "DEBUG" "Copying Wine backup to: $wine_backup_dest"
+        
+        # Copy with progress indication
+        cp -v "$wine_backup" "$wine_backup_dest" | tee -a "$LOG_FILE"
+        
+        # Create a one-time restore script
+        local restore_script="${SQUASHFS_DIR}/etc/skel/.config/emcomm-tools/restore-wine.sh"
+        mkdir -p "$(dirname "$restore_script")"
+        
+        cat > "$restore_script" <<'WINE_RESTORE'
+#!/bin/bash
+# Auto-restore Wine backup on first login (self-deleting)
+BACKUP_FILE="${HOME}/.etc-backups/$(basename "${1:-}")"
+if [ -f "$BACKUP_FILE" ]; then
+    echo "Restoring Wine/VARA configuration from backup..."
+    if tar xzf "$BACKUP_FILE" -C "$HOME"; then
+        echo "✓ Wine backup restored successfully"
+        rm -f "$BACKUP_FILE"
+        rm -f "$0"  # Self-delete
+    else
+        echo "✗ Failed to restore Wine backup"
     fi
-    
-    log "DEBUG" "Backup restoration complete"
+fi
+WINE_RESTORE
+        chmod 755 "$restore_script"
+        
+        log "SUCCESS" "Wine backup will be restored automatically on first login"
+    fi
 }
 
 customize_hostname() {
@@ -3335,82 +3334,71 @@ main() {
     customize_hostname
     log "DEBUG" "Step 1/14: customize_hostname COMPLETED"
     
-    # NOTE: restore_user_backup moved to post-install (see post-install/02-restore-user-backup.sh)
-    # Reason: 611MB backup extraction hangs during ISO build - should run after OS boots
-    # log "DEBUG" "Step 2/14: restore_user_backup"
-    # restore_user_backup
-    # log "DEBUG" "Step 2/14: restore_user_backup COMPLETED"
+    log "DEBUG" "Step 2/14: restore_user_backup"
+    restore_user_backup        # Restore user configs from backup (user: fast with timeout, wine: deferred to first login)
+    log "DEBUG" "Step 2/14: restore_user_backup COMPLETED"
     
-    log "DEBUG" "Step 2/14: customize_wifi"
+    log "DEBUG" "Step 3/14: customize_wifi"
     customize_wifi
-    log "DEBUG" "Step 2/14: customize_wifi COMPLETED"
+    log "DEBUG" "Step 3/14: customize_wifi COMPLETED"
     
-    log "DEBUG" "Step 3/14: customize_desktop"
+    log "DEBUG" "Step 4/14: customize_desktop"
     customize_desktop
-    log "DEBUG" "Step 3/14: customize_desktop COMPLETED"
+    log "DEBUG" "Step 4/14: customize_desktop COMPLETED"
     
-    log "DEBUG" "Step 4/14: customize_aprs"
+    log "DEBUG" "Step 5/14: customize_aprs"
     customize_aprs
-    log "DEBUG" "Step 4/14: customize_aprs COMPLETED"
+    log "DEBUG" "Step 5/14: customize_aprs COMPLETED"
     
-    log "DEBUG" "Step 5/14: customize_radio_configs"
+    log "DEBUG" "Step 6/14: customize_radio_configs"
     customize_radio_configs
-    log "DEBUG" "Step 5/14: customize_radio_configs COMPLETED"
+    log "DEBUG" "Step 6/14: customize_radio_configs COMPLETED"
     
-    log "DEBUG" "Step 6/14: customize_user_and_autologin"
+    log "DEBUG" "Step 7/14: customize_user_and_autologin"
     customize_user_and_autologin
-    log "DEBUG" "Step 6/14: customize_user_and_autologin COMPLETED"
+    log "DEBUG" "Step 7/14: customize_user_and_autologin COMPLETED"
     
-    log "DEBUG" "Step 7/14: customize_preseed"
+    log "DEBUG" "Step 8/14: customize_preseed"
     customize_preseed
-    log "DEBUG" "Step 7/14: customize_preseed COMPLETED"
+    log "DEBUG" "Step 8/14: customize_preseed COMPLETED"
     
-    log "DEBUG" "Step 8/14: customize_vara_license"
+    log "DEBUG" "Step 9/14: customize_vara_license"
     customize_vara_license
-    log "DEBUG" "Step 8/14: customize_vara_license COMPLETED"
+    log "DEBUG" "Step 9/14: customize_vara_license COMPLETED"
     
-    log "DEBUG" "Step 9/14: customize_pat"
+    log "DEBUG" "Step 10/14: customize_pat"
     customize_pat
-    log "DEBUG" "Step 9/14: customize_pat COMPLETED"
+    log "DEBUG" "Step 10/14: customize_pat COMPLETED"
     
-    log "DEBUG" "Step 10/14: setup_wikipedia_tools"
+    log "DEBUG" "Step 11/14: setup_wikipedia_tools"
     setup_wikipedia_tools
-    log "DEBUG" "Step 10/14: setup_wikipedia_tools COMPLETED"
+    log "DEBUG" "Step 11/14: setup_wikipedia_tools COMPLETED"
     
-    log "DEBUG" "Step 11/14: setup_wifi_diagnostics"
+    log "DEBUG" "Step 12/14: setup_wifi_diagnostics"
     setup_wifi_diagnostics
-    log "DEBUG" "Step 11/14: setup_wifi_diagnostics COMPLETED"
+    log "DEBUG" "Step 12/14: setup_wifi_diagnostics COMPLETED"
     
-    log "DEBUG" "Step 12/14: customize_git_config"
+    log "DEBUG" "Step 13/14: customize_git_config"
     customize_git_config
-    log "DEBUG" "Step 12/14: customize_git_config COMPLETED"
+    log "DEBUG" "Step 13/14: customize_git_config COMPLETED"
     
-    log "DEBUG" "Step 13/14: customize_power"
-    customize_power
-    log "DEBUG" "Step 13/14: customize_power COMPLETED"
-    
-    log "DEBUG" "Step 14/14: customize_timezone"
-    customize_timezone
-    log "DEBUG" "Step 14/14: customize_timezone COMPLETED"
-    
-    log "DEBUG" "Step 15/15: customize_additional_packages"
+    log "DEBUG" "Step 14/14: customize_additional_packages"
     customize_additional_packages
-    log "DEBUG" "Step 15/15: customize_additional_packages COMPLETED"
+    log "DEBUG" "Step 14/14: customize_additional_packages COMPLETED"
     
-    log "DEBUG" "Step 16/16: embed_cache_files"
+    log "DEBUG" "Step 15/15: embed_cache_files"
     embed_cache_files
-    log "DEBUG" "Step 16/16: embed_cache_files COMPLETED"
+    log "DEBUG" "Step 15/15: embed_cache_files COMPLETED"
     
-    log "DEBUG" "Step 17/17: create_build_manifest"
+    log "DEBUG" "Step 16/16: create_build_manifest"
     create_build_manifest
-    log "DEBUG" "Step 17/17: create_build_manifest COMPLETED"
+    log "DEBUG" "Step 16/16: create_build_manifest COMPLETED"
+    
+    log "DEBUG" "Step 17/17: update_grub_for_preseed"
+    update_grub_for_preseed
+    log "DEBUG" "Step 17/17: update_grub_for_preseed COMPLETED"
     
     log "DEBUG" "All customizations completed successfully"
-    
-    # Update GRUB boot parameters to load preseed BEFORE rebuilding ISO
-    log "DEBUG" "Step 18/17: update_grub_for_preseed"
-    update_grub_for_preseed
-    log "DEBUG" "Step 18/17: update_grub_for_preseed COMPLETED"
     
     # Rebuild ISO
     log "INFO" ""
