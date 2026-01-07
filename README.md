@@ -20,7 +20,9 @@ ETC already includes all ham radio tools (Winlink, VARA, JS8Call, fldigi, etc.).
 - ✅ System timezone configuration
 - ✅ Additional development packages (VS Code, Node.js, npm, git)
 - ✅ VARA FM/HF license `.reg` files + import script (run post-install after VARA installation)
-- ✅ APRS configuration (iGate, beaconing with symbol/comment)
+- ✅ **Automatic user config restoration** (from `etc-user-backup-*.tar.gz` if present)
+- ✅ **APRS configuration** (iGate, beacon, digipeater with smart beaconing)
+- ✅ **Ham radio CAT control** (Anytone D578UV with DigiRig Mobile, rigctld auto-start)
 - ✅ Git configuration
 - ✅ Embedded cache files for faster rebuilds (use `-m` for minimal)
 
@@ -39,6 +41,21 @@ This customizer **respects upstream ETC architecture**. We:
 
 - **Build process**: Fully automated ETC ISO customization via xorriso/squashfs
 - **WiFi configuration**: Networks are pre-configured in NetworkManager
+- **User config restoration**: Automatic backup extraction (etc-user-backup-*.tar.gz)
+  - User settings restored during ISO build
+  - Wine prefix auto-restored on first login post-install
+  - 300-second timeout prevents build hangs
+  - Progress tracking for large backups
+- **APRS configuration**: Full direwolf template customization
+  - iGate mode (internet gateway) with APRS-IS login
+  - Smart beaconing with configurable interval
+  - Digipeater WIDE path support
+  - Separate from Packet/Winlink (no conflicts)
+- **Ham radio CAT control**: Anytone D578UV with DigiRig Mobile
+  - Rigctld daemon auto-starts at boot (localhost:4532)
+  - Active radio config automatically created
+  - udev rules for /dev/et-cat symlink (CP2102/CH340/PL2303/FTDI)
+  - Users can select different radio via `et-radio` after boot
 - **D578 CAT Control**: DigiRig Mobile configuration for CAT control (et-mode packet/Winlink compatible)
 - **User config**: `~/.config/emcomm-tools/user.json` pre-populated with callsign, grid, Winlink password
 - **Desktop settings**: Dark mode, scaling, accessibility, display, power management, timezone all applied
@@ -541,44 +558,56 @@ pat connect emcomm    # Quick connect to your configured gateway
 
 After first boot, run `~/.config/pat/add-emcomm-alias.sh` to add the alias to your Pat config.
 
-### Post-Install User Configuration Restoration
+### Automatic Backup Restoration
 
-**AUTOMATED DURING BUILD** ✅
+**FULLY AUTOMATED DURING BUILD** ✅
 
-If you place backup files in the `cache/` directory before building, they are **automatically** restored during ISO customization:
+If you place backup files in the `cache/` directory before building, they are **automatically** restored during ISO customization with proper timeout handling:
 
-- `cache/etc-user-backup-*.tar.gz` → User configs extracted to ISO (`~/.config/emcomm-tools`, `~/.local/share`, documents, etc.)
-- `cache/etc-wine-backup-*.tar.gz` → Wine prefix restored automatically on **first login** (avoids hanging during build)
+- `cache/etc-user-backup-*.tar.gz` → User configs extracted to ISO immediately (~30-60 seconds)
+  - Includes: `~/.config/emcomm-tools`, `~/.local/share`, documents, desktop settings
+  - Extracted directly into `/etc/skel` during build (applied to new users)
+  
+- `cache/etc-wine-backup-*.tar.gz` → Wine prefix auto-restored on **first login** (deferred from build)
+  - VARA registry and prefix data available immediately after first login
+  - Deferred to avoid hanging during ISO build (Wine prefix extraction is slow)
 
-**How it works:**
+**Automation Details:**
 
-1. Place backups in cache/:
+- **User backup**: Uses `timeout 300 tar xzf ... --checkpoint=.1000 --checkpoint-action=dot`
+  - 300-second timeout prevents hangs on large backups (611MB+)
+  - Progress tracking shows extraction status (every 1000 files = one dot)
+  - Extracted during build (fast, doesn't block other customizations)
+
+- **Wine backup**: Copied to `~/.etc-backups/` during build
+  - `~/.etc-backups/00-restore-wine-backup.sh` auto-runs on first login
+  - Restores Wine prefix to `~/.wine32` from backup tarball
+  - Runs asynchronously (doesn't block desktop startup)
+
+**How to Use:**
+
+1. Create backups from existing ETC installation:
 
 ```bash
-cp ~/backups/etc-user-backup-ETC-KD7DGF-20251015.tar.gz cache/
-cp ~/backups/etc-wine-backup-ETC-KD7DGF-20251015.tar.gz cache/
+# On existing ETC system:
+et-user-backup                    # Creates cache/etc-user-backup-*.tar.gz
+
+# If you also want Wine/VARA settings:
+et-user-backup --wine            # Includes .wine32 (creates ~600MB backup)
+
+# Copy to your build machine's cache/
+scp user@etc-machine:cache/etc-*-backup*.tar.gz ./cache/
 ```
 
 2. Run build - backups are extracted automatically:
 
 ```bash
 ./build-etc-iso.sh -r stable
+# User backup: extracts during build (watch for progress dots)
+# Wine backup: copied to ~/.etc-backups/, restores on first login
 ```
 
-3. Boot the ISO - user configs auto-applied, Wine prefix restores on first login
-
-**Backup File Locations:**
-
-If you have an existing ETC installation and want to create backups:
-
-```bash
-# On existing ETC system:
-et-user-backup                           # Creates cache/etc-user-backup-*.tar.gz
-et-user-backup --wine                   # Also includes .wine32 (large file)
-
-# Copy to your build machine's cache/
-scp user@etc-machine:cache/etc-*-backup*.tar.gz ./cache/
-```
+3. Boot the ISO - all user settings + Wine/VARA auto-restored
 
 **What Gets Restored:**
 
@@ -621,6 +650,100 @@ tar xzf ~/etc-wine-backup-*.tar.gz -C ~/   # Wine prefix
 ```
 
 
+
+
+
+
+### APRS Configuration (Automatic)
+
+**AUTOMATIC DIREWOLF TEMPLATE MODIFICATION** ✅
+
+APRS configuration is automatically applied during ISO build by modifying ETC's direwolf template. This is **completely separate** from Packet/Winlink mode (no conflicts).
+
+**Features:**
+- **iGate Mode** - Upload position/weather to APRS-IS internet server (requires login)
+- **Smart Beaconing** - Automatic position updates based on movement/time
+- **Digipeater Support** - WIDE path relaying for packet radio network
+- **ETC Template System** - Respects ETC's `{{ET_*}}` runtime placeholders
+
+**Configuration Variables:**
+
+```bash
+# === APRS Configuration ===
+APRS_SSID="10"                       # Station SSID (10=iGate, 11-15 for specific roles)
+APRS_PASSCODE=""                    # APRS-IS passcode (-1 for RX only)
+APRS_SYMBOL="r/"                    # Two-character symbol: r/=portable, a/=digipeater, etc.
+APRS_COMMENT="EmComm Tools - ETC"   # Station comment/info string
+
+ENABLE_APRS_IGATE="yes"              # yes/no - enable APRS-IS internet gateway
+ENABLE_APRS_BEACON="yes"             # yes/no - enable position beaconing
+
+APRS_SERVER="noam.aprs2.net"        # APRS-IS server (noam=N.America, euro=Europe, etc.)
+APRS_BEACON_INTERVAL="30"           # Beacon interval in minutes (smart beaconing)
+APRS_BEACON_DISTANCE="1"            # Distance in miles before beacon (movement trigger)
+
+DIREWOLF_ADEVICE="plughw:1,0"       # Audio device for direwolf
+DIREWOLF_PTT="CM108"                # PTT method: CM108 (USB audio) or GPIO
+```
+
+**How It Works:**
+
+During ISO build, the script:
+
+1. **Modifies direwolf template** at `/opt/emcomm-tools/conf/template.d/packet/direwolf.aprs-digipeater.conf`
+2. **Populates user.json** with callsign, grid square, Winlink password
+3. **Adds IGSERVER/IGLOGIN** settings when `ENABLE_APRS_IGATE=yes`
+4. **Adds PBEACON/SMARTBEACONING** when `ENABLE_APRS_BEACON=yes`
+5. **Adds DIGIPEAT configuration** for WIDE path support
+
+**Template Preservation:**
+
+All template modifications preserve ETC's `{{ET_*}}` placeholders. This means:
+- Users can still override settings at runtime via `et-mode`
+- Selecting different mode (e.g., switching to Packet) doesn't break configuration
+- Updates to ETC templates don't conflict with our customizations
+
+**Symbol Codes:**
+
+Common APRS symbols (first character / second character):
+
+```
+Primary/Overlay:
+a/ = APRS/Beacon, b/ = Buoy, c/ = Cloud, d/ = Digipeater
+e/ = Eyeball, f/ = Fire, g/ = Glider, h/ = Hospital
+i/ = Interstate, j/ = Jeep, k/ = Kenwood, l/ = Lighthouse
+m/ = Mobile, n/ = Node, o/ = OVEN, p/ = Police
+q/ = Query, r/ = RV, s/ = Shuttle, t/ = Truck
+u/ = User, v/ = Van, w/ = Water, x/ = X-APRS
+y/ = Yagi, z/ = Zero
+
+r/ = Portable = most common for field stations
+a/ = Digipeater = recommended for relay stations
+```
+
+**Server Choices:**
+
+```
+noam.aprs2.net   = North America (default)
+euro.aprs2.net   = Europe
+asia.aprs2.net   = Asia
+aunz.aprs2.net   = Australia/New Zealand
+```
+
+**Post-Install Testing:**
+
+After building and booting:
+
+```bash
+# Start direwolf in APRS mode
+et-mode aprs
+
+# Watch direwolf logs
+tail -f ~/.etc-cache/direwolf.log
+
+# Verify APRS-IS gateway connection (watch for "Connected to")
+journalctl -u direwolf -f
+```
 
 ### Power Management Options
 
