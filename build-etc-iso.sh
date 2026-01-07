@@ -80,17 +80,18 @@ log() {
     sync  # Flush to disk so we don't lose log entries on crash
     
     # Log to console with color (DEBUG only shown if DEBUG_MODE=1)
+    # Redirect to stderr so it doesn't pollute stdout for pipe operations
     case "$level" in
-        ERROR)   echo -e "${RED}[$level]${NC} $message" ;;
-        WARN)    echo -e "${YELLOW}[$level]${NC} $message" ;;
-        SUCCESS) echo -e "${GREEN}[$level]${NC} $message" ;;
-        INFO)    echo -e "${BLUE}[$level]${NC} $message" ;;
+        ERROR)   echo -e "${RED}[$level]${NC} $message" >&2 ;;
+        WARN)    echo -e "${YELLOW}[$level]${NC} $message" >&2 ;;
+        SUCCESS) echo -e "${GREEN}[$level]${NC} $message" >&2 ;;
+        INFO)    echo -e "${BLUE}[$level]${NC} $message" >&2 ;;
         DEBUG)   
             if [ $DEBUG_MODE -eq 1 ]; then
-                echo -e "${CYAN}[$level]${NC} $message"
+                echo -e "${CYAN}[$level]${NC} $message" >&2
             fi
             ;;
-        *)       echo "[$level] $message" ;;
+        *)       echo "[$level] $message" >&2 ;;
     esac
 }
 
@@ -1636,18 +1637,18 @@ EOF
 detect_partition_strategy() {
     # Analyze current disk layout and determine optimal partition strategy
     # Returns: partition_strategy, target_disk, ext4_size, swap_size
-    # NOTE: All logging redirected to stderr to keep stdout clean for pipe-delimited output
+    # NOTE: log function redirects console output to stderr, keeping stdout clean for pipe-delimited output
     
     # Strategy values: auto-detect, use-entire-disk, use-partition, use-free-space
     local target_device="${1:-}"
     local force_strategy="${2:-}"  # Optional: force-entire-disk, force-partition, force-free-space
     
-    log "INFO" "Analyzing partition strategy..." >&2
+    log "INFO" "Analyzing partition strategy..."
     
     # If user explicitly configured INSTALL_DISK and it's a specific partition, use it as-is
     if [[ -n "$target_device" && "$target_device" =~ [0-9]$ ]]; then
         # Partition mode: target is a specific partition like /dev/sda5
-        log "INFO" "Target is specific partition: $target_device (partition mode)" >&2
+        log "INFO" "Target is specific partition: $target_device (partition mode)"
         
         # Check if partition exists and get its size
         if [ -b "$target_device" ] 2>/dev/null; then
@@ -1655,18 +1656,18 @@ detect_partition_strategy() {
             part_size_sectors=$(blockdev --getsz "$target_device" 2>/dev/null || echo "0")
             local part_size_gb=$((part_size_sectors / 2097152))  # Convert 512-byte sectors to GB
             
-            log "INFO" "Partition size: ~${part_size_gb}GB" >&2
+            log "INFO" "Partition size: ~${part_size_gb}GB"
             echo "use-partition|$target_device|${part_size_gb}GB|calculated"
             return 0
         else
-            log "WARN" "Target partition $target_device does not exist - will auto-detect" >&2
+            log "WARN" "Target partition $target_device does not exist - will auto-detect"
         fi
     fi
     
     # If we reach here, either no specific partition was set, or it doesn't exist
     # Try to detect current disk layout for analysis
     
-    log "INFO" "Running partition auto-detection..." >&2
+    log "INFO" "Running partition auto-detection..."
     
     # Count partitions on potential target disk
     local target_disk
@@ -1679,12 +1680,12 @@ detect_partition_strategy() {
     fi
     
     if [ -z "$target_disk" ] || [ ! -b "$target_disk" ]; then
-        log "WARN" "Could not determine target disk - defaulting to partition mode" >&2
+        log "WARN" "Could not determine target disk - defaulting to partition mode"
         echo "unknown|unknown|unknown|unknown"
         return 1
     fi
     
-    log "DEBUG" "Target disk for analysis: $target_disk" >&2
+    log "DEBUG" "Target disk for analysis: $target_disk"
     
     # Analyze partition table
     local partition_count
@@ -1698,12 +1699,12 @@ detect_partition_strategy() {
     # Check for Windows/Linux partitions
     if parted -l "$target_disk" 2>/dev/null | grep -qi "ntfs\|fat32\|microsoft"; then
         has_windows=1
-        log "INFO" "Detected Windows partition on $target_disk" >&2
+        log "INFO" "Detected Windows partition on $target_disk"
     fi
     
     if parted -l "$target_disk" 2>/dev/null | grep -qi "ext4\|ext3\|btrfs"; then
         has_linux=1
-        log "INFO" "Detected Linux partition on $target_disk" >&2
+        log "INFO" "Detected Linux partition on $target_disk"
     fi
     
     # Get disk size
@@ -1711,28 +1712,28 @@ detect_partition_strategy() {
         local disk_size_sectors
         disk_size_sectors=$(blockdev --getsz "$target_disk" 2>/dev/null || echo "0")
         total_disk_gb=$((disk_size_sectors / 2097152))  # Convert to GB
-        log "DEBUG" "Total disk size: ~${total_disk_gb}GB" >&2
+        log "DEBUG" "Total disk size: ~${total_disk_gb}GB"
     fi
     
     # Decision logic
     if [ $partition_count -eq 0 ]; then
-        log "INFO" "No partitions found - entire disk available" >&2
+        log "INFO" "No partitions found - entire disk available"
         echo "entire-disk|$target_disk|auto|auto"
     elif [ $has_windows -eq 1 ] && [ $has_linux -eq 0 ]; then
-        log "INFO" "Windows partition(s) detected, no Linux partitions" >&2
+        log "INFO" "Windows partition(s) detected, no Linux partitions"
         # Check for free space (simplified: assume we can use parted free space)
         if parted -l "$target_disk" 2>/dev/null | grep -q "Free Space"; then
-            log "INFO" "Free space available after Windows partition" >&2
+            log "INFO" "Free space available after Windows partition"
             echo "free-space|$target_disk|auto|auto"
         else
-            log "INFO" "No free space - will need to repartition entire disk" >&2
+            log "INFO" "No free space - will need to repartition entire disk"
             echo "entire-disk|$target_disk|auto|auto"
         fi
     elif [ $has_linux -eq 1 ] || [ $partition_count -le 2 ]; then
-        log "INFO" "Linux partition(s) or simple partition table detected" >&2
+        log "INFO" "Linux partition(s) or simple partition table detected"
         echo "partition|$target_disk|auto|auto"
     else
-        log "INFO" "Complex partition table detected - defaulting to safe partition mode" >&2
+        log "INFO" "Complex partition table detected - defaulting to safe partition mode"
         echo "partition|$target_disk|auto|auto"
     fi
 }
@@ -1799,16 +1800,8 @@ customize_preseed() {
     
     if [[ "$partition_strategy" == "auto-detect" ]]; then
         log "INFO" "Running auto-detect partition strategy..."
-        strategy_result=$(detect_partition_strategy "$install_disk" 2>&1 || echo "unknown|unknown|unknown|unknown")
+        strategy_result=$(detect_partition_strategy "$install_disk" 2>/dev/null || echo "unknown|unknown|unknown|unknown")
         IFS='|' read -r strategy_mode target_disk target_size target_calc <<< "$strategy_result"
-        
-        # Validate result is not corrupted or failed
-        if [[ "$strategy_mode" == "unknown" ]] || [[ -z "$strategy_mode" ]]; then
-            log "ERROR" "Partition strategy detection failed or returned invalid result"
-            log "ERROR" "Raw result: $strategy_result"
-            return 1
-        fi
-        
         log "INFO" "Auto-detect result: mode=$strategy_mode, disk=$target_disk, size=$target_size"
         
         # Calculate swap size based on detected partition size if in auto mode
