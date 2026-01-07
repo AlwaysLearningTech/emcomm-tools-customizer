@@ -547,50 +547,84 @@ After first boot, run `~/.config/pat/add-emcomm-alias.sh` to add the alias to yo
 
 ### Post-Install User Configuration Restoration
 
-If you have a backup from a previous ETC installation, you can restore your configurations (callsign, WiFi passwords, APRS settings, maps, etc.) after the new system boots.
+**AUTOMATED DURING BUILD** ✅
 
-**When to restore:**
-- You're rebuilding ETC on the same hardware and want to preserve your previous settings
-- You have a backup tarball from a previous installation: `etc-user-backup-*.tar.gz`
+If you place backup files in the `cache/` directory before building, they are **automatically** restored during ISO customization:
 
-**How to restore:**
+- `cache/etc-user-backup-*.tar.gz` → User configs extracted to ISO (`~/.config/emcomm-tools`, `~/.local/share`, documents, etc.)
+- `cache/etc-wine-backup-*.tar.gz` → Wine prefix restored automatically on **first login** (avoids hanging during build)
 
-After the OS boots and you're logged in, run:
+**How it works:**
+
+1. Place backups in cache/:
 
 ```bash
-# Copy backup to home directory if not already there
-cp /path/to/etc-user-backup-*.tar.gz ~
-
-# Optional: List what will be restored
-tar tzf ~/etc-user-backup-*.tar.gz | head -20
-
-# Restore user configuration (interactive)
-~/add-ons/post-install/02-restore-user-backup.sh
-
-# Restore with Wine/VARA prefix (larger, use if you backed up VARA)
-~/add-ons/post-install/02-restore-user-backup.sh --wine
+cp ~/backups/etc-user-backup-ETC-KD7DGF-20251015.tar.gz cache/
+cp ~/backups/etc-wine-backup-ETC-KD7DGF-20251015.tar.gz cache/
 ```
 
-**What gets restored:**
+2. Run build - backups are extracted automatically:
+
+```bash
+./build-etc-iso.sh -r stable
+```
+
+3. Boot the ISO - user configs auto-applied, Wine prefix restores on first login
+
+**Backup File Locations:**
+
+If you have an existing ETC installation and want to create backups:
+
+```bash
+# On existing ETC system:
+et-user-backup                           # Creates cache/etc-user-backup-*.tar.gz
+et-user-backup --wine                   # Also includes .wine32 (large file)
+
+# Copy to your build machine's cache/
+scp user@etc-machine:cache/etc-*-backup*.tar.gz ./cache/
+```
+
+**What Gets Restored:**
+
+From user backup:
 
 - `~/.config/emcomm-tools/` - ETC configuration (callsign, grid, user.json)
 - `~/.local/share/emcomm-tools/` - Maps, tilesets, application data
 - `~/.local/share/pat/` - Winlink Pat settings (mailbox passwords, aliases)
-- `~/.wine32/` - Wine prefix (optional, only if --wine flag used)
+- `~/.local/share/WSJT-X/` - WSJT-X settings and logs
+- `~/Documents/` - Your documents folder
+- `~/.navit/` - Navigation bookmarks and maps
+- `~/my-maps/` - Custom map data
+- `~/YAAC/` - YAAC configuration
 
-**Options:**
+From Wine backup (optional):
+
+- `~/.wine32/` - Entire Wine 32-bit prefix (VARA HF/FM with installed licenses)
+
+**Technical Details:**
+
+- User backup extraction: Uses tar with `--checkpoint` for progress tracking
+- Timeout: 300 seconds (5 minutes) - if extraction takes longer, partial restore is used
+- Wine backup: Large file (500MB+) is NOT extracted during ISO build; instead it's copied to `~/.etc-backups/` and restored automatically on first user login
+- No blocking: Wine extraction deferred to first login avoids "hanging" during ISO build
+
+**Alternative: Manual Restoration (if backups not in cache/)**
+
+If you didn't place backups in the cache/ directory before building, you can restore manually after the OS boots:
 
 ```bash
-./02-restore-user-backup.sh --help        # Show help
+# Copy backup to home directory
+cp /path/to/etc-user-backup-*.tar.gz ~
 
-./02-restore-user-backup.sh               # Restore user config only
-./02-restore-user-backup.sh -d ~/backups  # From specific directory
-./02-restore-user-backup.sh --wine        # Also restore Wine/VARA prefix
-./02-restore-user-backup.sh --verbose     # Show detailed output
-./02-restore-user-backup.sh --force       # Overwrite existing files
+# Restore user configuration only
+tar xzf ~/etc-user-backup-*.tar.gz -C ~/
+
+# Or restore with Wine prefix
+tar xzf ~/etc-user-backup-*.tar.gz -C ~/   # user config
+tar xzf ~/etc-wine-backup-*.tar.gz -C ~/   # Wine prefix
 ```
 
-**Note:** User backups (611MB+) are **not** embedded in the ISO to avoid hanging the build process. They're restored post-install instead.
+
 
 ### Power Management Options
 
