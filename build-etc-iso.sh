@@ -2337,7 +2337,7 @@ customize_additional_packages() {
     log "DEBUG" "Sourced secrets file for package config"
     
     # Core development packages (always installed)
-    local core_packages="nodejs npm"
+    local core_packages="code nodejs npm"
     
     # Additional packages from secrets.env
     local additional_packages="${ADDITIONAL_PACKAGES:-}"
