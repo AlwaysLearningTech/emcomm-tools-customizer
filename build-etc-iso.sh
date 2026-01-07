@@ -1584,6 +1584,26 @@ PWEOF
         log "INFO" "No password configured - user will use ETC default or must set on first boot"
     fi
     
+    # Pre-populate ETC's user.json with secrets (callsign, grid, Winlink password)
+    # This ensures personalized config even if backup restoration is deferred
+    log "INFO" "Pre-populating ETC user configuration..."
+    local grid="${GRID_SQUARE:-DM33}"
+    local winlink_passwd="${WINLINK_PASSWORD:-NOPASS}"
+    
+    local etc_config_dir="${SQUASHFS_DIR}/etc/skel/.config/emcomm-tools"
+    mkdir -p "$etc_config_dir"
+    
+    local user_json="${etc_config_dir}/user.json"
+    cat > "$user_json" <<EOF
+{
+  "callsign": "${callsign}",
+  "grid": "${grid}",
+  "winlinkPasswd": "${winlink_passwd}"
+}
+EOF
+    chmod 644 "$user_json"
+    log "DEBUG" "Pre-populated user.json: callsign=$callsign, grid=$grid"
+    
     log "SUCCESS" "User account configuration complete"
 }
 
