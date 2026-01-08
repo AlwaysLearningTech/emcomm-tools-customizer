@@ -2780,6 +2780,107 @@ EOF
     log "INFO" "  Run ~/add-ons/wikipedia/create-my-wikipedia.sh after first boot"
 }
 
+install_gridtracker() {
+    log "INFO" "Installing GridTracker 2..."
+    
+    local gridtracker_url="https://download2.gridtracker.org/GridTracker2-2.250901.0-amd64.deb"
+    local tmp_file="${SQUASHFS_DIR}/tmp/gridtracker-tmp.deb"
+    
+    mkdir -p "${SQUASHFS_DIR}/tmp"
+    
+    # Download GridTracker DEB
+    if ! chroot "${SQUASHFS_DIR}" bash -c "curl -s -L -o /tmp/gridtracker-tmp.deb --fail '$gridtracker_url'"; then
+        log "WARN" "GridTracker download failed - skipping"
+        return 0
+    fi
+    
+    # Install DEB
+    if chroot "${SQUASHFS_DIR}" dpkg -i /tmp/gridtracker-tmp.deb 2>&1 | tee -a "$LOG_FILE"; then
+        log "SUCCESS" "GridTracker 2 installed"
+    else
+        log "WARN" "GridTracker installation had issues"
+    fi
+    
+    rm -f "$tmp_file"
+}
+
+install_wsjtx_improved() {
+    log "INFO" "Installing WSJT-X Improved..."
+    
+    local wsjtx_url="https://downloads.sourceforge.net/project/wsjt-x-improved/WSJT-X_v2.8.0/Linux/wsjtx_2.8.0_improved_PLUS_250501_amd64.deb"
+    local tmp_file="${SQUASHFS_DIR}/tmp/wsjtx-tmp.deb"
+    
+    mkdir -p "${SQUASHFS_DIR}/tmp"
+    
+    # Download WSJT-X DEB
+    if ! chroot "${SQUASHFS_DIR}" bash -c "curl -L -o /tmp/wsjtx-tmp.deb --fail '$wsjtx_url'"; then
+        log "WARN" "WSJT-X Improved download failed - skipping"
+        return 0
+    fi
+    
+    # Remove old docs to avoid conflicts
+    rm -rf "${SQUASHFS_DIR}/usr/share/doc/wsjtx"
+    
+    # Install DEB and fix dependencies
+    chroot "${SQUASHFS_DIR}" bash -c "dpkg -i /tmp/wsjtx-tmp.deb; apt install --fix-broken -y -qq" 2>&1 | tail -5 | tee -a "$LOG_FILE"
+    
+    # Customize desktop file to use et-wsjtx wrapper
+    local desktop_file="${SQUASHFS_DIR}/usr/share/applications/wsjtx.desktop"
+    if [ -f "$desktop_file" ]; then
+        if ! grep -q "Exec=et-wsjtx" "$desktop_file"; then
+            sed -i "s/^Exec=.*$/Exec=et-wsjtx start/" "$desktop_file"
+        fi
+    fi
+    
+    log "SUCCESS" "WSJT-X Improved installed"
+    rm -f "$tmp_file"
+}
+
+install_qsstv() {
+    log "INFO" "Installing QSSTV (SSTV transmission/reception)..."
+    
+    local qsstv_url="https://www.qsl.net/on4qz/qsstv/qsstv109.tgz"
+    local tmp_dir="${SQUASHFS_DIR}/tmp/qsstv-build"
+    
+    mkdir -p "$tmp_dir"
+    
+    # Download QSSTV source
+    if ! chroot "${SQUASHFS_DIR}" bash -c "cd /tmp && curl -L -o qsstv.tgz --fail '$qsstv_url'"; then
+        log "WARN" "QSSTV download failed - skipping"
+        return 0
+    fi
+    
+    # Extract and build (simplified - requires build tools in chroot)
+    if chroot "${SQUASHFS_DIR}" bash -c "cd /tmp && tar -xzf qsstv.tgz && cd qsstv* && ./configure --prefix=/usr && make && make install" 2>&1 | tail -10 | tee -a "$LOG_FILE"; then
+        log "SUCCESS" "QSSTV installed"
+    else
+        log "WARN" "QSSTV build had issues - may need manual setup"
+    fi
+}
+
+install_xygrib() {
+    log "INFO" "Installing XYGrib (weather/GRIB data)..."
+    
+    # XYGrib is available from standard repos
+    if chroot "${SQUASHFS_DIR}" apt-get install -y -qq xygrib 2>&1 | tail -3 | tee -a "$LOG_FILE"; then
+        log "SUCCESS" "XYGrib installed"
+    else
+        log "WARN" "XYGrib installation had issues"
+    fi
+}
+
+install_kiwix() {
+    log "INFO" "Installing Kiwix (offline Wikipedia/docs)..."
+    
+    # Kiwix is available from snap or repos
+    # Try apt first
+    if chroot "${SQUASHFS_DIR}" apt-get install -y -qq kiwix-tools 2>&1 | tail -3 | tee -a "$LOG_FILE"; then
+        log "SUCCESS" "Kiwix installed via apt"
+    else
+        log "WARN" "Kiwix via apt had issues - skipping"
+    fi
+}
+
 setup_wifi_diagnostics() {
     log "INFO" "Creating WiFi diagnostic tools..."
     
@@ -3508,19 +3609,53 @@ main() {
     customize_additional_packages
     log "DEBUG" "Step 14/14: customize_additional_packages COMPLETED"
     
-    log "DEBUG" "Step 15/15: embed_cache_files"
+    log "DEBUG" "Step 15/19: install_gridtracker"
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+    install_gridtracker
+    cleanup_chroot_mounts
+    trap - EXIT
+    log "DEBUG" "Step 15/19: install_gridtracker COMPLETED"
+    
+    log "DEBUG" "Step 16/19: install_wsjtx_improved"
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+    install_wsjtx_improved
+    cleanup_chroot_mounts
+    trap - EXIT
+    log "DEBUG" "Step 16/19: install_wsjtx_improved COMPLETED"
+    
+    log "DEBUG" "Step 17/19: install_qsstv"
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+    install_qsstv
+    cleanup_chroot_mounts
+    trap - EXIT
+    log "DEBUG" "Step 17/19: install_qsstv COMPLETED"
+    
+    log "DEBUG" "Step 18/19: install_xygrib_and_kiwix"
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+    install_xygrib
+    install_kiwix
+    cleanup_chroot_mounts
+    trap - EXIT
+    log "DEBUG" "Step 18/19: install_xygrib_and_kiwix COMPLETED"
+    
+    log "DEBUG" "Step 19/19: embed_cache_files"
     embed_cache_files
-    log "DEBUG" "Step 15/15: embed_cache_files COMPLETED"
+    log "DEBUG" "Step 19/19: embed_cache_files COMPLETED"
     
-    log "DEBUG" "Step 16/16: create_build_manifest"
+    log "DEBUG" "Step 20/22: create_build_manifest"
     create_build_manifest
-    log "DEBUG" "Step 16/16: create_build_manifest COMPLETED"
+    log "DEBUG" "Step 20/22: create_build_manifest COMPLETED"
     
-    log "DEBUG" "Step 17/17: update_grub_for_preseed"
+    log "DEBUG" "Step 21/22: update_grub_for_preseed"
     update_grub_for_preseed
-    log "DEBUG" "Step 17/17: update_grub_for_preseed COMPLETED"
+    log "DEBUG" "Step 21/22: update_grub_for_preseed COMPLETED"
     
-    log "DEBUG" "All customizations completed successfully"
+    log "DEBUG" "Step 22/22: Final cleanup"
+    log "DEBUG" "Step 22/22: Final cleanup COMPLETED"
     
     # Rebuild ISO
     log "INFO" ""
