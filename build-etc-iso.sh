@@ -2035,6 +2035,14 @@ ubiquity ubiquity/keep_installed boolean true
 ubiquity ubiquity/no_language_pack_warning_en_US boolean true
 ubiquity ubiquity/accessibility boolean false
 
+# Additional ubiquity suppression to reduce prompts
+ubiquity ubiquity/show_release_notes_on_shutdown boolean false
+ubiquity ubiquity/update_initramfs boolean true
+
+# Ubiquity frontend settings (suppress graphical dialogs where possible)
+ubiquity ubiquity/only_show_installable_languages boolean true
+ubiquity ubiquity/use_nonfree boolean true
+
 # Finish installation
 d-i finish-install/reboot_in_background boolean true
 d-i cdrom-detect/eject boolean true
@@ -2183,36 +2191,32 @@ update_grub_for_preseed() {
     log "DEBUG" "Modifying GRUB config: $grub_cfg"
     
     # CRITICAL: Only modify Ubuntu installer entries, preserve dual-boot entries!
-    # Must handle menuentry blocks that span multiple lines
-    # We'll use awk to properly parse the file and identify Ubuntu installer entries
+    # IMPORTANT: Ubuntu 22.10 uses ubiquity (GNOME installer), NOT d-i (Debian installer)
+    # Ubiquity-compatible boot parameters:
+    #   - file=/cdrom/preseed/custom.preseed  (preseed file path)
+    #   - ubiquity/reboot_without_asking=true (non-interactive reboot)
+    #   - ubiquity/install_media_polling=true (auto-detect install media)
+    #   - only-ubiquity (force ubiquity, skip d-i questions)
+    #   - noaccessibility (disable a11y features)
+    # 
+    # Note: auto=true is for d-i, NOT ubiquity. Ubiquity reads the preseed file
+    # but needs ubiquity-specific kernel parameters to skip interactive prompts.
     
-    # Use awk to find Ubuntu menuentry blocks and update the linux lines within them
-    awk '
-    /^menuentry.*Install Ubuntu|^menuentry.*Try Ubuntu/ { 
-        in_ubuntu_entry = 1 
-    }
-    /^menuentry/ && !/Install Ubuntu/ && !/Try Ubuntu/ { 
-        in_ubuntu_entry = 0 
-    }
-    in_ubuntu_entry && /linux.*casper\/vmlinuz/ && !/file=\/cdrom\/preseed\/custom\.preseed/ {
-        # Replace any existing preseed file path or append preseed to the linux command
-        # Replace "file=/cdrom/preseed/ubuntu.seed" with our custom preseed
-        if ($0 ~ /file=\/cdrom\/preseed\/ubuntu\.seed/) {
-            gsub(/file=\/cdrom\/preseed\/ubuntu\.seed/, "file=/cdrom/preseed/custom.preseed auto=true priority=critical noaccessibility")
-        } else {
-            # If no preseed file is mentioned, append our preseed parameters
-            gsub(/vmlinuz/, "vmlinuz file=/cdrom/preseed/custom.preseed auto=true priority=critical noaccessibility")
-        }
-    }
-    { print }
-    ' "$grub_cfg" > "$grub_cfg.tmp" && mv "$grub_cfg.tmp" "$grub_cfg"
+    # Use sed to replace preseed file and boot parameters in linux commands
+    # Target pattern: existing preseed file reference + maybe-ubiquity
+    sed -i 's|file=/cdrom/preseed/ubuntu\.seed maybe-ubiquity|file=/cdrom/preseed/custom.preseed ubiquity/reboot_without_asking=true ubiquity/install_media_polling=true only-ubiquity noaccessibility maybe-ubiquity|g' "$grub_cfg"
     
-    log "DEBUG" "GRUB config updated with awk (Ubuntu entries only, dual-boot preserved)"
+    # Also handle cases where maybe-ubiquity is separately or no preseed is present
+    if ! grep -q "file=/cdrom/preseed/custom.preseed" "$grub_cfg"; then
+        sed -i 's|/casper/vmlinuz|/casper/vmlinuz file=/cdrom/preseed/custom.preseed ubiquity/reboot_without_asking=true ubiquity/install_media_polling=true only-ubiquity noaccessibility|g' "$grub_cfg"
+    fi
+    
+    log "DEBUG" "GRUB config updated for ubiquity preseed auto-installation"
     
     # Verify the change took effect on Ubuntu entries only
     if grep -q "file=/cdrom/preseed/custom.preseed" "$grub_cfg"; then
-        log "SUCCESS" "Boot parameters configured for automated installation with preseed"
-        log "DEBUG" "Updated Ubuntu entry:"
+        log "SUCCESS" "Boot parameters configured for automated installation with preseed (ubiquity mode)"
+        log "DEBUG" "Updated Ubuntu entry (first match):"
         grep "file=/cdrom/preseed/custom.preseed" "$grub_cfg" | head -1 | sed 's/^/  /'
     else
         log "WARN" "GRUB config update may have failed - preseed not found in config"
