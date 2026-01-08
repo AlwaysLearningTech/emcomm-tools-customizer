@@ -2195,9 +2195,12 @@ update_grub_for_preseed() {
         in_ubuntu_entry = 0 
     }
     in_ubuntu_entry && /linux.*casper\/vmlinuz/ && !/file=\/cdrom\/preseed\/custom\.preseed/ {
-        # Add preseed parameters to the linux line if not already present
-        if ($0 !~ /file=\/cdrom\/preseed/) {
-            # Find position of "vmlinuz" and insert preseed after it
+        # Replace any existing preseed file path or append preseed to the linux command
+        # Replace "file=/cdrom/preseed/ubuntu.seed" with our custom preseed
+        if ($0 ~ /file=\/cdrom\/preseed\/ubuntu\.seed/) {
+            gsub(/file=\/cdrom\/preseed\/ubuntu\.seed/, "file=/cdrom/preseed/custom.preseed auto=true priority=critical noaccessibility")
+        } else {
+            # If no preseed file is mentioned, append our preseed parameters
             gsub(/vmlinuz/, "vmlinuz file=/cdrom/preseed/custom.preseed auto=true priority=critical noaccessibility")
         }
     }
