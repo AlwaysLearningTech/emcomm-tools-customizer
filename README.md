@@ -23,6 +23,13 @@ ETC already includes all ham radio tools (Winlink, VARA, JS8Call, fldigi, etc.).
 - ✅ **Automatic user config restoration** (from `etc-user-backup-*.tar.gz` if present)
 - ✅ **APRS configuration** (iGate, beacon, digipeater with smart beaconing)
 - ✅ **Ham radio CAT control** (Anytone D578UV with DigiRig Mobile, rigctld auto-start)
+- ✅ **et-os-addons overlay** (included in every build):
+  - **GridTracker**: Real-time station tracking on ham maps
+  - **WSJT-X Improved**: Enhanced FT8 digital mode capabilities
+  - **QSSTV**: SSTV (Slow Scan TV) transmission and reception
+  - **XYGrib**: Weather/GRIB data for forecasting
+  - **Kiwix**: Offline Wikipedia and documentation
+  - **JS8Spotter & NetControl**: Additional analysis tools
 - ✅ Git configuration
 - ✅ Embedded cache files for faster rebuilds (use `-m` for minimal)
 
@@ -243,12 +250,6 @@ sudo ./build-etc-iso.sh -r tag -t emcomm-tools-os-community-20251113-r5-build17
 # Minimal build (smaller ISO, no embedded cache files)
 sudo ./build-etc-iso.sh -r stable -m
 
-# Build with expert enhancements (FT8, GridTracker, SSTV)
-sudo ./build-etc-iso.sh -r stable -a
-
-# Combine flags: stable + addons + minimal
-sudo ./build-etc-iso.sh -r stable -a -m
-
 # Debug mode (show detailed DEBUG log messages)
 sudo ./build-etc-iso.sh -r stable -d
 
@@ -263,11 +264,12 @@ sudo ./build-etc-iso.sh -r stable -v
 | `-r <stable\|latest\|tag>` | Release mode |
 | `-t <tag>` | Specific tag name (required with `-r tag`) |
 | `-l` | List available releases and tags |
-| `-a` | Include et-os-addons (WSJT-X Improved, GridTracker, SSTV) |
 | `-m` | Minimal build (exclude cache files, saves ~4GB) |
 | `-d` | Debug mode (show DEBUG log messages) |
 | `-v` | Verbose mode (bash -x tracing) |
 | `-h` | Show help |
+
+**Note**: et-os-addons (GridTracker, WSJT-X Improved, QSSTV, etc.) is **always included** in every build—no flag needed.
 
 ### Release Modes
 
@@ -317,8 +319,8 @@ sudo ./build-etc-iso.sh -r stable -a -m  # Addons + minimal cache
 - 📻 **Portable Operators** - Run full-featured digital setup on low-power hardware
 - 👥 **Community Builders** - Share a "ready to go" digital modes platform
 
-**Note:** et-os-addons is optional and requires no configuration. All tools are pre-configured 
-with common defaults. Advanced users can customize settings after installation.
+**Note:** et-os-addons (GridTracker, WSJT-X Improved, QSSTV, etc.) is automatically included 
+in every build. All tools are pre-configured with common defaults and can be customized after installation.
 
 ## Configuration Reference
 
