@@ -2183,21 +2183,28 @@ update_grub_for_preseed() {
     log "DEBUG" "Modifying GRUB config: $grub_cfg"
     
     # CRITICAL: Only modify Ubuntu installer entries, preserve dual-boot entries!
-    # Match: menuentry lines that reference "Install Ubuntu" or "Try Ubuntu" 
-    # This preserves Windows/other OS entries
+    # Must handle menuentry blocks that span multiple lines
+    # We'll use awk to properly parse the file and identify Ubuntu installer entries
     
-    # Add preseed parameters to Ubuntu installer entries specifically
-    # Pattern: Find lines with "Install Ubuntu" or "Try Ubuntu" and add preseed to linux command
-    sed -i '/menuentry.*Ubuntu.*Install\|menuentry.*Ubuntu.*Try/{
-        :a
-        /linux.*casper\/vmlinuz/!{
-            N
-            ba
+    # Use awk to find Ubuntu menuentry blocks and update the linux lines within them
+    awk '
+    /^menuentry.*Install Ubuntu|^menuentry.*Try Ubuntu/ { 
+        in_ubuntu_entry = 1 
+    }
+    /^menuentry/ && !/Install Ubuntu/ && !/Try Ubuntu/ { 
+        in_ubuntu_entry = 0 
+    }
+    in_ubuntu_entry && /linux.*casper\/vmlinuz/ && !/file=\/cdrom\/preseed\/custom\.preseed/ {
+        # Add preseed parameters to the linux line if not already present
+        if ($0 !~ /file=\/cdrom\/preseed/) {
+            # Find position of "vmlinuz" and insert preseed after it
+            gsub(/vmlinuz/, "vmlinuz file=/cdrom/preseed/custom.preseed auto=true priority=critical noaccessibility")
         }
-        s|linux \(.*\)vmlinuz \(.*\)|linux \1vmlinuz \2 file=/cdrom/preseed/custom.preseed auto=true priority=critical noaccessibility|
-    }' "$grub_cfg"
+    }
+    { print }
+    ' "$grub_cfg" > "$grub_cfg.tmp" && mv "$grub_cfg.tmp" "$grub_cfg"
     
-    log "DEBUG" "GRUB config updated (Ubuntu entries only, dual-boot preserved)"
+    log "DEBUG" "GRUB config updated with awk (Ubuntu entries only, dual-boot preserved)"
     
     # Verify the change took effect on Ubuntu entries only
     if grep -q "file=/cdrom/preseed/custom.preseed" "$grub_cfg"; then
