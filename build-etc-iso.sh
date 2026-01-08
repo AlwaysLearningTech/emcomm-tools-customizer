@@ -382,11 +382,6 @@ download_etc_installer() {
 }
 
 download_etosaddons() {
-    if [ "$ADDONS_BUILD" -ne 1 ]; then
-        log "DEBUG" "et-os-addons not enabled, skipping download"
-        return 0
-    fi
-    
     mkdir -p "$CACHE_DIR"
     
     local zip_file="${CACHE_DIR}/et-os-addons-main.zip"
@@ -399,7 +394,7 @@ download_etosaddons() {
         return 0
     fi
     
-    log "INFO" "Downloading et-os-addons (adds WSJT-X Improved, GridTracker, SSTV, weather tools)..."
+    log "INFO" "Downloading et-os-addons (core build component: GridTracker, WSJT-X Improved, QSSTV, weather tools)..."
     
     if ! wget -O "$zip_file" "https://github.com/clifjones/et-os-addons/archive/refs/heads/main.zip"; then
         log "ERROR" "Failed to download et-os-addons"
@@ -1285,17 +1280,12 @@ EOF
 apply_etosaddons_overlay() {
     log "INFO" "Applying et-os-addons overlay files..."
     
-    # Check if addons dir exists in cache
     local addons_dir="${CACHE_DIR}/et-os-addons-main"
-    if [ ! -d "$addons_dir" ]; then
-        log "WARN" "et-os-addons not found in cache - skipping overlay"
-        return 0
-    fi
-    
     local addons_overlay="${addons_dir}/overlay"
+    
     if [ ! -d "$addons_overlay" ]; then
-        log "WARN" "et-os-addons overlay directory not found - skipping"
-        return 0
+        log "ERROR" "et-os-addons overlay directory not found"
+        return 1
     fi
     
     # Copy opt/emcomm-tools addons to squashfs
@@ -3434,8 +3424,9 @@ main() {
     fi
     
     if ! download_etosaddons; then
-        log "WARN" "et-os-addons download failed, continuing with base ETC"
-        ADDONS_BUILD=0
+        log "ERROR" "et-os-addons download failed - core build component"
+        cleanup_work_dir
+        exit 1
     fi
     
     # Extract ISO
