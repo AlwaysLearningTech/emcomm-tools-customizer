@@ -49,6 +49,7 @@ SPECIFIED_TAG=""
 MINIMAL_BUILD=0                           # When 1, omit cache files from ISO to reduce size
 KEEP_WORK=0                               # When 1, preserve .work directory for iterative debugging
 ADDONS_BUILD=0                            # When 1, include et-os-addons (WSJT-X Improved, GridTracker, SSTV, etc.)
+COPY_TO_PATH=""                           # Optional: copy finished ISO to this path
 
 # Colors for output
 RED='\033[0;31m'
@@ -121,6 +122,9 @@ BUILD OPTIONS:
     -k        Keep work directory after build (for iterative debugging)
     -m        Minimal build (omit cache files from ISO to reduce size)
     -v        Verbose mode (enable bash -x debugging)
+    --copy-to PATH
+              Copy finished ISO to specified directory (in addition to output/)
+              Example: ./build-etc-iso.sh -r stable --copy-to /media/user/Ventoy/ISO/
     -h        Show this help message
 
 DIRECTORY STRUCTURE:
@@ -3643,10 +3647,30 @@ main() {
         cleanup_work_dir
         exit 1
     fi
-    
     if ! rebuild_iso; then
         cleanup_work_dir
         exit 1
+    fi
+    
+    # Copy ISO to additional location if specified
+    if [[ -n "$COPY_TO_PATH" ]]; then
+        log "INFO" "Copying ISO to: $COPY_TO_PATH"
+        
+        # Create target directory if it doesn't exist
+        if ! mkdir -p "$COPY_TO_PATH"; then
+            log "ERROR" "Failed to create directory: $COPY_TO_PATH"
+            log "WARN" "ISO available at: $OUTPUT_ISO"
+        else
+            # Copy the ISO
+            local iso_filename
+            iso_filename=$(basename "$OUTPUT_ISO")
+            if cp "$OUTPUT_ISO" "$COPY_TO_PATH/$iso_filename"; then
+                log "SUCCESS" "ISO copied to: $COPY_TO_PATH/$iso_filename"
+            else
+                log "ERROR" "Failed to copy ISO to: $COPY_TO_PATH"
+                log "WARN" "ISO available at: $OUTPUT_ISO"
+            fi
+        fi
     fi
     
     # Cleanup
@@ -3659,6 +3683,9 @@ main() {
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo ""
     log "SUCCESS" "Custom ISO: $OUTPUT_ISO"
+    if [[ -n "$COPY_TO_PATH" ]]; then
+        log "SUCCESS" "Copied to: $COPY_TO_PATH/$(basename "$OUTPUT_ISO")"
+    fi
     log "INFO" ""
     log "INFO" "Next steps:"
     log "INFO" "  1. Copy ISO to Ventoy USB: cp \"$OUTPUT_ISO\" /media/\$USER/Ventoy/"
@@ -3672,54 +3699,66 @@ main() {
 # Parse Arguments
 # ============================================================================
 
-while getopts "r:t:aldkmvh" opt; do
-    case $opt in
-        a)
-            ADDONS_BUILD=1
-            log "INFO" "et-os-addons support enabled (WSJT-X Improved, GridTracker, SSTV, weather tools)"
-            ;;
-        r)
-            RELEASE_MODE="$OPTARG"
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -r)
+            RELEASE_MODE="$2"
             if [[ ! "$RELEASE_MODE" =~ ^(stable|latest|tag)$ ]]; then
                 echo "ERROR: Invalid release mode: $RELEASE_MODE" >&2
                 echo "Must be: stable, latest, or tag" >&2
                 usage
                 exit 1
             fi
+            shift 2
             ;;
-        t)
-            SPECIFIED_TAG="$OPTARG"
+        -t)
+            SPECIFIED_TAG="$2"
+            shift 2
             ;;
-        l)
+        -l)
             list_available_versions
             exit 0
             ;;
-        d)
+        -a)
+            ADDONS_BUILD=1
+            log "INFO" "et-os-addons support enabled (WSJT-X Improved, GridTracker, SSTV, weather tools)"
+            shift
+            ;;
+        -d)
             DEBUG_MODE=1
             log "INFO" "Debug mode enabled - showing DEBUG messages"
+            shift
             ;;
-        k)
+        -k)
             KEEP_WORK=1
             log "INFO" "Keep mode - .work directory will be preserved for debugging"
+            shift
             ;;
-        m)
+        -m)
             MINIMAL_BUILD=1
             log "INFO" "Minimal build - cache files will not be embedded in ISO"
+            shift
             ;;
-        v)
+        -v)
             set -x
+            shift
             ;;
-        h)
+        --copy-to)
+            COPY_TO_PATH="$2"
+            if [[ -z "$COPY_TO_PATH" ]]; then
+                echo "ERROR: --copy-to requires a path argument" >&2
+                usage
+                exit 1
+            fi
+            log "INFO" "ISO will be copied to: $COPY_TO_PATH"
+            shift 2
+            ;;
+        -h)
             usage
             exit 0
             ;;
-        \?)
-            echo "Invalid option: -$OPTARG" >&2
-            usage
-            exit 1
-            ;;
-        :)
-            echo "Option -$OPTARG requires an argument" >&2
+        *)
+            echo "ERROR: Unknown option: $1" >&2
             usage
             exit 1
             ;;
