@@ -19,7 +19,7 @@ ETC already includes all ham radio tools (Winlink, VARA, JS8Call, fldigi, etc.).
 - ✅ Power management (sleep behavior, power profiles, idle actions)
 - ✅ System timezone configuration
 - ✅ Additional development packages (VS Code, Node.js, npm, git)
-- ✅ VARA FM/HF license `.reg` files + import script (run post-install after VARA installation)
+- ✅ **VARA license pre-registration** (manual registry edit → backup → auto-restore on builds)
 - ✅ **Automatic user config restoration** (from `etc-user-backup-*.tar.gz` if present)
 - ✅ **APRS configuration** (iGate, beacon, digipeater with smart beaconing)
 - ✅ **Ham radio CAT control** (Anytone D578UV with DigiRig Mobile, rigctld auto-start)
@@ -63,7 +63,7 @@ This customizer **respects upstream ETC architecture**. We:
 - **User config**: `~/.config/emcomm-tools/user.json` pre-populated with callsign, grid, Winlink password
 - **Desktop settings**: Dark mode, scaling, accessibility, display, power management, timezone all applied
 - **Git config**: User name/email configured
-- **VARA license setup**: `.reg` files and import script created for post-install use
+- **VARA license setup**: Pre-register via Wine registry, create backup, auto-restore on builds
 - **Single post-install script**: Verification, backup restoration, and CHIRP installation via pipx
 - **Additional packages**: Development tools (git, nodejs, npm, uv) installable via configuration
 - **Cache system**: Downloaded ISOs cached for faster rebuilds
@@ -539,7 +539,7 @@ EXT4_SIZE_MB="51200"       # Force 50GB ext4 (in MB)
 - ✅ Detailed logging shows detected strategy and proposed partitioning
 
 
-### About VARA Licenses
+### VARA License Setup
 
 VARA is commercial software with **two separate products**:
 
@@ -550,22 +550,48 @@ VARA is commercial software with **two separate products**:
 
 Purchase at [rosmodem.wordpress.com](https://rosmodem.wordpress.com/)
 
-**Important:** VARA licenses are applied **after** VARA installation, not during ISO build:
+**How License Registration Works**
 
-1. **Install VARA** (post-install, requires desktop session):
+When you run the VARA installers, they write registration keys to the Wine registry. Rather than trying to script this during ISO build (where Wine doesn't exist yet), we use a **manual registration → backup → restore** workflow:
+
+**Step 1: Manual Registry Editing (One-Time)**
+
+Before creating a Wine backup:
+1. Install VARA: `cd ~/add-ons/wine && ./01-install-wine-deps.sh && ./02-install-vara-hf.sh && ./03-install-vara-fm.sh`
+2. Open Wine registry editor with direct key access:
    ```bash
-   cd ~/add-ons/wine
-   ./01-install-wine-deps.sh
-   ./02-install-vara-hf.sh    # If you use HF
-   ./03-install-vara-fm.sh    # If you use FM
+   export WINEPREFIX="$HOME/.wine32"
+   wine regedit
    ```
+3. Navigate to `HKEY_CURRENT_USER → Software → VARA FM` and add/edit:
+   - `Callsign` (string): Your callsign
+   - `License` (string): Your license key
+4. Navigate to `HKEY_CURRENT_USER → Software → VARA` and add/edit (for VARA HF):
+   - `Callsign` (string): Your callsign  
+   - `License` (string): Your license key
+5. Close regedit
 
-2. **Import license keys** (if configured in secrets.env):
-   ```bash
-   ./99-import-vara-licenses.sh
-   ```
+**Step 2: Create Wine Backup**
 
-The build script creates `.reg` files and an import script in `~/add-ons/wine/`. This is because Wine's prefix (`~/.wine32`) doesn't exist until you run the VARA installers.
+```bash
+tar -czf ~/etc-wine-backup-with-vara.tar.gz ~/.wine32/
+cp ~/etc-wine-backup-with-vara.tar.gz /path/to/emcomm-tools-customizer/cache/
+```
+
+**Step 3: Automatic Restoration on Future Builds**
+
+Place the backup in `cache/` before building. The build script automatically restores it:
+- Wine prefix is extracted on first login (deferred from build to avoid hangs)
+- VARA registration keys are immediately available
+- VARA runs with licenses on first launch
+
+**Why This Approach?**
+
+- ✅ Registry edits are handled correctly by Windows/Wine GUI tools
+- ✅ Avoids fragile `.reg` file scripting
+- ✅ Wine prefix persists across ISO builds via backup
+- ✅ Licenses pre-loaded on every new system
+- ✅ Works with ETC's upstream warning: "Don't backup before applications run" (we backup AFTER proper Wine initialization)
 
 ### Pat Winlink Aliases
 

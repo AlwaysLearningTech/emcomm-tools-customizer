@@ -144,8 +144,6 @@ ETC generates configs at RUNTIME from templates, NOT at install time:
 
 ### Wine Prefix
 - **ETC uses `~/.wine32`** (32-bit prefix for VARA)
-- NEVER reference `~/.wine` - that's wrong!
-- VARA registry files go in `~/.wine32/user.reg` or registry.d
 
 ### Preseed & Installer Automation (debian-installer)
 **The ISO uses debian-installer (d-i) with preseed for fully automated installation. Zero interactive prompts.**
@@ -203,12 +201,11 @@ Automated customization of EmComm Tools Community (ETC) ISO images.
 - Hostname (ETC-{CALLSIGN})
 - Desktop preferences (dark mode, scaling)
 - Accessibility disabled (screen reader, on-screen keyboard, auto-brightness)
-- VARA license `.reg` files + import script (for post-install use)
 - APRS configuration (iGate, beaconing) - modifies ETC's direwolf templates
 - Git configuration
 - User account with password (NO autologin by default)
 - **Settings preservation** from existing ETC (via `et-user-backup` tarball)
-- **Wine/VARA preservation** from existing ETC (via Wine backup tarball)
+- **Wine/VARA preservation** from existing ETC (via Wine backup tarball with pre-registered licenses)
 
 ### Future Enhancements (TODO)
 
@@ -259,19 +256,30 @@ emcomm-tools-customizer/
 - `ENABLE_AUTOLOGIN` - "yes" or "no" (default: "no")
 - User gets password prompt by default, NOT autologin
 
-## VARA License (Post-Install)
+## VARA License (Manual Pre-Registration + Backup)
 
-VARA requires a desktop session to install. We create `.reg` files and an import script:
-- `VARA_FM_CALLSIGN` + `VARA_FM_LICENSE_KEY` → `~/add-ons/wine/vara-fm-license.reg`
-- `VARA_HF_CALLSIGN` + `VARA_HF_LICENSE_KEY` → `~/add-ons/wine/vara-hf-license.reg`
-- Import script: `~/add-ons/wine/99-import-vara-licenses.sh`
+VARA requires manual registry editing, then backup/restore:
 
-**Workflow (post-install on hardware):**
-1. User runs `~/add-ons/wine/01-install-wine-deps.sh`
-2. User runs VARA installers (`02-install-vara-hf.sh`, `03-install-vara-fm.sh`)
-3. User runs `99-import-vara-licenses.sh` to register licenses
+**Workflow:**
+1. Install VARA on a running system: `cd ~/add-ons/wine && ./01-install-wine-deps.sh && ./02-install-vara-hf.sh && ./03-install-vara-fm.sh`
+2. Manually register licenses via Wine registry editor:
+   ```bash
+   export WINEPREFIX="$HOME/.wine32"
+   wine regedit
+   # Navigate to HKEY_CURRENT_USER → Software → VARA FM
+   # Add Callsign and License string values
+   # Navigate to HKEY_CURRENT_USER → Software → VARA (for HF)
+   # Add Callsign and License string values
+   ```
+3. Create backup: `tar -czf etc-wine-backup-with-vara.tar.gz ~/.wine32/`
+4. Place in `cache/etc-wine-backup-with-vara.tar.gz` before building
+5. Future builds automatically restore licenses on first login
 
-Note: Wine prefix `~/.wine32` doesn't exist until VARA installation. We can NOT inject licenses during ISO build.
+**Why this approach:**
+- Registry edits are GUI-based and correctly applied by Wine/Windows tools
+- Avoids fragile `.reg` file scripting
+- Complies with ETC's upstream warning about not backing up before applications run
+- Licenses pre-loaded on every new ISO
 
 ## APRS Configuration
 
