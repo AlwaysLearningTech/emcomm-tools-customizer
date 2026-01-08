@@ -2384,6 +2384,97 @@ customize_additional_packages() {
     trap - EXIT
 }
 
+setup_vscode_workspace() {
+    log "INFO" "Setting up VS Code workspace and project structure..."
+    
+    local skel_dir="${SQUASHFS_DIR}/etc/skel"
+    local projects_dir="${skel_dir}/.config/emcomm-tools/Projects"
+    local workspace_dir="${skel_dir}/.config/emcomm-tools"
+    
+    log "DEBUG" "Creating projects directory: $projects_dir"
+    mkdir -p "$projects_dir"
+    
+    # Create a standard VS Code workspace file that includes the projects directory
+    local workspace_file="${workspace_dir}/emcomm-tools.code-workspace"
+    log "DEBUG" "Creating VS Code workspace file: $workspace_file"
+    
+    cat > "$workspace_file" <<'WORKSPACE_EOF'
+{
+    "folders": [
+        {
+            "path": "${userHome}/.config/emcomm-tools/Projects",
+            "name": "Projects"
+        },
+        {
+            "path": "${userHome}/.config/emcomm-tools",
+            "name": "Config"
+        }
+    ],
+    "settings": {
+        "files.exclude": {
+            "**/.git": false,
+            "**/node_modules": true,
+            "**/__pycache__": true
+        },
+        "python.defaultInterpreterPath": "/usr/bin/python3",
+        "python.linting.enabled": true,
+        "python.linting.pylintEnabled": true,
+        "[json]": {
+            "editor.defaultFormatter": "esbenp.prettier-vscode",
+            "editor.formatOnSave": true
+        }
+    },
+    "extensions": {
+        "recommendations": [
+            "ms-python.python",
+            "ms-python.vscode-pylance",
+            "ms-vscode.cpptools",
+            "esbenp.prettier-vscode",
+            "eamodio.gitlens",
+            "ms-vscode.remote-explorer"
+        ]
+    }
+}
+WORKSPACE_EOF
+    
+    log "DEBUG" "VS Code workspace created"
+    
+    # Create a README in the Projects folder to guide users
+    local projects_readme="${projects_dir}/README.md"
+    cat > "$projects_readme" <<'README_EOF'
+# Projects Directory
+
+This is the default location for all your development projects and repositories.
+
+## Usage
+
+1. **Open in VS Code**: Open the workspace file `~/.config/emcomm-tools/emcomm-tools.code-workspace`
+2. **Clone or create projects** in this directory
+3. **All files are preserved** across ISO rebuilds (backed up in et-user-backup)
+
+## Project Organization
+
+Suggest organizing projects like:
+```
+Projects/
+├── ham-radio/          # Ham radio related projects
+├── emcomm/             # EmComm Tools customizations
+├── scripts/            # Utility scripts
+└── personal/           # Personal projects
+```
+
+## Backup & Restore
+
+Projects in this directory are automatically included in `et-user-backup` during ISO builds:
+- Run: `tar -czf ~/etc-user-backup-$(date +%Y%m%d).tar.gz ~/.config/`
+- Place in `cache/etc-user-backup-*.tar.gz` before building
+- New ISO will restore all your projects on first login
+README_EOF
+    
+    log "SUCCESS" "VS Code workspace setup completed at: $workspace_file"
+    log "SUCCESS" "Projects directory created at: $projects_dir"
+}
+
 customize_pat() {
     log "INFO" "Configuring Pat Winlink aliases..."
     
@@ -3447,11 +3538,31 @@ main() {
     customize_git_config
     log "DEBUG" "Step 13/14: customize_git_config COMPLETED"
     
-    log "DEBUG" "Step 14/14: customize_additional_packages"
+    log "DEBUG" "Step 14/14: setup_vscode_workspace"
+    setup_vscode_workspace
+    log "DEBUG" "Step 14/14: setup_vscode_workspace COMPLETED"
+    
+    log "DEBUG" "Step 15/14: customize_additional_packages"
     customize_additional_packages
-    log "DEBUG" "Step 14/14: customize_additional_packages COMPLETED"
+    log "DEBUG" "Step 15/14: customize_additional_packages COMPLETED"
     
     log "DEBUG" "Step 15/19: install_gridtracker"
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+    install_gridtracker
+    cleanup_chroot_mounts
+    trap - EXIT
+    log "DEBUG" "Step 15/19: install_gridtracker COMPLETED"
+    
+    log "DEBUG" "Step 16/19: install_wsjtx_improved"
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+    install_wsjtx_improved
+    cleanup_chroot_mounts
+    trap - EXIT
+    log "DEBUG" "Step 16/19: install_wsjtx_improved COMPLETED"
+    
+    log "DEBUG" "Step 17/19: install_qsstv"
     setup_chroot_mounts
     trap 'cleanup_chroot_mounts' EXIT
     install_gridtracker

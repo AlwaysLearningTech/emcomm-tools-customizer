@@ -203,6 +203,7 @@ Automated customization of EmComm Tools Community (ETC) ISO images.
 - Accessibility disabled (screen reader, on-screen keyboard, auto-brightness)
 - APRS configuration (iGate, beaconing) - modifies ETC's direwolf templates
 - Git configuration
+- VS Code workspace setup (Projects directory in ~/.config/emcomm-tools/)
 - User account with password (NO autologin by default)
 - **Settings preservation** from existing ETC (via `et-user-backup` tarball)
 - **Wine/VARA preservation** from existing ETC (via Wine backup tarball with pre-registered licenses)
@@ -280,6 +281,22 @@ VARA requires manual registry editing, then backup/restore:
 - Avoids fragile `.reg` file scripting
 - Complies with ETC's upstream warning about not backing up before applications run
 - Licenses pre-loaded on every new ISO
+
+## VS Code Workspace Setup
+
+VS Code workspace is pre-configured during build:
+
+**Setup Function**: `setup_vscode_workspace()` in build-etc-iso.sh
+- Creates `/etc/skel/.config/emcomm-tools/emcomm-tools.code-workspace`
+- Creates `/etc/skel/.config/emcomm-tools/Projects/` directory
+- Includes README with project organization suggestions
+- Workspace file has recommended Python, C++, and Git extensions
+
+**Key Details**:
+- Workspace location is in `.config/emcomm-tools/` (part of et-user-backup)
+- Projects directory persists across ISO rebuilds if backed up
+- Users simply open the workspace file in VS Code to get started
+- All repos cloned to Projects/ are automatically included in et-user-backup
 
 ## APRS Configuration
 

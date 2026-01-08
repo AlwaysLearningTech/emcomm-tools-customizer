@@ -20,6 +20,7 @@ ETC already includes all ham radio tools (Winlink, VARA, JS8Call, fldigi, etc.).
 - ✅ System timezone configuration
 - ✅ Additional development packages (VS Code, Node.js, npm, git)
 - ✅ **VARA license pre-registration** (manual registry edit → backup → auto-restore on builds)
+- ✅ **VS Code workspace setup** (standard project location included in et-user-backup)
 - ✅ **Automatic user config restoration** (from `etc-user-backup-*.tar.gz` if present)
 - ✅ **APRS configuration** (iGate, beacon, digipeater with smart beaconing)
 - ✅ **Ham radio CAT control** (Anytone D578UV with DigiRig Mobile, rigctld auto-start)
@@ -64,8 +65,8 @@ This customizer **respects upstream ETC architecture**. We:
 - **Desktop settings**: Dark mode, scaling, accessibility, display, power management, timezone all applied
 - **Git config**: User name/email configured
 - **VARA license setup**: Pre-register via Wine registry, create backup, auto-restore on builds
-- **Single post-install script**: Verification, backup restoration, and CHIRP installation via pipx
-- **Additional packages**: Development tools (git, nodejs, npm, uv) installable via configuration
+- **VS Code workspace**: Pre-configured workspace with Projects directory in ~/.config/emcomm-tools/
+- **Additional packages**: Development tools (VS Code, git, nodejs, npm, CHIRP via pipx) installable via configuration
 - **Cache system**: Downloaded ISOs cached for faster rebuilds
 - **Preseed automation**: Ubuntu 22.10 installer fully automated with debian-installer (d-i)
   - No interactive prompts: keyboard, locale, hostname, username, password, timezone, partitioning all preseed-driven
@@ -602,6 +603,51 @@ pat connect emcomm    # Quick connect to your configured gateway
 ```
 
 After first boot, run `~/.config/pat/add-emcomm-alias.sh` to add the alias to your Pat config.
+
+### VS Code Workspace
+
+A pre-configured VS Code workspace is created at `~/.config/emcomm-tools/emcomm-tools.code-workspace`:
+
+**Features:**
+- **Projects directory**: `~/.config/emcomm-tools/Projects/` - standard location for all repos and development
+- **Workspace file**: Open in VS Code via `File → Open Workspace from File` or `code ~/.config/emcomm-tools/emcomm-tools.code-workspace`
+- **Automatic backup**: All files in Projects are included in et-user-backup
+- **Recommended extensions**: Python, Pylance, C++, Prettier, GitLens, Remote Explorer
+
+**Using the workspace:**
+
+1. **Clone repos or create projects** in `~/.config/emcomm-tools/Projects/`
+   ```bash
+   cd ~/.config/emcomm-tools/Projects
+   git clone https://github.com/user/repo.git
+   ```
+
+2. **Backup your projects** for next rebuild:
+   ```bash
+   tar -czf ~/etc-user-backup-$(date +%Y%m%d).tar.gz ~/.config/
+   cp ~/etc-user-backup-*.tar.gz /path/to/emcomm-tools-customizer/cache/
+   ```
+
+3. **Next ISO build** automatically restores your workspace and projects on first login
+
+**Project organization suggestion:**
+```
+Projects/
+├── ham-radio/          # Ham radio related projects
+├── emcomm/             # EmComm Tools customizations
+├── scripts/            # Utility scripts  
+└── personal/           # Personal projects
+```
+
+### Additional Development Packages
+
+The build automatically installs:
+- **VS Code** - editor
+- **Node.js & npm** - JavaScript development
+- **git** - version control
+- **CHIRP** - Radio programming software (via pipx)
+
+Additional packages can be configured in `secrets.env` via `ADDITIONAL_PACKAGES` variable.
 
 ### Automatic Backup Restoration
 
