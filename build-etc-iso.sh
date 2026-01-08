@@ -1278,14 +1278,14 @@ EOF
 }
 
 apply_etosaddons_overlay() {
-    log "INFO" "Applying et-os-addons overlay files..."
+    log "INFO" "Applying et-os-addons overlay files (if available)..."
     
     local addons_dir="${CACHE_DIR}/et-os-addons-main"
     local addons_overlay="${addons_dir}/overlay"
     
     if [ ! -d "$addons_overlay" ]; then
-        log "ERROR" "et-os-addons overlay directory not found"
-        return 1
+        log "DEBUG" "et-os-addons overlay not found - skipping"
+        return 0
     fi
     
     # Copy opt/emcomm-tools addons to squashfs
@@ -3423,11 +3423,8 @@ main() {
         exit 1
     fi
     
-    if ! download_etosaddons; then
-        log "ERROR" "et-os-addons download failed - core build component"
-        cleanup_work_dir
-        exit 1
-    fi
+    # et-os-addons is optional - download if available, skip if network fails
+    download_etosaddons || log "WARN" "et-os-addons download failed - building with base ETC only"
     
     # Extract ISO
     if ! extract_iso; then

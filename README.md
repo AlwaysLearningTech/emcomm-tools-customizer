@@ -23,13 +23,9 @@ ETC already includes all ham radio tools (Winlink, VARA, JS8Call, fldigi, etc.).
 - ✅ **Automatic user config restoration** (from `etc-user-backup-*.tar.gz` if present)
 - ✅ **APRS configuration** (iGate, beacon, digipeater with smart beaconing)
 - ✅ **Ham radio CAT control** (Anytone D578UV with DigiRig Mobile, rigctld auto-start)
-- ✅ **et-os-addons overlay** (included in every build):
-  - **GridTracker**: Real-time station tracking on ham maps
-  - **WSJT-X Improved**: Enhanced FT8 digital mode capabilities
-  - **QSSTV**: SSTV (Slow Scan TV) transmission and reception
-  - **XYGrib**: Weather/GRIB data for forecasting
-  - **Kiwix**: Offline Wikipedia and documentation
-  - **JS8Spotter & NetControl**: Additional analysis tools
+- ✅ **Optional et-os-addons overlay** (if cached):
+  - GridTracker, WSJT-X Improved, QSSTV, XYGrib, Kiwix, JS8Spotter, NetControl
+  - No internet required - use existing cache or skip
 - ✅ Git configuration
 - ✅ Embedded cache files for faster rebuilds (use `-m` for minimal)
 
@@ -319,8 +315,8 @@ sudo ./build-etc-iso.sh -r stable -a -m  # Addons + minimal cache
 - 📻 **Portable Operators** - Run full-featured digital setup on low-power hardware
 - 👥 **Community Builders** - Share a "ready to go" digital modes platform
 
-**Note:** et-os-addons (GridTracker, WSJT-X Improved, QSSTV, etc.) is automatically included 
-in every build. All tools are pre-configured with common defaults and can be customized after installation.
+**Note:** et-os-addons overlay is automatically applied if cached (no configuration needed). 
+Drop the cached copy into `cache/et-os-addons-main/` or let the script skip it if unavailable.
 
 ## Configuration Reference
 
