@@ -147,6 +147,42 @@ ETC generates configs at RUNTIME from templates, NOT at install time:
 - NEVER reference `~/.wine` - that's wrong!
 - VARA registry files go in `~/.wine32/user.reg` or registry.d
 
+### Preseed & Installer Automation (debian-installer)
+**The ISO uses debian-installer (d-i) with preseed for fully automated installation. Zero interactive prompts.**
+
+**Key Facts**:
+- **Installer**: debian-installer (d-i, text-based), NOT ubiquity (GUI)
+- **Preseed file**: `/preseed.cfg` in ISO root (accessed via `preseed/file=/cdrom/preseed.cfg`)
+- **Boot parameters**: `auto=true priority=critical` (enable automatic mode)
+- **Why d-i not ubiquity**: Ubiquity ignores partitioning directives and accessibility settings. D-i respects ALL preseed directives.
+
+**Boot Parameter Locations**:
+- GRUB is updated in `ISO_EXTRACT_DIR/boot/grub/grub.cfg` (NOT in squashfs)
+- Preseed file goes in `ISO_EXTRACT_DIR/preseed.cfg` (ISO root, before squashfs)
+- Both are in the ISO filesystem that the bootloader can access
+
+**Preseed Variables** (from `customize_preseed()` function):
+- Keyboard, locale, timezone setup
+- User account (username, full name, hashed password)
+- Hostname (derived from CALLSIGN)
+- Network (DHCP automatic)
+- Partitioning (strategy-specific: partition, entire-disk, or free-space)
+- Package selection (ubuntu-desktop task, no popularity-contest)
+
+**Partition Strategies**:
+- `partition` mode: Uses existing partition, non-destructive, safe for dual-boot
+- `entire-disk` mode: Formats entire disk with LVM, DESTRUCTIVE
+- `free-space` mode: Create partitions in available space on Windows dual-boot
+- `auto-detect` mode (default): Script analyzes disk and chooses best strategy
+
+**When Modifying Preseed**:
+1. Edit `customize_preseed()` function in `build-etc-iso.sh`
+2. Update the heredoc `cat > "$preseed_file" <<'EOF'...EOF` block
+3. Use `PLACEHOLDER_VARS` that get replaced by sed (e.g., `HOSTNAME_VAR`, `USERNAME_VAR`)
+4. Verify syntax with `debconf-set-selections -c /path/to/preseed.cfg`
+5. Test sed patterns against GRUB files before building
+6. NEVER use `file=/cdrom/preseed/custom.preseed` anymore - it's `preseed/file=/cdrom/preseed.cfg`
+
 ## Project Overview
 
 Automated customization of EmComm Tools Community (ETC) ISO images.

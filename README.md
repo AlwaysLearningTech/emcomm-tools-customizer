@@ -67,61 +67,80 @@ This customizer **respects upstream ETC architecture**. We:
 - **Single post-install script**: Verification, backup restoration, and CHIRP installation via pipx
 - **Additional packages**: Development tools (git, nodejs, npm, uv) installable via configuration
 - **Cache system**: Downloaded ISOs cached for faster rebuilds
-- **Preseed automation**: Ubuntu 22.10 installer automated with hostname, username, password, timezone
+- **Preseed automation**: Ubuntu 22.10 installer fully automated with debian-installer (d-i)
+  - No interactive prompts: keyboard, locale, hostname, username, password, timezone, partitioning all preseed-driven
+  - Text-based installer (d-i) respects all preseed directives including partitioning
 - **Anytone D578UV radio**: Radio configuration added to et-radio menu (rigctrl ID 301)
 
-### ⚠️ Known Limitations (v1.0)
+## Fully Automated Installation
 
-Preseed file **AUTOMATES** Ubuntu installer—hostname, username, password, and timezone are pre-configured.
+The ISO uses **debian-installer (d-i)** with preseed for zero-interaction installation. All setup questions are answered automatically from your configuration.
 
 **Automated Installation Workflow**:
 1. Boot custom ISO from Ventoy
 2. GRUB menu shows all available OSes (dual-boot preserved)
 3. Select Ubuntu/EmComm Tools entry from menu
-4. GRUB loads preseed from `file=/cdrom/preseed/custom.preseed`
-5. Preseed parameters: `auto=true priority=critical` (auto-answer all questions)
-6. Ubuntu installer runs **without user prompts** for:
+4. GRUB loads preseed from `preseed/file=/cdrom/preseed.cfg`
+5. Preseed parameters: `auto=true priority=critical` (enable automatic mode)
+6. **Debian-installer runs WITHOUT user prompts** for:
    - Keyboard layout
    - Locale / language
    - Hostname (set to `ETC-{CALLSIGN}`)
    - Username (set from config)
    - Password (hashed in preseed)
    - Timezone
-   - Partitioning (see below)
+   - Partitioning (strategy-aware, respects dual-boot)
+   - Package selection (ubuntu-desktop task)
 7. System boots directly to desktop (or login prompt if autologin disabled)
 8. All customizations apply automatically (WiFi, APRS, desktop settings, CAT control, etc.)
 
+**Why debian-installer instead of ubiquity?**
+
+The original approach used Ubuntu's ubiquity (GUI installer) with `automatic-ubiquity` boot parameter. However:
+- ✅ Ubiquity **ignores partitioning directives** in preseed - asks user anyway
+- ✅ Ubiquity **ignores many d-i settings** (not designed for full automation)
+- ✅ Ubiquity **can't skip accessibility/release notes questions**
+- ✅ Debian-installer **respects ALL preseed directives** including full partitioning
+- ✅ D-i is **text-based** - faster, no GUI overhead
+
+The debian-installer is the standard Debian/Ubuntu preseed solution and provides true "set it and forget it" automation.
+
+**Preseed File & Boot Parameters**:
+
+The GRUB configuration is automatically updated to:
+```bash
+linux /casper/vmlinuz preseed/file=/cdrom/preseed.cfg auto=true priority=critical maybe-ubiquity quiet splash ---
+```
+
+This tells debian-installer to:
+- Load preseed answers from `preseed/file=/cdrom/preseed.cfg`
+- `auto=true` - enable automatic mode (defer some early questions to allow preseed loading)
+- `priority=critical` - only ask questions marked critical; skip all others
+- `maybe-ubiquity` - still attempts GUI installer if available, falls back to text d-i
+
 **Partitioning Behavior**:
 
-The preseed adapts based on `INSTALL_DISK` configuration:
+The preseed adapts based on `INSTALL_DISK` and `PARTITION_STRATEGY` configuration:
 
-- **Partition Mode** (`INSTALL_DISK="/dev/sda5"`):
+- **Partition Mode** (`PARTITION_STRATEGY="force-partition"`, `INSTALL_DISK="/dev/sda5"`):
   - Uses `d-i partman-auto/method string regular` (non-destructive)
-  - Ubuntu installer targets `/dev/sda5` specifically
+  - Debian-installer targets specified partition only
   - Safe for dual-boot systems
   - Respects existing Windows/other OS partitions
-  - Swap configured at `/dev/sda6` (or as configured)
+  
+- **Auto-Detect Mode** (`PARTITION_STRATEGY="auto-detect"`, `INSTALL_DISK=""`) — **Default, Recommended**:
+  - Script analyzes disk layout before building ISO
+  - Automatically chooses safest strategy (usually partition mode)
+  - Embedded in preseed so installer knows partitioning approach
+  - Prevents destructive mistakes on multi-partition systems
 
-- **Entire-Disk Mode** (`INSTALL_DISK="/dev/sda"`, `CONFIRM_ENTIRE_DISK="yes"`):
-  - Uses `d-i partman-auto/method string lvm` (auto-partition)
+- **Entire-Disk Mode** (`PARTITION_STRATEGY="force-entire-disk"`, `CONFIRM_ENTIRE_DISK="yes"`):
+  - Uses `d-i partman-auto/method string lvm` (auto-partition with LVM)
   - **DESTRUCTIVE**: Erases entire disk and creates new partitions
   - Requires explicit confirmation in `secrets.env`
   - Only use for single-disk systems with no existing data
 
-**Boot Parameters in GRUB**:
-
-The GRUB configuration is automatically updated to:
-```bash
-linux /casper/vmlinuz file=/cdrom/preseed/custom.preseed auto=true priority=critical maybe-ubiquity quiet splash ---
-```
-
-This tells Ubuntu installer to:
-- Load preseed answers from `file=/cdrom/preseed/custom.preseed`
-- `auto=true` - automatically answer with preseed values
-- `priority=critical` - only ask critical/unanswerable questions
-- `maybe-ubiquity` - use GUI installer (ubiquity)
-
-**Advanced**: To customize preseed behavior (partitioning, packages, etc.), edit the `customize_preseed()` function in `build-etc-iso.sh` and regenerate the ISO.
+**Reference**: [Debian Preseed Documentation](https://www.debian.org/releases/stable/amd64/apbs02.en.html)
 
 ### Future Work (Tracked in GitHub Issues)
 
