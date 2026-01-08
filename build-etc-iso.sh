@@ -1282,6 +1282,43 @@ EOF
     log "SUCCESS" "Desktop preferences configured (${color_scheme}, ${scaling}x)"
 }
 
+apply_etosaddons_overlay() {
+    log "INFO" "Applying et-os-addons overlay files..."
+    
+    # Check if addons dir exists in cache
+    local addons_dir="${CACHE_DIR}/et-os-addons-main"
+    if [ ! -d "$addons_dir" ]; then
+        log "WARN" "et-os-addons not found in cache - skipping overlay"
+        return 0
+    fi
+    
+    local addons_overlay="${addons_dir}/overlay"
+    if [ ! -d "$addons_overlay" ]; then
+        log "WARN" "et-os-addons overlay directory not found - skipping"
+        return 0
+    fi
+    
+    # Copy opt/emcomm-tools addons to squashfs
+    if [ -d "${addons_overlay}/opt/emcomm-tools" ]; then
+        log "DEBUG" "Copying et-os-addons ETC tools..."
+        cp -r "${addons_overlay}/opt/emcomm-tools"/* "${SQUASHFS_DIR}/opt/emcomm-tools/" 2>/dev/null || {
+            log "WARN" "Failed to copy some ETC addon files"
+        }
+        # Fix permissions on config templates
+        chroot "${SQUASHFS_DIR}" chmod -f 664 /opt/emcomm-tools/conf/template.d/*.conf 2>/dev/null || true
+    fi
+    
+    # Copy skel files (for new user defaults)
+    if [ -d "${addons_overlay}/etc/skel" ]; then
+        log "DEBUG" "Copying et-os-addons skel files..."
+        cp -r "${addons_overlay}/etc/skel"/* "${SQUASHFS_DIR}/etc/skel/" 2>/dev/null || {
+            log "WARN" "Failed to copy some skel addon files"
+        }
+    fi
+    
+    log "SUCCESS" "et-os-addons overlay applied"
+}
+
 customize_aprs() {
     log "INFO" "Configuring APRS/Direwolf settings..."
     
@@ -3422,6 +3459,10 @@ main() {
     log "INFO" ""
     log "INFO" "=== Applying Customizations ==="
     log "DEBUG" "Starting customization phase..."
+    
+    log "DEBUG" "Step 0/14: apply_etosaddons_overlay"
+    apply_etosaddons_overlay
+    log "DEBUG" "Step 0/14: apply_etosaddons_overlay COMPLETED"
     
     log "DEBUG" "Step 1/14: customize_hostname"
     customize_hostname
