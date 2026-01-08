@@ -2380,6 +2380,31 @@ customize_additional_packages() {
         log "WARN" "CHIRP installation had issues - may need manual setup"
     fi
     
+    # Install Microsoft Edge via direct .deb download (works with EOL distros)
+    log "INFO" "Installing Microsoft Edge browser via direct .deb download..."
+    
+    # Download latest Microsoft Edge stable release directly from Microsoft
+    # Works with EOL Ubuntu 22.10 - doesn't require snap or PPA
+    local edge_deb="/tmp/microsoft-edge-stable.deb"
+    local edge_download_url="https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_latest_amd64.deb"
+    
+    log "DEBUG" "Downloading Microsoft Edge from: $edge_download_url"
+    if chroot "${SQUASHFS_DIR}" bash -c "wget -q '$edge_download_url' -O '$edge_deb' 2>&1"; then
+        log "DEBUG" "Microsoft Edge .deb downloaded"
+        
+        # Install the downloaded .deb package
+        if chroot "${SQUASHFS_DIR}" bash -c "dpkg -i '$edge_deb' 2>&1 | tail -3"; then
+            log "SUCCESS" "Microsoft Edge installed successfully"
+            # Clean up
+            chroot "${SQUASHFS_DIR}" rm -f "$edge_deb"
+        else
+            log "WARN" "Microsoft Edge .deb installation had issues - check log for details"
+            chroot "${SQUASHFS_DIR}" rm -f "$edge_deb"
+        fi
+    else
+        log "WARN" "Microsoft Edge .deb download failed - may need manual installation"
+    fi
+    
     cleanup_chroot_mounts
     trap - EXIT
 }
