@@ -2133,10 +2133,11 @@ PARTMAN_CONFIG
 }
 
 update_grub_for_preseed() {
-    log "INFO" "Updating GRUB boot parameters to load preseed with debian-installer..."
+    log "INFO" "Updating GRUB boot parameters to use preseed file with debian-installer..."
     
     # GRUB config is in the extracted ISO directory (not in squashfs)
     # Location: .work/iso/boot/grub/grub.cfg
+    # Reference: https://help.ubuntu.com/community/InstallCDCustomization
     
     local grub_cfg="${ISO_EXTRACT_DIR}/boot/grub/grub.cfg"
     
@@ -2148,34 +2149,30 @@ update_grub_for_preseed() {
     log "DEBUG" "Modifying GRUB config: $grub_cfg"
     
     # CRITICAL: Only modify Ubuntu installer entries, preserve dual-boot entries!
-    # Reference: https://www.debian.org/releases/stable/amd64/apbs02.en.html (B.2.3 Auto mode)
+    # Per Ubuntu InstallCDCustomization documentation, preseed params for GRUB should be:
+    #   file=/cdrom/preseed.cfg debian-installer/locale=en_US console-setup/layoutcode=us
     # 
-    # Debian Installer (d-i) automatic installation boot parameters:
-    #   1. auto=true                               (ENABLES AUTOMATIC MODE - skip some questions)
-    #   2. priority=critical                       (skip non-critical questions)
-    #   3. preseed/file=/cdrom/preseed.cfg         (preseed file location on ISO)
+    # Do NOT use auto=true/priority=critical for desktop ISOs with preseed file in ISO root
+    # (those are for Debian's auto-mode which is different from simple preseed file loading)
     #
-    # These parameters tell d-i to use the preseed file for automated installation.
-    # Unlike ubiquity, d-i respects ALL preseed directives including partitioning.
-    # See: https://www.debian.org/releases/stable/amd64/apbs02.en.html#preseed-auto
+    # The preseed file we created at ISO root (/preseed.cfg) should be loaded via:
+    #   file=/cdrom/preseed.cfg
+    #
+    # Reference: https://www.debian.org/releases/stable/amd64/apbs02.en.html#preseed-usage
     
-    # Use sed to replace preseed file and boot parameters in linux commands
-    sed -i 's|file=/cdrom/preseed/ubuntu\.seed maybe-ubiquity|preseed/file=/cdrom/preseed.cfg auto=true priority=critical maybe-ubiquity|g' "$grub_cfg"
+    # Replace the preseed path AND remove maybe-ubiquity (forces d-i instead of ubiquity)
+    # Change: file=/cdrom/preseed/ubuntu.seed maybe-ubiquity -> file=/cdrom/preseed.cfg
+    sed -i 's|file=/cdrom/preseed/ubuntu\.seed maybe-ubiquity|file=/cdrom/preseed.cfg|g' "$grub_cfg"
     
-    # Also handle cases where preseed is not already specified
-    if ! grep -q "preseed/file=/cdrom/preseed.cfg" "$grub_cfg"; then
-        sed -i 's|/casper/vmlinuz|/casper/vmlinuz preseed/file=/cdrom/preseed.cfg auto=true priority=critical|g' "$grub_cfg"
-    fi
+    log "DEBUG" "GRUB config updated for preseed file loading"
     
-    log "DEBUG" "GRUB config updated for debian-installer preseed auto-installation"
-    
-    # Verify the change took effect
-    if grep -q "preseed/file=/cdrom/preseed.cfg" "$grub_cfg" && grep -q "auto=true" "$grub_cfg"; then
-        log "SUCCESS" "Boot parameters configured for automated installation with debian-installer"
-        log "DEBUG" "Updated Ubuntu entries:"
-        grep "preseed/file=/cdrom/preseed.cfg" "$grub_cfg" | head -2 | sed 's/^/  /'
+    # Verify the changes took effect
+    if grep -q "file=/cdrom/preseed.cfg" "$grub_cfg"; then
+        log "SUCCESS" "Boot parameters configured to load preseed from /cdrom/preseed.cfg"
+        log "DEBUG" "Verified preseed parameter in GRUB:"
+        grep "file=/cdrom/preseed.cfg" "$grub_cfg" | head -2 | sed 's/^/  /'
     else
-        log "WARN" "GRUB config update may have failed - verify preseed/file and auto=true are present"
+        log "WARN" "GRUB config update may have failed - verify file=/cdrom/preseed.cfg is present"
     fi
     
     # Warn user if we detect other OSes in GRUB menu
