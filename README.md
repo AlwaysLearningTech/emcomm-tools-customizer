@@ -24,9 +24,9 @@ ETC already includes all ham radio tools (Winlink, VARA, JS8Call, fldigi, etc.).
 - ✅ **Automatic user config restoration** (from `etc-user-backup-*.tar.gz` if present)
 - ✅ **APRS configuration** (iGate, beacon, digipeater with smart beaconing)
 - ✅ **Ham radio CAT control** (Anytone D578UV with DigiRig Mobile, rigctld auto-start)
-- ✅ **Optional et-os-addons overlay** (if cached):
-  - GridTracker, WSJT-X Improved, QSSTV, XYGrib, Kiwix, JS8Spotter, NetControl
-  - No internet required - use existing cache or skip
+- ✅ **Optional et-os-addons features** (individually configurable):
+  - VR-N76 radio config, GridTracker, WSJT-X Improved, QSSTV, XYGrib, Kiwix, JS8Spotter, NetControl, WiFi hotspot, user backup tool
+  - Control via `ENABLE_ETOSADDONS_*` variables in `secrets.env` (all enabled by default)
 - ✅ Git configuration
 - ✅ Embedded cache files for faster rebuilds (use `-m` for minimal)
 
@@ -309,7 +309,7 @@ sudo ./build-etc-iso.sh -r stable -v
 | `-v` | Verbose mode (bash -x tracing) |
 | `-h` | Show help |
 
-**Note**: et-os-addons (GridTracker, WSJT-X Improved, QSSTV, etc.) is **always included** in every build—no flag needed.
+**Note**: Optional et-os-addons features are enabled by default via `ENABLE_ETOSADDONS_*` variables. Disable individual features by setting them to `"no"` in `secrets.env`.
 
 ### Release Modes
 
@@ -327,37 +327,33 @@ on the same machine you install to.
 
 Use `-m` for a minimal build that excludes these files (saves ~4GB).
 
-### Expert Customization with et-os-addons (`-a` flag)
+### Customizing et-os-addons Features
 
-The `-a` flag integrates [et-os-addons](https://github.com/clifjones/et-os-addons) - a community 
-enhancement package that adds powerful FT8 and digital mode capabilities:
+Optional features from [et-os-addons](https://github.com/clifjones/et-os-addons) are integrated into every build. Control individual features via `ENABLE_ETOSADDONS_*` variables in `secrets.env`.
 
-**Packages Added:**
-- **WSJT-X Improved** - FT8/FT4 with optimized settings for radio operators
-- **GridTracker 2** - Real-time propagation and CQ spotting via FT8/FT4
-- **SSTV (Slow Scan TV)** - Send/receive images over radio
-- **Weather Tools** - Integration with local weather stations
-- **Additional Digital Mode Configurations** - Enhanced settings for PSK, RTTY, Olivia, etc.
+**What's Available:**
+- **GridTracker 2** - Real-time FT8/FT4 propagation and CQ spotting
+- **WSJT-X Improved** - FT8/FT4 with optimized settings
+- **QSSTV** - Slow-scan TV transmission and reception  
+- **XYGrib** - Weather routing and GRIB file downloads
+- **Kiwix** - Offline Wikipedia and documentation archives
+- **JS8Call Spotter** - JS8Call network spotting integration
+- **NetControl** - Network control and monitoring utility
+- **WiFi Hotspot** - Quick WiFi AP sharing from command line
+- **User Backup/Restore** - Backup and restore ETC user settings
+- **VR-N76 Radio Config** - Support for VGC VR-N76 radio (always included)
 
-**Usage:**
+**Configuration:**
+Features default to enabled. To disable specific features, edit `secrets.env`:
 ```bash
-# Build with et-os-addons enabled
-sudo ./build-etc-iso.sh -r stable -a
-
-# Combine with other options
-sudo ./build-etc-iso.sh -r stable -a -m  # Addons + minimal cache
+ENABLE_ETOSADDONS_WSJTX="yes"        # Keep WSJT-X
+ENABLE_ETOSADDONS_GRIDTRACKER="yes"  # Keep GridTracker
+ENABLE_ETOSADDONS_QSSTV="no"         # Exclude QSSTV
+ENABLE_ETOSADDONS_KIWIX="no"         # Exclude offline Wikipedia
+ENABLE_ETOSADDONS_NETCONTROL="no"    # Exclude NetControl
 ```
 
-**Size Impact:**
-- Standard ISO: ~4.5 GB
-- With `-a` flag: ~6.5 GB (adds ~2 GB)
-- With `-a -m` flags: ~2.5 GB (minimal, no embedded cache)
-
-**Recommended Use Cases:**
-- 🎯 **FT8 Specialists** - Want WSJT-X + GridTracker on every boot
-- 🌍 **DXpeditions** - Need propagation monitoring + digital modes
-- 📻 **Portable Operators** - Run full-featured digital setup on low-power hardware
-- 👥 **Community Builders** - Share a "ready to go" digital modes platform
+Disabled features won't be installed, saving build time and ISO size. See the [Optional et-os-addons Features](#optional-et-os-addons-features) table above for all available variables and descriptions.
 
 **Note:** et-os-addons overlay is automatically applied if cached (no configuration needed). 
 Drop the cached copy into `cache/et-os-addons-main/` or let the script skip it if unavailable.
