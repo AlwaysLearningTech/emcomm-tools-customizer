@@ -420,7 +420,6 @@ WINLINK_PASSWORD=""            # Your Winlink password
 
 # === APRS Configuration ===
 APRS_SSID="10"                 # SSID (0-15, 10=iGate)
-```
 APRS_PASSCODE="-1"             # APRS-IS passcode (-1=RX only)
 APRS_SYMBOL="/r"               # Symbol: table+code (/r=antenna)
 APRS_COMMENT="EmComm iGate"    # Beacon comment
