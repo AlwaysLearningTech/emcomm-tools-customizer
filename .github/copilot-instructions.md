@@ -11,10 +11,11 @@
 5. **MODIFY ETC TEMPLATES DIRECTLY** - Don't create parallel config systems. Modify ETC's templates in `/opt/emcomm-tools/conf/template.d/` with our values while keeping their `{{ET_*}}` placeholders.
 6. **NO UPDATE CONCERNS** - ETC rebuilds fresh each version. There are NO updates to break. Stop worrying about conflicts with "future updates".
 7. **BUILD MACHINE = TARGET MACHINE** - User rebuilds on same hardware. Cache and logs should persist in ISO.
-8. **LOOK AT ACTUAL FILES FIRST** - Verify current state before changes.
-9. **UPDATE DOCUMENTATION IN-PLACE** - Modify existing README.md directly.
-10. **COMMIT BEFORE BUILDS** - ALWAYS remind user to commit and sync changes before starting a build. After build completes, user may overwrite OS with new ISO before syncing!
-11. **SUDO PASSWORD ALERT** - When a terminal command requires sudo and prompts for password, STOP immediately and notify the user. User often doesn't notice terminal prompts while chat is processing.
+8. **READ CONFIG FILES FIRST** - Before investigating issues, READ the actual config file being used (e.g., `/etc/conky/conky.conf`, `/etc/lsb-release`, `/opt/emcomm-tools/bin/et-system-info`). Don't guess - let the code tell you what's happening.
+9. **LOOK AT ACTUAL FILES FIRST** - Verify current state before changes.
+10. **UPDATE DOCUMENTATION IN-PLACE** - Modify existing README.md directly.
+11. **COMMIT BEFORE BUILDS** - ALWAYS remind user to commit and sync changes before starting a build. After build completes, user may overwrite OS with new ISO before syncing!
+12. **SUDO PASSWORD ALERT** - When a terminal command requires sudo and prompts for password, STOP immediately and notify the user. User often doesn't notice terminal prompts while chat is processing.
 12. **NO TEE IN BUILD COMMANDS** - Never use `tee` in build scripts when running with sudo (causes hangs/timeouts). Output goes to logs/ automatically.
 13. **UBUNTU 22.10 IS EOL** - CRITICAL: Kinetic (22.10) is end-of-life. ALWAYS fix apt sources before any apt operations in chroot:
     ```bash
@@ -22,7 +23,8 @@
     chroot "${SQUASHFS_DIR}" sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
     ```
     Do this BEFORE apt-get update or any apt-get install commands. This MUST happen early in customize_packages() function.
-14. **NEVER DELETE FILES WITHOUT ASKING** - Do NOT use `rm -rf` on ISOs, build artifacts, or any user files without explicit permission. Always ask first or make backups.
+15. **SQUASHFS REBUILD TIME** - Realistic estimate is 90-120 minutes total build time, not 10-20 minutes. xz compression with mksquashfs takes significant time. Update docs if time estimates are shown to user.
+16. **NEVER DELETE FILES WITHOUT ASKING** - Do NOT use `rm -rf` on ISOs, build artifacts, or any user files without explicit permission. Always ask first or make backups.
 
 ## VERIFICATION REQUIREMENTS - NON-NEGOTIABLE
 **When code claims to fix a problem or user says something is broken:**
@@ -49,6 +51,30 @@
 
 ## ETC: How It Actually Works
 
+### Build Architecture: Cubic vs. install.sh (CRITICAL DISTINCTION)
+
+**Cubic's Role (ISO Image Creation):**
+- Cubic is the GUI tool that creates **custom ISO images** by extracting/modifying Ubuntu's squashfs filesystem
+- It handles ISO metadata: version, filename, volume ID, release name ("TTP"), disk name
+- As Cubic's **final step**, it updates `/etc/lsb-release` with `DISTRIB_DESCRIPTION="ETC_R5_FINAL (Cubic 2025-08-22 21:58)"`
+- This metadata update is how conky displays the correct version name
+- Cubic **does NOT run ETC's install.sh** - that happens before Cubic's finalization step, inside the chroot environment
+
+**install.sh's Role (System Installation):**
+- Runs **INSIDE** the squashfs chroot while Cubic has it mounted for editing
+- Acts as an orchestrator: downloads ETC tarballs, compiles software from source, deploys overlay files
+- **Upstream code confirms**: install.sh does NOT modify `/etc/lsb-release` or system metadata files
+- Configures ham radio software (direwolf, pat, VARA, etc.) with reasonable defaults
+- The overlay files it applies are pre-built templates ETC developers created
+- Can be run on a live system or already-installed system, not just during ISO build
+
+**Key Insight: Cubic's Metadata Step is Essential**
+- When we download Ubuntu 22.10 ISO, it's clean (no ETC metadata)
+- Cubic adds DISTRIB_DESCRIPTION when finalizing the ISO for distribution
+- Our xorriso-based automated build **must replicate** Cubic's metadata step
+- This is NOT a bug in ETC's install.sh - it's by design: install.sh handles system config, Cubic handles ISO metadata
+- Therefore, our `update_release_info()` function correctly replaces Cubic's metadata finalization
+
 ### Official Build Method (from https://community.emcommtools.com)
 The official ETC build process uses **Cubic** (GUI tool) to:
 1. Download Ubuntu 22.10 ISO
@@ -57,21 +83,22 @@ The official ETC build process uses **Cubic** (GUI tool) to:
 4. Download the ETC installer tarball: `wget https://github.com/thetechprepper/emcomm-tools-os-community/archive/refs/tags/emcomm-tools-os-community-20251128-r5-final-5.0.0.tar.gz`
 5. Extract the tarball: `tar -xzf emcomm-tools-os-community-*.tar.gz`
 6. Navigate to scripts directory: `cd emcomm-tools-os-community-*/scripts`
-7. Run `./install.sh` inside the chroot
+7. Run `./install.sh` inside the chroot (does NOT modify lsb-release)
 8. Optionally select offline maps (10-20 minutes per state map)
 9. Run post-install validation: `./run-test-suite.sh`
-10. Exit chroot
-11. Use Cubic to finalize and compress the ISO
+10. Exit chroot and let Cubic finalize by updating `/etc/lsb-release` with ISO metadata
+11. Use Cubic to compress the ISO
 12. Flash the resulting ISO to USB
 
 ### Our Automated Approach
 Instead of using Cubic GUI, `build-etc-iso.sh` automates the same steps using:
 - **xorriso** to extract/repack ISOs without GUI
 - **squashfs-tools** to work with squashfs filesystems
-- **chroot** to execute `install.sh` in an isolated environment
+- **chroot** to execute `install.sh` in an isolated environment (just like Cubic does)
 - **dconf** for GNOME settings (instead of manual desktop config)
+- **update_release_info()** function to update `/etc/lsb-release` (replacing Cubic's metadata finalization step)
 
-The net result is identical: a customized ETC ISO with our WiFi, hostname, and APRS settings.
+The net result is identical: a customized ETC ISO with our WiFi, hostname, APRS settings, AND correct version metadata.
 
 ### The Upstream Repository Structure
 The ETC repository (https://github.com/thetechprepper/emcomm-tools-os-community) contains:
@@ -98,9 +125,12 @@ The `install.sh` script runs INSIDE the squashfs chroot during ISO build to:
 - **Latest builds**: Between releases, ETC publishes pre-release builds as GitHub TAGS (not Releases)
   - Examples: `emcomm-tools-os-community-20251121-r5-final-5.0.0-pre-release.a`, `emcomm-tools-os-community-20251113-r5-build17`
   - Found in Tags tab, NOT Releases tab
+  - **CRITICAL**: Tags include build numbers in the tag name (e.g., `r5-build17`, `r5-build3`). The **build number** is what shows in system info!
   - Built and tagged automatically, may be unstable
-  - Use `-r latest` to download most recent tag (may include pre-releases)
+  - Use `-r latest` to download most recent TAG (which may be a pre-release or build number)
+  - Use `-r stable` to download from official RELEASES tab (stable R5, R4, R3 only)
   - Use `-r tag -t <specific-tag>` to pin a specific tag
+  - **What this means**: If conky shows "build 3", that's from the ETC tag name that was installed, NOT from our customizer script. We must update `/etc/lsb-release` DISTRIB_DESCRIPTION during build to reflect the actual version.
 
 - **GitHub tarball_url**: Points to the repository snapshot at that tag/release
   - This is the ETC installer source code and overlay files
