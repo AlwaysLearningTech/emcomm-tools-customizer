@@ -1249,6 +1249,118 @@ high-contrast=false
 EOF
     fi
 
+# ============================================================================
+# Update System Release Information
+# ============================================================================
+
+update_release_info() {
+    log "INFO" "Updating system release information..."
+    
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    log "DEBUG" "Sourced secrets file for release info"
+    
+    local lsb_release_file="${SQUASHFS_DIR}/etc/lsb-release"
+    
+    if [ ! -f "$lsb_release_file" ]; then
+        log "WARN" "lsb-release not found at: $lsb_release_file"
+        return 0
+    fi
+    
+    # Update DISTRIB_DESCRIPTION with our custom version
+    # Format: "ETC_{RELEASE_NUMBER}_{BUILD_NUMBER_IF_EXISTS} (Customized)"
+    local custom_description="ETC_${RELEASE_NUMBER}"
+    if [ -n "$BUILD_NUMBER" ]; then
+        custom_description="${custom_description}_${BUILD_NUMBER}"
+    fi
+    custom_description="${custom_description} (KD7DGF Custom)"
+    
+    log "DEBUG" "Updating DISTRIB_DESCRIPTION to: $custom_description"
+    
+    # Use sed to update the DISTRIB_DESCRIPTION line
+    sed -i "s|DISTRIB_DESCRIPTION=.*|DISTRIB_DESCRIPTION=\"${custom_description}\"|" "$lsb_release_file"
+    
+    log "SUCCESS" "Release info updated"
+    log "DEBUG" "New lsb-release:"
+    grep DISTRIB "$lsb_release_file" | while IFS= read -r line; do
+        log "DEBUG" "  $line"
+    done
+}
+
+customize_desktop() {
+    log "INFO" "Configuring desktop preferences..."
+    
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    log "DEBUG" "Sourced secrets file for desktop config"
+    
+    local color_scheme="${DESKTOP_COLOR_SCHEME:-prefer-dark}"
+    local scaling="${DESKTOP_SCALING_FACTOR:-1.0}"
+    local disable_a11y="${DISABLE_ACCESSIBILITY:-yes}"
+    local auto_brightness="${AUTOMATIC_SCREEN_BRIGHTNESS:-false}"
+    local dim_screen="${DIM_SCREEN:-true}"
+    local screen_blank="${SCREEN_BLANK:-true}"
+    local screen_blank_timeout="${SCREEN_BLANK_TIMEOUT:-300}"
+    
+    log "DEBUG" "Desktop config: color_scheme=$color_scheme, scaling=$scaling"
+    log "DEBUG" "Display config: auto_brightness=$auto_brightness, dim=$dim_screen, blank=$screen_blank"
+    
+    # GNOME dconf uses a binary database, not plain text files in user.d
+    # To set system-wide defaults, we use:
+    #   1. /etc/dconf/profile/user - defines database cascade order
+    #   2. /etc/dconf/db/local.d/* - settings files (keyfile format)
+    #   3. Run 'dconf update' to compile the database
+    
+    # Create dconf profile to include local database
+    local dconf_profile_dir="${SQUASHFS_DIR}/etc/dconf/profile"
+    local dconf_db_dir="${SQUASHFS_DIR}/etc/dconf/db/local.d"
+    mkdir -p "$dconf_profile_dir" "$dconf_db_dir"
+    
+    # Create profile that includes local database before user settings
+    cat > "${dconf_profile_dir}/user" <<'EOF'
+user-db:user
+system-db:local
+EOF
+    log "DEBUG" "Created dconf profile"
+    
+    # Determine theme based on color scheme
+    local gtk_theme="Yaru"
+    local icon_theme="Yaru"
+    if [[ "$color_scheme" == "prefer-dark" ]]; then
+        gtk_theme="Yaru-dark"
+        icon_theme="Yaru-dark"
+    fi
+    
+    # Create dconf settings file (keyfile format)
+    local dconf_file="${dconf_db_dir}/00-emcomm-defaults"
+    log "DEBUG" "Writing dconf settings to: $dconf_file"
+    cat > "$dconf_file" <<EOF
+# EmComm Tools Customizer - Desktop Preferences
+# Color scheme and theme
+[org/gnome/desktop/interface]
+color-scheme='${color_scheme}'
+gtk-theme='${gtk_theme}'
+icon-theme='${icon_theme}'
+text-scaling-factor=${scaling}
+EOF
+
+    # Add accessibility settings if disabled
+    if [[ "$disable_a11y" == "yes" ]]; then
+        cat >> "$dconf_file" <<'EOF'
+
+# Disable accessibility features
+[org/gnome/desktop/a11y]
+always-show-universal-access-status=false
+
+[org/gnome/desktop/a11y/applications]
+screen-keyboard-enabled=false
+screen-reader-enabled=false
+
+[org/gnome/desktop/a11y/interface]
+high-contrast=false
+EOF
+    fi
+
     # Add display/brightness settings
     cat >> "$dconf_file" <<EOF
 
@@ -3309,7 +3421,7 @@ EOF
 # ============================================================================
 
 rebuild_squashfs() {
-    log "INFO" "Rebuilding squashfs filesystem (this takes 10-20 minutes)..."
+    log "INFO" "Rebuilding squashfs filesystem (this can take 80-120 minutes due to xz compression)..."
     
     local new_squashfs="${WORK_DIR}/filesystem.squashfs.new"
     log "DEBUG" "Creating new squashfs: $new_squashfs"
@@ -3510,9 +3622,9 @@ main() {
     log "INFO" "=== Applying Customizations ==="
     log "DEBUG" "Starting customization phase..."
     
-    log "DEBUG" "Step 0/14: apply_etosaddons_overlay"
-    apply_etosaddons_overlay
-    log "DEBUG" "Step 0/14: apply_etosaddons_overlay COMPLETED"
+    # Note: et-os-addons overlay NO LONGER applied as a separate layer
+    # Instead, we integrate specific functionality directly into our build steps
+    # to avoid overwrites and maintain control over execution order
     
     log "DEBUG" "Step 1/14: customize_hostname"
     customize_hostname
@@ -3529,6 +3641,10 @@ main() {
     log "DEBUG" "Step 4/14: customize_desktop"
     customize_desktop
     log "DEBUG" "Step 4/14: customize_desktop COMPLETED"
+    
+    log "DEBUG" "Step 4a/14: update_release_info"
+    update_release_info
+    log "DEBUG" "Step 4a/14: update_release_info COMPLETED"
     
     log "DEBUG" "Step 5/14: customize_aprs"
     customize_aprs

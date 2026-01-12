@@ -49,6 +49,52 @@
 - **Core components**: hostname, WiFi, user account, desktop settings, APRS/direwolf, squashfs/ISO creation
 - **Deferrable**: Wine backup restore, Pat aliases, Wikipedia tools, cache embedding
 
+## Critical Rule: NO Parallel Overlay Systems
+
+**NEVER apply et-os-addons as a separate overlay layer.**
+
+The et-os-addons repository exists to extend ETC with optional features (GridTracker, WSJT-X Improved, QSSTV, NetControl, etc.). But we do NOT simply copy its overlay directory into the squashfs.
+
+**Why:**
+- et-os-addons overlay runs before our customizations, potentially overwriting our changes
+- Example: et-os-addons has `opt/emcomm-tools/conf/radios.d/vgc-vrn76.bt.json`; if we later write `anytone-d578uv.json` to the same directory, it depends on execution order
+- Creates unmaintainable code with undocumented dependencies between layers
+
+**What to do instead:**
+1. **Understand what et-os-addons scripts do** by reading them
+2. **Integrate that functionality directly into build-etc-iso.sh** as inline code
+3. **Control the execution order explicitly** - no surprise overwrites
+4. **Keep `/opt/emcomm-tools/` modifications in ONE place** in our script
+
+**Current violation:**
+- `apply_etosaddons_overlay()` at Step 0 copies the entire et-os-addons overlay
+- This happens BEFORE our modifications, potentially masking our changes
+- Solution: Remove this function and integrate et-os-addons features directly
+
+**What et-os-addons currently provides (to be integrated as needed):**
+- Optional application launchers in `/opt/emcomm-tools/bin/`:
+  - `et-hotspot` - Wifi hotspot utility
+  - `et-js8spotter` - JS8Call spotter
+  - `et-netcontrol` - Network control utility  
+  - `et-qsstv` - QSSTV launcher
+  - `et-wsjtx` - WSJT-X launcher
+  - `et-user-backup` - User backup manager
+  - `et-vr-n76-old` - VR-N76 radio utility
+- Radio config: `vgc-vrn76.bt.json` (VGC VR-N76 radio in `/opt/emcomm-tools/conf/radios.d/`)
+- Application templates in `/opt/emcomm-tools/conf/template.d/`:
+  - `qsstv_9.0.conf`
+  - `WSJT-X.conf`
+  - `sources.list`
+- Desktop .desktop files in `/usr/share/applications/`
+- GLIB schemas for GNOME integration
+
+**Integration approach:**
+- For binary scripts: Copy selectively if user wants them (check ENABLE_* vars)
+- For radio configs: Append to our radio configuration step (no overwrite risk)
+- For templates: Modify in-place after our step (same approach as APRS template)
+- For .desktop files: Create only what user configures
+- For GLIB schemas: Generate or copy only if needed
+
 ## ETC: How It Actually Works
 
 ### Build Architecture: Cubic vs. install.sh (CRITICAL DISTINCTION)
