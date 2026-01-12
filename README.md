@@ -73,6 +73,30 @@ This customizer **respects upstream ETC architecture**. We:
   - Text-based installer (d-i) respects all preseed directives including partitioning
 - **Anytone D578UV radio**: Radio configuration added to et-radio menu (rigctrl ID 301)
 
+### Optional et-os-addons Features
+
+The `et-os-addons` repository provides optional application launchers and configurations. These are **enabled by default** but can be disabled via `ENABLE_ETOSADDONS_*` variables in `secrets.env`:
+
+| Feature | Variable | Description |
+|---------|----------|-------------|
+| VR-N76 Radio | `ENABLE_ETOSADDONS_VR_N76` | VR-N76 old radio utility and preset config |
+| QSSTV | `ENABLE_ETOSADDONS_QSSTV` | QSSTV slow-scan TV launcher and config template |
+| WSJT-X | `ENABLE_ETOSADDONS_WSJTX` | WSJT-X launcher and config template |
+| JS8 Spotter | `ENABLE_ETOSADDONS_JS8SPOTTER` | JS8Call spotting utility and launcher |
+| NetControl | `ENABLE_ETOSADDONS_NETCONTROL` | Network control utility with launcher |
+| WiFi Hotspot | `ENABLE_ETOSADDONS_HOTSPOT` | WiFi hotspot launcher utility |
+| User Backup | `ENABLE_ETOSADDONS_USERBACKUP` | User backup/restore manager utility |
+| Kiwix | `ENABLE_ETOSADDONS_KIWIX` | Offline content browser with desktop integration |
+| VGC VR-N76 Radio | Always enabled | VGC VR-N76 radio config for `et-radio` menu |
+
+**To disable a feature**, set the variable to `"no"` in `secrets.env`:
+```bash
+ENABLE_ETOSADDONS_QSSTV="no"        # Disable QSSTV
+ENABLE_ETOSADDONS_WSJTX="no"        # Disable WSJT-X
+```
+
+All features default to `"yes"` and are integrated explicitly into the build process with no overwrites.
+
 ## Fully Automated Installation
 
 The ISO uses **debian-installer (d-i)** with preseed for zero-interaction installation. All setup questions are answered automatically from your configuration.

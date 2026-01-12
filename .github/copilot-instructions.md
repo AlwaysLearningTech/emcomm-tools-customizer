@@ -278,15 +278,18 @@ Automated customization of EmComm Tools Community (ETC) ISO images.
 - Desktop preferences (dark mode, scaling)
 - Accessibility disabled (screen reader, on-screen keyboard, auto-brightness)
 - APRS configuration (iGate, beaconing) - modifies ETC's direwolf templates
+- Ham radio CAT control (Anytone D578UV with DigiRig Mobile)
 - Git configuration
 - VS Code workspace setup (Projects directory in ~/.config/emcomm-tools/)
 - User account with password (NO autologin by default)
+- **et-os-addons optional features** (QSSTV, WSJT-X, JS8Spotter, NetControl, Hotspot, etc.)
+  - Integrated explicitly with `ENABLE_ETOSADDONS_*` variables (all enabled by default)
+  - Can be disabled individually in `secrets.env`
 - **Settings preservation** from existing ETC (via `et-user-backup` tarball)
 - **Wine/VARA preservation** from existing ETC (via Wine backup tarball with pre-registered licenses)
 
 ### Future Enhancements (TODO)
 
-- **D578 CAT Control**: Hamlib/rigctld configuration for Anytone D578UV (post-install script)
 - **GPS Auto-Detection**: Automatic grid square from GPS hardware
 - **Radio Auto-Detection**: USB VID/PID detection for CAT control setup
 
