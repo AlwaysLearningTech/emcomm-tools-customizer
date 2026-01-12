@@ -1276,7 +1276,7 @@ EOF
 
 # Disable accessibility features
 [org/gnome/desktop/a11y]
-always-show-universal-access-status=false
+always-show-universal-access-status=true
 
 [org/gnome/desktop/a11y/applications]
 screen-keyboard-enabled=false
