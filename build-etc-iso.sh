@@ -1284,6 +1284,16 @@ screen-reader-enabled=false
 
 [org/gnome/desktop/a11y/interface]
 high-contrast=false
+large-text=false
+
+[org/gnome/terminal/legacy]
+menu-accelerator-enabled=true
+
+[org/gnome/desktop/interface]
+text-scaling-factor=1.0
+
+[org/gnome/settings-daemon/peripherals/keyboard]
+remember-numlock-state=true
 EOF
     fi
 
