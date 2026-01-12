@@ -1659,6 +1659,170 @@ EOF
     log "SUCCESS" "Ham radio CAT control enabled: rigctld listens on localhost:4532"
 }
 
+integrate_etosaddons_features() {
+    log "INFO" "Integrating et-os-addons optional features..."
+    
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    log "DEBUG" "Sourced secrets file for et-os-addons config"
+    
+    local addons_overlay="${CACHE_DIR}/et-os-addons-main/overlay"
+    
+    if [ ! -d "$addons_overlay" ]; then
+        log "DEBUG" "et-os-addons overlay not found in cache - skipping optional features"
+        return 0
+    fi
+    
+    # === VR-N76 Old Radio Support ===
+    local enable_vr_n76="${ENABLE_ETOSADDONS_VR_N76:-yes}"
+    if [ "$enable_vr_n76" = "yes" ]; then
+        if [ -f "${addons_overlay}/opt/emcomm-tools/bin/et-vr-n76-old" ]; then
+            log "DEBUG" "Installing et-vr-n76-old launcher..."
+            cp "${addons_overlay}/opt/emcomm-tools/bin/et-vr-n76-old" \
+                "${SQUASHFS_DIR}/opt/emcomm-tools/bin/" 2>/dev/null && \
+                chmod 755 "${SQUASHFS_DIR}/opt/emcomm-tools/bin/et-vr-n76-old" || \
+                log "WARN" "Failed to copy et-vr-n76-old"
+        fi
+    fi
+    
+    # === QSSTV Optional Feature ===
+    local enable_qsstv="${ENABLE_ETOSADDONS_QSSTV:-yes}"
+    if [ "$enable_qsstv" = "yes" ]; then
+        if [ -f "${addons_overlay}/opt/emcomm-tools/bin/et-qsstv" ]; then
+            log "DEBUG" "Installing et-qsstv launcher..."
+            cp "${addons_overlay}/opt/emcomm-tools/bin/et-qsstv" \
+                "${SQUASHFS_DIR}/opt/emcomm-tools/bin/" 2>/dev/null && \
+                chmod 755 "${SQUASHFS_DIR}/opt/emcomm-tools/bin/et-qsstv" || \
+                log "WARN" "Failed to copy et-qsstv"
+        fi
+        if [ -f "${addons_overlay}/opt/emcomm-tools/conf/template.d/qsstv_9.0.conf" ]; then
+            log "DEBUG" "Installing QSSTV config template..."
+            cp "${addons_overlay}/opt/emcomm-tools/conf/template.d/qsstv_9.0.conf" \
+                "${SQUASHFS_DIR}/opt/emcomm-tools/conf/template.d/" 2>/dev/null || \
+                log "WARN" "Failed to copy QSSTV template"
+        fi
+    fi
+    
+    # === WSJT-X Optional Feature ===
+    local enable_wsjtx="${ENABLE_ETOSADDONS_WSJTX:-yes}"
+    if [ "$enable_wsjtx" = "yes" ]; then
+        if [ -f "${addons_overlay}/opt/emcomm-tools/bin/et-wsjtx" ]; then
+            log "DEBUG" "Installing et-wsjtx launcher..."
+            cp "${addons_overlay}/opt/emcomm-tools/bin/et-wsjtx" \
+                "${SQUASHFS_DIR}/opt/emcomm-tools/bin/" 2>/dev/null && \
+                chmod 755 "${SQUASHFS_DIR}/opt/emcomm-tools/bin/et-wsjtx" || \
+                log "WARN" "Failed to copy et-wsjtx"
+        fi
+        if [ -f "${addons_overlay}/opt/emcomm-tools/conf/template.d/WSJT-X.conf" ]; then
+            log "DEBUG" "Installing WSJT-X config template..."
+            cp "${addons_overlay}/opt/emcomm-tools/conf/template.d/WSJT-X.conf" \
+                "${SQUASHFS_DIR}/opt/emcomm-tools/conf/template.d/" 2>/dev/null || \
+                log "WARN" "Failed to copy WSJT-X template"
+        fi
+    fi
+    
+    # === JS8 Spotter Optional Feature ===
+    local enable_js8spotter="${ENABLE_ETOSADDONS_JS8SPOTTER:-yes}"
+    if [ "$enable_js8spotter" = "yes" ]; then
+        if [ -f "${addons_overlay}/opt/emcomm-tools/bin/et-js8spotter" ]; then
+            log "DEBUG" "Installing et-js8spotter launcher..."
+            cp "${addons_overlay}/opt/emcomm-tools/bin/et-js8spotter" \
+                "${SQUASHFS_DIR}/opt/emcomm-tools/bin/" 2>/dev/null && \
+                chmod 755 "${SQUASHFS_DIR}/opt/emcomm-tools/bin/et-js8spotter" || \
+                log "WARN" "Failed to copy et-js8spotter"
+        fi
+        if [ -f "${addons_overlay}/usr/share/applications/js8spotter.desktop" ]; then
+            log "DEBUG" "Installing JS8Spotter desktop file..."
+            mkdir -p "${SQUASHFS_DIR}/usr/share/applications"
+            cp "${addons_overlay}/usr/share/applications/js8spotter.desktop" \
+                "${SQUASHFS_DIR}/usr/share/applications/" 2>/dev/null || \
+                log "WARN" "Failed to copy JS8Spotter desktop file"
+        fi
+    fi
+    
+    # === Network Control Optional Feature ===
+    local enable_netcontrol="${ENABLE_ETOSADDONS_NETCONTROL:-yes}"
+    if [ "$enable_netcontrol" = "yes" ]; then
+        if [ -f "${addons_overlay}/opt/emcomm-tools/bin/et-netcontrol" ]; then
+            log "DEBUG" "Installing et-netcontrol launcher..."
+            cp "${addons_overlay}/opt/emcomm-tools/bin/et-netcontrol" \
+                "${SQUASHFS_DIR}/opt/emcomm-tools/bin/" 2>/dev/null && \
+                chmod 755 "${SQUASHFS_DIR}/opt/emcomm-tools/bin/et-netcontrol" || \
+                log "WARN" "Failed to copy et-netcontrol"
+        fi
+        if [ -f "${addons_overlay}/usr/share/applications/netcontrol.desktop" ]; then
+            log "DEBUG" "Installing NetControl desktop file..."
+            mkdir -p "${SQUASHFS_DIR}/usr/share/applications"
+            cp "${addons_overlay}/usr/share/applications/netcontrol.desktop" \
+                "${SQUASHFS_DIR}/usr/share/applications/" 2>/dev/null || \
+                log "WARN" "Failed to copy NetControl desktop file"
+        fi
+        if [ -f "${addons_overlay}/usr/share/pixmaps/netcontrol.png" ]; then
+            log "DEBUG" "Installing NetControl icon..."
+            mkdir -p "${SQUASHFS_DIR}/usr/share/pixmaps"
+            cp "${addons_overlay}/usr/share/pixmaps/netcontrol.png" \
+                "${SQUASHFS_DIR}/usr/share/pixmaps/" 2>/dev/null || \
+                log "WARN" "Failed to copy NetControl icon"
+        fi
+    fi
+    
+    # === WiFi Hotspot Optional Feature ===
+    local enable_hotspot="${ENABLE_ETOSADDONS_HOTSPOT:-yes}"
+    if [ "$enable_hotspot" = "yes" ]; then
+        if [ -f "${addons_overlay}/opt/emcomm-tools/bin/et-hotspot" ]; then
+            log "DEBUG" "Installing et-hotspot launcher..."
+            cp "${addons_overlay}/opt/emcomm-tools/bin/et-hotspot" \
+                "${SQUASHFS_DIR}/opt/emcomm-tools/bin/" 2>/dev/null && \
+                chmod 755 "${SQUASHFS_DIR}/opt/emcomm-tools/bin/et-hotspot" || \
+                log "WARN" "Failed to copy et-hotspot"
+        fi
+    fi
+    
+    # === User Backup Manager Optional Feature ===
+    local enable_userbackup="${ENABLE_ETOSADDONS_USERBACKUP:-yes}"
+    if [ "$enable_userbackup" = "yes" ]; then
+        if [ -f "${addons_overlay}/opt/emcomm-tools/bin/et-user-backup" ]; then
+            log "DEBUG" "Installing et-user-backup utility..."
+            cp "${addons_overlay}/opt/emcomm-tools/bin/et-user-backup" \
+                "${SQUASHFS_DIR}/opt/emcomm-tools/bin/" 2>/dev/null && \
+                chmod 755 "${SQUASHFS_DIR}/opt/emcomm-tools/bin/et-user-backup" || \
+                log "WARN" "Failed to copy et-user-backup"
+        fi
+    fi
+    
+    # === Kiwix Offline Content Browser ===
+    local enable_kiwix="${ENABLE_ETOSADDONS_KIWIX:-yes}"
+    if [ "$enable_kiwix" = "yes" ]; then
+        if [ -f "${addons_overlay}/usr/share/applications/kiwix.desktop" ]; then
+            log "DEBUG" "Installing Kiwix desktop file..."
+            mkdir -p "${SQUASHFS_DIR}/usr/share/applications"
+            cp "${addons_overlay}/usr/share/applications/kiwix.desktop" \
+                "${SQUASHFS_DIR}/usr/share/applications/" 2>/dev/null || \
+                log "WARN" "Failed to copy Kiwix desktop file"
+        fi
+        if [ -f "${addons_overlay}/usr/share/pixmaps/kiwix-desktop.svg" ]; then
+            log "DEBUG" "Installing Kiwix icon..."
+            mkdir -p "${SQUASHFS_DIR}/usr/share/pixmaps"
+            cp "${addons_overlay}/usr/share/pixmaps/kiwix-desktop.svg" \
+                "${SQUASHFS_DIR}/usr/share/pixmaps/" 2>/dev/null || \
+                log "WARN" "Failed to copy Kiwix icon"
+        fi
+    fi
+    
+    # === VGC VR-N76 Radio Config ===
+    # Always include this radio option (no ENABLE variable needed)
+    if [ -f "${addons_overlay}/opt/emcomm-tools/conf/radios.d/vgc-vrn76.bt.json" ]; then
+        log "DEBUG" "Installing VGC VR-N76 radio config..."
+        local radios_dir="${SQUASHFS_DIR}/opt/emcomm-tools/conf/radios.d"
+        mkdir -p "$radios_dir"
+        cp "${addons_overlay}/opt/emcomm-tools/conf/radios.d/vgc-vrn76.bt.json" \
+            "${SQUASHFS_DIR}/opt/emcomm-tools/conf/radios.d/" 2>/dev/null || \
+            log "WARN" "Failed to copy VGC VR-N76 radio config"
+    fi
+    
+    log "SUCCESS" "et-os-addons features integrated"
+}
+
 customize_user_and_autologin() {
     log "INFO" "Configuring user account..."
     
@@ -3653,6 +3817,10 @@ main() {
     log "DEBUG" "Step 6/14: customize_radio_configs"
     customize_radio_configs
     log "DEBUG" "Step 6/14: customize_radio_configs COMPLETED"
+    
+    log "DEBUG" "Step 6a/14: integrate_etosaddons_features"
+    integrate_etosaddons_features
+    log "DEBUG" "Step 6a/14: integrate_etosaddons_features COMPLETED"
     
     log "DEBUG" "Step 7/14: customize_user_and_autologin"
     customize_user_and_autologin
