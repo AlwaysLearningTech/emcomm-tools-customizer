@@ -355,8 +355,11 @@ ENABLE_ETOSADDONS_NETCONTROL="no"    # Exclude NetControl
 
 Disabled features won't be installed, saving build time and ISO size. See the [Optional et-os-addons Features](#optional-et-os-addons-features) table above for all available variables and descriptions.
 
-**Note:** et-os-addons overlay is automatically applied if cached (no configuration needed). 
-Drop the cached copy into `cache/et-os-addons-main/` or let the script skip it if unavailable.
+**Note:** et-os-addons features require the source in `cache/et-os-addons-main/`. Clone it with:
+```bash
+git clone https://github.com/clifjones/et-os-addons.git cache/et-os-addons-main
+```
+If not present, the build continues normally with features disabled.
 
 ## Configuration Reference
 
