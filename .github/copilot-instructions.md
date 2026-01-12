@@ -370,6 +370,43 @@ Minimal dependencies:
 sudo apt install -y xorriso squashfs-tools wget curl jq
 ```
 
+## /etc/skel Build Order and Overwrites (CRITICAL)
+
+**Execution Order of Build Steps:**
+1. **Step 0**: `apply_etosaddons_overlay` - Copies entire ETC overlay to /etc/skel
+2. **Step 2**: `restore_user_backup` - **OVERWRITES /etc/skel** if backup exists in cache/
+   - Restores: `.config/emcomm-tools/user.json`, `.local/share/emcomm-tools/*`
+   - Preserved from Step 0: `.navit/maps/`, `add-ons/`, `wikipedia/`, `.fldigi/`, `.java/`, `.bashrc`
+3. **Step 5**: `customize_aprs` - Overwrites `.config/emcomm-tools/user.json` **after** backup
+4. **Step 14**: `setup_vscode_workspace` - Creates new files (no conflicts)
+
+**Key Insight:**
+- User backups (etc-user-backup-*.tar.gz) take priority over upstream ETC defaults
+- This is **intentional** - preserves user settings across rebuilds
+- Our customizations (APRS, VS Code) still apply on top because they run AFTER the backup
+- To force clean ETC defaults, user must delete `etc-user-backup-*.tar.gz` from `cache/`
+
+**What Folders Upstream ETC Creates:**
+- `/etc/skel/.config/emcomm-tools/` - ETC user config
+- `/etc/skel/.local/share/emcomm-tools/` - ETC app data (bbs-server, voacap, etc.)
+- `/etc/skel/.local/share/pat/` - Pat configs
+- `/etc/skel/.navit/maps/` - Offline maps
+- `/etc/skel/.fldigi/`, `.java/`, `.config/paracon/`, `.config/pat/`
+- `/etc/skel/add-ons/`, `notes/`, `wikipedia/`
+
+**What We Save to /etc/skel:**
+- `.config/emcomm-tools/user.json` - APRS/user settings (overwrites backup)
+- `.config/emcomm-tools/emcomm-tools.code-workspace` - VS Code workspace
+- `.config/emcomm-tools/Projects/` - Projects directory
+- `.config/emcomm-tools/restore-wine.sh` - Wine restore script
+- `.etc-backups/` - Wine backup tarball location (if backup provided)
+- `.gitconfig` - Git configuration
+
+**What Doesn't Conflict:**
+- Desktop/dconf settings (not in /etc/skel overlay, only applied at install time)
+- System-wide configs (`/opt/`, `/etc/hostname`, `/etc/lsb-release`)
+- Preseed/installer settings (in ISO root, not /etc/skel)
+
 ## When User Requests Changes
 
 ### DO:
