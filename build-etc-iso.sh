@@ -2148,7 +2148,10 @@ popularity-contest popularity-contest/participate boolean false
 # Skip final install screen
 d-i finish-install/reboot_in_progress note
 
-# Eject CD/remove USB at the end
+# Automatic reboot without waiting for media removal
+d-i finish-install/reboot_in_background boolean true
+
+# Don't prompt to remove media - go straight to reboot
 d-i cdrom-detect/eject boolean true
 EOF
     
