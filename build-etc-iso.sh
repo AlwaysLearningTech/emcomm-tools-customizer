@@ -741,18 +741,33 @@ WIKIPEDIASCRIPT
         rm -f "$exit_code_file"
     fi
     
-    # Clean up
+    if [ "$exit_code" -ne 0 ]; then
+        log "ERROR" "ETC installation failed with exit code: $exit_code"
+        cleanup_chroot_mounts
+        trap - EXIT
+        return 1
+    fi
+    
+    # Post-install customizations (while chroot mounts are still active)
+    log "INFO" "Applying post-install customizations..."
+    
+    # Configure ham radio CAT control (Anytone D578UV)
+    log "DEBUG" "Configuring radio CAT control..."
+    customize_radio_configs_in_chroot
+    
+    # Install radio programming utilities
+    log "DEBUG" "Installing radio programming utilities (chirp, edge)..."
+    chroot "${SQUASHFS_DIR}" /bin/bash -c "apt-get update && apt-get install -y chirp edge" 2>&1 | tee -a "${LOG_FILE}" || {
+        log "WARN" "Radio programming utilities installation had issues (non-critical)"
+    }
+    
+    # Clean up mounts after all in-chroot work is done
     cleanup_chroot_mounts
     trap - EXIT
     
     # Remove installer files
     log "DEBUG" "Cleaning up installer files..."
     rm -rf "$etc_install_dir"
-    
-    if [ "$exit_code" -ne 0 ]; then
-        log "ERROR" "ETC installation failed with exit code: $exit_code"
-        return 1
-    fi
     
     # Verify ETC actually installed key components
     log "INFO" "Verifying ETC installation..."
@@ -1114,8 +1129,8 @@ update_release_info() {
     fi
     
     # Update DISTRIB_DESCRIPTION to show clean release info (what conky displays)
-    # Extract the human-readable version from tag: emcomm-tools-os-community-20251128-r5-final-5.0.0
-    # Format MUST be: ETC_{RELEASE_NUMBER}_{RELEASE_TYPE} with NO SPACES (et-system-info uses awk which stops at spaces)
+    # Format mirrors Cubic's official format: ETC_R5_FINAL (with customization note)
+    # Reference: https://community.emcommtools.com/getting-stated/create-etc-image.html
     local release_type=""
     if [[ "$RELEASE_TAG" =~ -final ]]; then
         release_type="FINAL"
@@ -1125,7 +1140,11 @@ update_release_info() {
         release_type="DEV"
     fi
     
-    local custom_description="ETC_${RELEASE_NUMBER}_${release_type}"
+    # Uppercase the release number (r5 → R5)
+    local release_number_upper="${RELEASE_NUMBER^^}"
+    
+    # Format: ETC_R5_FINAL (CUSTOMIZED) to indicate this is our build
+    local custom_description="ETC_${release_number_upper}_${release_type} (CUSTOMIZED)"
     
     log "DEBUG" "Updating DISTRIB_DESCRIPTION to: $custom_description"
     
@@ -1413,12 +1432,9 @@ EOF
     log "DEBUG" "Placeholders {{ET_CALLSIGN}} and {{ET_AUDIO_DEVICE}} preserved for ETC runtime substitution"
 }
 
-customize_radio_configs() {
-    log "INFO" "Configuring ham radio CAT control (Anytone D578UV default)..."
-    
-    # CRITICAL: Set up chroot mounts for systemctl to work
-    setup_chroot_mounts
-    trap 'cleanup_chroot_mounts' EXIT
+# Configure radio in chroot (called from within install_etc_in_chroot where mounts are already active)
+customize_radio_configs_in_chroot() {
+    log "DEBUG" "Configuring Anytone D578UV CAT control in chroot..."
     
     local radios_dir="${SQUASHFS_DIR}/opt/emcomm-tools/conf/radios.d"
     mkdir -p "$radios_dir"
@@ -1522,11 +1538,15 @@ EOF
     chroot "${SQUASHFS_DIR}" systemctl enable rigctld.service 2>/dev/null || \
         log "WARN" "Could not enable rigctld in chroot (service will start on first boot)"
     
-    cleanup_chroot_mounts
-    trap - EXIT
-    
-    log "SUCCESS" "Ham radio CAT control enabled: rigctld listens on localhost:4532"
+    log "DEBUG" "Anytone D578UV CAT control configured"
 }
+
+# Configure radio AFTER ETC is installed (as customization step)
+customize_radio_configs() {
+    log "INFO" "Radio configs applied (completed during ETC post-install phase)..."
+    # NOTE: Radio configs are now written in-chroot immediately after install.sh
+    # This stub function is retained for API compatibility
+    return 0
 
 
 
