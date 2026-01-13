@@ -1115,17 +1115,17 @@ update_release_info() {
     
     # Update DISTRIB_DESCRIPTION to show clean release info (what conky displays)
     # Extract the human-readable version from tag: emcomm-tools-os-community-20251128-r5-final-5.0.0
-    # Show: "r5 final" (the actual upstream ETC release identifier)
+    # Format MUST be: ETC_{RELEASE_NUMBER}_{RELEASE_TYPE} with NO SPACES (et-system-info uses awk which stops at spaces)
     local release_type=""
     if [[ "$RELEASE_TAG" =~ -final ]]; then
-        release_type="final"
+        release_type="FINAL"
     elif [[ "$RELEASE_TAG" =~ build[0-9]+ ]]; then
         release_type="$BUILD_NUMBER"
     else
-        release_type="dev"
+        release_type="DEV"
     fi
     
-    local custom_description="${RELEASE_NUMBER} ${release_type}"
+    local custom_description="ETC_${RELEASE_NUMBER}_${release_type}"
     
     log "DEBUG" "Updating DISTRIB_DESCRIPTION to: $custom_description"
     
@@ -1528,28 +1528,7 @@ EOF
     log "SUCCESS" "Ham radio CAT control enabled: rigctld listens on localhost:4532"
 }
 
-patch_et_system_info() {
-    log "INFO" "Patching et-system-info to display full release version..."
-    
-    local et_system_info="${SQUASHFS_DIR}/opt/emcomm-tools/bin/et-system-info"
-    
-    if [ ! -f "$et_system_info" ]; then
-        log "DEBUG" "et-system-info not found - skipping patch"
-        return 0
-    fi
-    
-    # Fix the release command to show full DISTRIB_DESCRIPTION value
-    # Original: grep DISTRIB_DESCRIPTION /etc/lsb-release | sed 's|"||g' | awk '{print $1}' | cut -d"=" -f2
-    # The awk '{print $1}' strips everything after the first space, so "r5 final" becomes just "r5"
-    # 
-    # Fixed: grep DISTRIB_DESCRIPTION /etc/lsb-release | cut -d"=" -f2 | sed 's|"||g'
-    # This extracts everything after "=" and removes quotes, preserving the full value
-    
-    sed -i '/^  release)/,/^  ;;/ s|grep DISTRIB_DESCRIPTION /etc/lsb-release | sed .s|"||g. | awk .\{print \$1\}. | cut -d"=" -f2|grep DISTRIB_DESCRIPTION /etc/lsb-release | cut -d"=" -f2 | sed '"'"'s|"||g'"'"'|' "$et_system_info"
-    
-    log "DEBUG" "Patched et-system-info release command to preserve full version string"
-    log "SUCCESS" "et-system-info patched for conky version display"
-}
+
 
 integrate_etosaddons_features() {
     log "INFO" "Integrating et-os-addons optional features..."
@@ -3700,10 +3679,6 @@ main() {
     log "DEBUG" "Step 6/14: customize_radio_configs"
     customize_radio_configs
     log "DEBUG" "Step 6/14: customize_radio_configs COMPLETED"
-    
-    log "DEBUG" "Step 6-patch/14: patch_et_system_info"
-    patch_et_system_info
-    log "DEBUG" "Step 6-patch/14: patch_et_system_info COMPLETED"
     
     log "DEBUG" "Step 6a/14: integrate_etosaddons_features"
     integrate_etosaddons_features
