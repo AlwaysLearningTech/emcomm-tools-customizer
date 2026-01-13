@@ -48,7 +48,6 @@ RELEASE_MODE="latest"
 SPECIFIED_TAG=""
 MINIMAL_BUILD=0                           # When 1, omit cache files from ISO to reduce size
 KEEP_WORK=0                               # When 1, preserve .work directory for iterative debugging
-ADDONS_BUILD=0                            # When 1, include et-os-addons (WSJT-X Improved, GridTracker, SSTV, etc.)
 COPY_TO_PATH=""                           # Optional: copy finished ISO to this path
 
 # Colors for output
@@ -382,40 +381,6 @@ download_etc_installer() {
     
     log "SUCCESS" "ETC tarball downloaded: $tarball_path"
     ETC_TARBALL_PATH="$tarball_path"
-    return 0
-}
-
-download_etosaddons() {
-    mkdir -p "$CACHE_DIR"
-    
-    local zip_file="${CACHE_DIR}/et-os-addons-main.zip"
-    local addons_dir="${CACHE_DIR}/et-os-addons-main"
-    
-    # Check if already cached
-    if [ -d "$addons_dir" ]; then
-        log "SUCCESS" "et-os-addons found in cache"
-        ETOSADDONS_DIR="$addons_dir"
-        return 0
-    fi
-    
-    log "INFO" "Downloading et-os-addons (core build component: GridTracker, WSJT-X Improved, QSSTV, weather tools)..."
-    
-    if ! wget -O "$zip_file" "https://github.com/clifjones/et-os-addons/archive/refs/heads/main.zip"; then
-        log "ERROR" "Failed to download et-os-addons"
-        return 1
-    fi
-    
-    log "INFO" "Extracting et-os-addons..."
-    if ! unzip -q "$zip_file" -d "$CACHE_DIR"; then
-        log "ERROR" "Failed to extract et-os-addons"
-        return 1
-    fi
-    
-    # Clean up zip file
-    rm -f "$zip_file"
-    
-    log "SUCCESS" "et-os-addons downloaded and extracted"
-    ETOSADDONS_DIR="$addons_dir"
     return 0
 }
 
@@ -825,50 +790,6 @@ WIKIPEDIASCRIPT
     fi
     
     log "SUCCESS" "EmComm Tools Community installed and verified successfully"
-    return 0
-}
-
-merge_etosaddons() {
-    if [ "$ADDONS_BUILD" -ne 1 ]; then
-        log "DEBUG" "et-os-addons not enabled, skipping merge"
-        return 0
-    fi
-    
-    if [ -z "${ETOSADDONS_DIR:-}" ]; then
-        log "WARN" "et-os-addons directory not set, skipping merge"
-        return 0
-    fi
-    
-    log "INFO" ""
-    log "INFO" "=== Merging et-os-addons (FT8/GridTracker/SSTV) ==="
-    
-    local addons_overlay="${ETOSADDONS_DIR}/overlay"
-    
-    if [ ! -d "$addons_overlay" ]; then
-        log "ERROR" "et-os-addons overlay directory not found: $addons_overlay"
-        return 1
-    fi
-    
-    log "INFO" "Merging overlay from: $addons_overlay"
-    
-    # Copy et-os-addons overlay into squashfs root
-    # This adds WSJT-X Improved, GridTracker 2, SSTV, weather tools, etc.
-    if ! cp -a "$addons_overlay"/* "${SQUASHFS_DIR}/" 2>/dev/null; then
-        log "WARN" "Failed to copy some overlay files, continuing..."
-    fi
-    
-    log "SUCCESS" "et-os-addons merged successfully"
-    
-    # List what was added (for logging purposes)
-    if [ -d "${SQUASHFS_DIR}/opt/emcomm-tools/addons" ]; then
-        log "INFO" "Added packages:"
-        find "${SQUASHFS_DIR}/opt/emcomm-tools/addons" -maxdepth 1 -type d -exec basename {} \; | while read -r addon; do
-            if [ "$addon" != "addons" ]; then
-                log "INFO" "  - $addon"
-            fi
-        done
-    fi
-    
     return 0
 }
 
@@ -3703,8 +3624,9 @@ main() {
         exit 1
     fi
     
-    # et-os-addons is optional - download if available, skip if network fails
-    download_etosaddons || log "WARN" "et-os-addons download failed - building with base ETC only"
+    # NOTE: et-os-addons functionality is now integrated directly via ENABLE_ETOSADDONS_* variables
+    # The old et-os-addons repo overlay approach has been replaced with selective feature installation
+    # See integrate_etosaddons_features() for the current implementation
     
     # Extract ISO
     if ! extract_iso; then
@@ -3718,10 +3640,8 @@ main() {
         exit 1
     fi
     
-    # Merge et-os-addons if enabled (AFTER ETC is installed but BEFORE customizations)
-    if ! merge_etosaddons; then
-        log "WARN" "et-os-addons merge failed, continuing with base ETC"
-    fi
+    # NOTE: et-os-addons integration now happens selectively via ENABLE_ETOSADDONS_* variables
+    # The old overlay merge approach has been replaced (see integrate_etosaddons_features)
     
     # Apply customizations (AFTER ETC is installed)
     log "INFO" ""
@@ -3941,11 +3861,6 @@ while [[ $# -gt 0 ]]; do
         -l)
             list_available_versions
             exit 0
-            ;;
-        -a)
-            ADDONS_BUILD=1
-            log "INFO" "et-os-addons support enabled (WSJT-X Improved, GridTracker, SSTV, weather tools)"
-            shift
             ;;
         -d)
             DEBUG_MODE=1
