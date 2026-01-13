@@ -1182,9 +1182,8 @@ EOF
 update_release_info() {
     log "INFO" "Updating system release information..."
     
-    # shellcheck source=/dev/null
-    source "$SECRETS_FILE"
-    log "DEBUG" "Sourced secrets file for release info"
+    # RELEASE_NUMBER and BUILD_NUMBER are already set globally by download_etc_tarball()
+    # Do NOT source secrets.env here - it doesn't contain these variables
     
     local lsb_release_file="${SQUASHFS_DIR}/etc/lsb-release"
     
