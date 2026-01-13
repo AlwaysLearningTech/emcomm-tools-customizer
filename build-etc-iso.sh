@@ -1489,6 +1489,10 @@ EOF
 customize_radio_configs() {
     log "INFO" "Configuring ham radio CAT control (Anytone D578UV default)..."
     
+    # CRITICAL: Set up chroot mounts for systemctl to work
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+    
     local radios_dir="${SQUASHFS_DIR}/opt/emcomm-tools/conf/radios.d"
     mkdir -p "$radios_dir"
     
@@ -1590,6 +1594,9 @@ EOF
     # Enable rigctld for auto-start at boot
     chroot "${SQUASHFS_DIR}" systemctl enable rigctld.service 2>/dev/null || \
         log "WARN" "Could not enable rigctld in chroot (service will start on first boot)"
+    
+    cleanup_chroot_mounts
+    trap - EXIT
     
     log "SUCCESS" "Ham radio CAT control enabled: rigctld listens on localhost:4532"
 }
