@@ -3737,22 +3737,6 @@ main() {
     log "DEBUG" "Step 17/19: install_qsstv"
     setup_chroot_mounts
     trap 'cleanup_chroot_mounts' EXIT
-    install_gridtracker
-    cleanup_chroot_mounts
-    trap - EXIT
-    log "DEBUG" "Step 15/19: install_gridtracker COMPLETED"
-    
-    log "DEBUG" "Step 16/19: install_wsjtx_improved"
-    setup_chroot_mounts
-    trap 'cleanup_chroot_mounts' EXIT
-    install_wsjtx_improved
-    cleanup_chroot_mounts
-    trap - EXIT
-    log "DEBUG" "Step 16/19: install_wsjtx_improved COMPLETED"
-    
-    log "DEBUG" "Step 17/19: install_qsstv"
-    setup_chroot_mounts
-    trap 'cleanup_chroot_mounts' EXIT
     install_qsstv
     cleanup_chroot_mounts
     trap - EXIT
