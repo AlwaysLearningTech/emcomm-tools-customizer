@@ -2504,45 +2504,37 @@ customize_additional_packages() {
         log "WARN" "Some packages may have failed to install - see log for details"
     fi
     
-    # Install CHIRP via pipx (radio programming software)
-    log "INFO" "Installing CHIRP radio programmer via pipx..."
+    # Install CHIRP (radio programming software) via apt
+    log "INFO" "Installing CHIRP radio programmer..."
     
-    # First ensure pipx is available
-    if ! chroot "${SQUASHFS_DIR}" command -v pipx &>/dev/null; then
-        log "INFO" "Installing pipx..."
-        chroot "${SQUASHFS_DIR}" apt-get install -y -qq pipx 2>&1 | tail -3 | tee -a "$LOG_FILE"
-    fi
-    
-    # Install CHIRP globally via pipx
-    if chroot "${SQUASHFS_DIR}" bash -c 'pipx install chirp 2>&1 | tail -10'; then
-        log "SUCCESS" "CHIRP installed successfully"
+    # CHIRP is available in Ubuntu repos and works with EOL distros
+    if chroot "${SQUASHFS_DIR}" apt-get install -y -qq chirp 2>&1 | tail -3 | tee -a "$LOG_FILE"; then
+        log "SUCCESS" "CHIRP installed successfully via apt"
     else
-        log "WARN" "CHIRP installation had issues - may need manual setup"
+        log "WARN" "CHIRP installation had issues - check log for details"
     fi
     
-    # Install Microsoft Edge via direct .deb download (works with EOL distros)
-    log "INFO" "Installing Microsoft Edge browser via direct .deb download..."
+    # Install Microsoft Edge browser
+    log "INFO" "Installing Microsoft Edge browser..."
     
-    # Download latest Microsoft Edge stable release directly from Microsoft
-    # Works with EOL Ubuntu 22.10 - doesn't require snap or PPA
+    # Try direct .deb download first (newest version)
     local edge_deb="/tmp/microsoft-edge-stable.deb"
     local edge_download_url="https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_latest_amd64.deb"
     
-    log "DEBUG" "Downloading Microsoft Edge from: $edge_download_url"
-    if chroot "${SQUASHFS_DIR}" bash -c "wget -q '$edge_download_url' -O '$edge_deb' 2>&1"; then
-        log "DEBUG" "Microsoft Edge .deb downloaded"
+    log "DEBUG" "Attempting to download Microsoft Edge from: $edge_download_url"
+    if chroot "${SQUASHFS_DIR}" bash -c "wget -q --timeout=10 --tries=2 '$edge_download_url' -O '$edge_deb' 2>&1 && test -f '$edge_deb'"; then
+        log "DEBUG" "Microsoft Edge .deb downloaded successfully"
         
-        # Install the downloaded .deb package
-        if chroot "${SQUASHFS_DIR}" bash -c "dpkg -i '$edge_deb' 2>&1 | tail -3"; then
+        # Install the downloaded .deb package and fix dependencies if needed
+        if chroot "${SQUASHFS_DIR}" bash -c "dpkg -i '$edge_deb' 2>&1 | tail -3 && apt-get install -y -f 2>&1 | tail -1"; then
             log "SUCCESS" "Microsoft Edge installed successfully"
-            # Clean up
-            chroot "${SQUASHFS_DIR}" rm -f "$edge_deb"
         else
-            log "WARN" "Microsoft Edge .deb installation had issues - check log for details"
-            chroot "${SQUASHFS_DIR}" rm -f "$edge_deb"
+            log "DEBUG" "Microsoft Edge .deb installation had issues"
         fi
+        # Clean up deb file regardless
+        chroot "${SQUASHFS_DIR}" rm -f "$edge_deb"
     else
-        log "WARN" "Microsoft Edge .deb download failed - may need manual installation"
+        log "DEBUG" "Microsoft Edge .deb download failed or timed out (not critical - can install manually later)"
     fi
     
     cleanup_chroot_mounts
