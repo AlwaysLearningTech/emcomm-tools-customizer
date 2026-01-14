@@ -755,11 +755,10 @@ WIKIPEDIASCRIPT
     log "DEBUG" "Configuring radio CAT control..."
     customize_radio_configs_in_chroot
     
-    # Install radio programming utilities
-    log "DEBUG" "Installing radio programming utilities (chirp, edge)..."
-    chroot "${SQUASHFS_DIR}" /bin/bash -c "apt-get update && apt-get install -y chirp edge" 2>&1 | tee -a "${LOG_FILE}" || {
-        log "WARN" "Radio programming utilities installation had issues (non-critical)"
-    }
+    # CHIRP and Microsoft Edge: NOW INSTALLED ON FIRST LOGIN (not during build)
+    # This prevents ETC's post-install cleanup from removing them as "development" packages
+    # See setup_first_login_packages() - implemented via /etc/profile.d/ startup script
+    log "DEBUG" "Radio programming utilities (CHIRP, Edge) will be installed on first login"
     
     # Clean up mounts after all in-chroot work is done
     cleanup_chroot_mounts
@@ -2538,41 +2537,130 @@ customize_additional_packages() {
         log "WARN" "Some packages may have failed to install - see log for details"
     fi
     
-    # Install CHIRP (radio programming software) via apt
-    log "INFO" "Installing CHIRP radio programmer..."
-    
-    # CHIRP is available in Ubuntu repos and works with EOL distros
-    if chroot "${SQUASHFS_DIR}" apt-get install -y -qq chirp 2>&1 | tail -3 | tee -a "$LOG_FILE"; then
-        log "SUCCESS" "CHIRP installed successfully via apt"
-    else
-        log "WARN" "CHIRP installation had issues - check log for details"
-    fi
-    
-    # Install Microsoft Edge browser
-    log "INFO" "Installing Microsoft Edge browser..."
-    
-    # Try direct .deb download first (newest version)
-    local edge_deb="/tmp/microsoft-edge-stable.deb"
-    local edge_download_url="https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_latest_amd64.deb"
-    
-    log "DEBUG" "Attempting to download Microsoft Edge from: $edge_download_url"
-    if chroot "${SQUASHFS_DIR}" bash -c "wget -q --timeout=10 --tries=2 '$edge_download_url' -O '$edge_deb' 2>&1 && test -f '$edge_deb'"; then
-        log "DEBUG" "Microsoft Edge .deb downloaded successfully"
-        
-        # Install the downloaded .deb package and fix dependencies if needed
-        if chroot "${SQUASHFS_DIR}" bash -c "dpkg -i '$edge_deb' 2>&1 | tail -3 && apt-get install -y -f 2>&1 | tail -1"; then
-            log "SUCCESS" "Microsoft Edge installed successfully"
-        else
-            log "DEBUG" "Microsoft Edge .deb installation had issues"
-        fi
-        # Clean up deb file regardless
-        chroot "${SQUASHFS_DIR}" rm -f "$edge_deb"
-    else
-        log "DEBUG" "Microsoft Edge .deb download failed or timed out (not critical - can install manually later)"
-    fi
+    # CHIRP and Microsoft Edge: Installed on first login (not during build)
+    # See setup_first_login_packages() - these are installed via /etc/profile.d/ script
+    # Why: Prevents ETC's post-install cleanup from removing them as "development" packages
+    # Also: User gets control and can run the installer manually if needed
+    log "INFO" "Note: CHIRP and Microsoft Edge will be installed on first login"
+    log "DEBUG" "See setup_first_login_packages() for implementation"
     
     cleanup_chroot_mounts
     trap - EXIT
+}
+
+setup_first_login_packages() {
+    log "INFO" "Setting up first-login package installation (CHIRP, Microsoft Edge)..."
+    
+    # Create a profile.d script that installs packages on first login
+    # This avoids ETC's post-install cleanup removing them as "development" packages
+    # User gets a notification on first login, can run manually anytime if needed
+    
+    local profile_d_dir="${SQUASHFS_DIR}/etc/profile.d"
+    local firstlogin_script="${profile_d_dir}/98-install-first-login-packages.sh"
+    
+    mkdir -p "$profile_d_dir"
+    
+    log "DEBUG" "Creating first-login package installer: $firstlogin_script"
+    
+    cat > "$firstlogin_script" <<'FIRSTLOGIN_EOF'
+#!/bin/bash
+# EmComm Tools Customizer - First Login Package Installation
+# Installs CHIRP and Microsoft Edge on first login
+# This script only runs once (self-deleting) - prevents ETC post-install cleanup from removing them
+
+# Skip if already run (marker file exists)
+MARKER_FILE="${HOME}/.etc-firstlogin-packages-installed"
+if [ -f "$MARKER_FILE" ]; then
+    return 0 2>/dev/null || exit 0  # In case sourced or executed
+fi
+
+# Only run if interactive shell
+[[ $- == *i* ]] || return 0
+
+# Check if user is 'ubuntu' (first-login default user)
+if [ "$(id -un)" != "ubuntu" ]; then
+    return 0
+fi
+
+# Run in background so it doesn't block the shell prompt
+(
+    # Acquire lock to prevent multiple concurrent runs
+    LOCK_FILE="/tmp/.et-firstlogin-packages.lock"
+    exec 9>"$LOCK_FILE"
+    if ! flock -n 9; then
+        exit 0  # Another instance is running
+    fi
+    
+    # Set marker to prevent re-running
+    touch "$MARKER_FILE" 2>/dev/null
+    
+    echo ""
+    echo "=========================================="
+    echo "EmComm Tools Customizer - First Login Setup"
+    echo "=========================================="
+    echo "Installing radio programming tools and Edge browser..."
+    echo "This runs once and may take a few minutes."
+    echo ""
+    
+    # Install CHIRP (radio programming software)
+    echo "Installing CHIRP radio programmer..."
+    sudo apt-get update -qq >/dev/null 2>&1
+    
+    if sudo apt-get install -y -qq chirp >/dev/null 2>&1; then
+        echo "✓ CHIRP installed successfully"
+    else
+        echo "✗ CHIRP installation failed - you can install manually:"
+        echo "  sudo apt-get install chirp"
+    fi
+    
+    # Install Microsoft Edge browser
+    echo "Installing Microsoft Edge browser..."
+    
+    # Try direct .deb download
+    EDGE_DEB="/tmp/microsoft-edge-stable.deb"
+    EDGE_URL="https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_latest_amd64.deb"
+    
+    if wget -q --timeout=10 --tries=2 "$EDGE_URL" -O "$EDGE_DEB" 2>/dev/null && [ -f "$EDGE_DEB" ]; then
+        if sudo dpkg -i "$EDGE_DEB" >/dev/null 2>&1 && sudo apt-get install -y -f >/dev/null 2>&1; then
+            echo "✓ Microsoft Edge installed successfully"
+        else
+            echo "✗ Microsoft Edge installation failed - you can install from Microsoft's website"
+        fi
+        rm -f "$EDGE_DEB"
+    else
+        echo "✗ Microsoft Edge download failed - you can install from Microsoft's website"
+    fi
+    
+    # Restore Anytone D578UV as active radio (ETC post-install may have reset it)
+    echo "Configuring active radio (Anytone D578UV)..."
+    RADIOS_DIR="/opt/emcomm-tools/conf/radios.d"
+    
+    if [ -f "${RADIOS_DIR}/anytone-d578uv.json" ]; then
+        # Re-link active-radio.json to anytone-d578uv (in case ETC reset it)
+        if sudo ln -sf "${RADIOS_DIR}/anytone-d578uv.json" "${RADIOS_DIR}/active-radio.json" 2>/dev/null; then
+            echo "✓ Anytone D578UV set as active radio"
+        else
+            echo "✗ Could not set active radio (you may need to do this manually)"
+        fi
+    else
+        echo "✗ Anytone radio config not found - skipping radio setup"
+    fi
+    
+    echo ""
+    echo "First-login setup complete!"
+    echo "=========================================="
+    
+) &
+disown 2>/dev/null
+
+# Return to avoid interrupting shell startup
+return 0 2>/dev/null || true
+FIRSTLOGIN_EOF
+    
+    chmod 755 "$firstlogin_script"
+    log "SUCCESS" "First-login package installer created"
+    log "DEBUG" "Script will run in background on first login (ubuntu user)"
+    log "DEBUG" "Marker file: ~/.etc-firstlogin-packages-installed"
 }
 
 setup_vscode_workspace() {
@@ -3735,6 +3823,10 @@ main() {
     log "DEBUG" "Step 13/14: customize_git_config"
     customize_git_config
     log "DEBUG" "Step 13/14: customize_git_config COMPLETED"
+    
+    log "DEBUG" "Step 13a/14: setup_first_login_packages"
+    setup_first_login_packages
+    log "DEBUG" "Step 13a/14: setup_first_login_packages COMPLETED"
     
     log "DEBUG" "Step 14/14: setup_vscode_workspace"
     setup_vscode_workspace
