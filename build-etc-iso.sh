@@ -2660,12 +2660,41 @@ customize_additional_packages() {
         log "WARN" "Some packages may have failed to install - see log for details"
     fi
     
-    # CHIRP and Microsoft Edge: Installed on first login (not during build)
-    # See setup_first_login_packages() - these are installed via /etc/profile.d/ script
-    # Why: Prevents ETC's post-install cleanup from removing them as "development" packages
-    # Also: User gets control and can run the installer manually if needed
-    log "INFO" "Note: CHIRP and Microsoft Edge will be installed on first login"
-    log "DEBUG" "See setup_first_login_packages() for implementation"
+    # === CHIRP Installation ===
+    # Install CHIRP via pipx into /opt so all users get it
+    log "INFO" "Installing CHIRP radio programming software..."
+    chroot "${SQUASHFS_DIR}" /bin/bash -c "
+        # Ensure pipx is available
+        apt-get install -y -qq pipx 2>&1 | tail -3
+        # Install CHIRP globally via pipx
+        pipx install --system-site-packages chirp 2>&1 | tail -10 || log 'WARN' 'CHIRP installation may have had warnings'
+        # Make CHIRP available system-wide
+        ln -sf /root/.local/bin/chirp /usr/local/bin/chirp 2>/dev/null || true
+    " 2>&1 | tee -a "$LOG_FILE"
+    
+    # === Microsoft Edge Installation ===
+    # Edge can't be installed from old-releases repos (Ubuntu 22.10 EOL)
+    # Install from upstream Microsoft repo instead
+    log "INFO" "Installing Microsoft Edge..."
+    chroot "${SQUASHFS_DIR}" /bin/bash -c "
+        # Add Microsoft's official Edge repo
+        apt-get install -y -qq curl gnupg 2>&1 | tail -2
+        curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | apt-key add - 2>&1 | tail -2 || true
+        
+        # Add Edge repository with proper key handling
+        echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-edge-browser.gpg] https://packages.microsoft.com/repos/edge stable main' > /etc/apt/sources.list.d/microsoft-edge-release.list
+        
+        # Try to get the key
+        wget -q https://packages.microsoft.com/keys/microsoft.asc -O - | apt-key add - 2>&1 | tail -2 || {
+            log 'INFO' 'Could not verify Edge repo key - attempting install anyway'
+        }
+        
+        # Update and install
+        apt-get update 2>&1 | tail -3 || true
+        apt-get install -y -qq microsoft-edge-stable 2>&1 | tail -10 || log 'WARN' 'Edge installation may have had issues'
+    " 2>&1 | tee -a "$LOG_FILE"
+    
+    log "SUCCESS" "CHIRP and Microsoft Edge installation attempted"
     
     cleanup_chroot_mounts
     trap - EXIT
