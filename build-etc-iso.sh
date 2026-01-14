@@ -811,6 +811,85 @@ WIKIPEDIASCRIPT
 # Customization Functions (apply AFTER ETC is installed)
 # ============================================================================
 
+
+create_fresh_user_backup() {
+    log "INFO" "Creating fresh user backup from running ETC system..."
+    
+    # Only create backup if running system has et-user-backup installed
+    if ! command -v et-user-backup &> /dev/null; then
+        log "INFO" "et-user-backup command not found - system not running ETC or command not in PATH"
+        log "INFO" "Skipping fresh backup creation (will use cached backup if available)"
+        return 0
+    fi
+    
+    local cache_dir="${SCRIPT_DIR}/cache"
+    mkdir -p "$cache_dir"
+    
+    # Get current callsign from running system if available
+    local system_callsign=""
+    if [ -f "$HOME/.config/emcomm-tools/user.json" ]; then
+        system_callsign=$(grep -o '"callsign":"[^"]*' "$HOME/.config/emcomm-tools/user.json" | cut -d'"' -f4)
+    fi
+    
+    # Get hostname to identify the system
+    local system_hostname=$(hostname)
+    system_callsign="${system_callsign:-${system_hostname}}"
+    
+    # Create timestamped backup filename
+    local backup_date=$(date +'%Y%m%d')
+    local backup_filename="etc-user-backup-${system_callsign}-${backup_date}.tar.gz"
+    local backup_path="${cache_dir}/${backup_filename}"
+    
+    log "INFO" "Running et-user-backup to create: $backup_filename"
+    log "DEBUG" "Backup will be saved to: $backup_path"
+    
+    # Run et-user-backup and capture the output
+    # et-user-backup typically creates a tarball and outputs the path
+    # We need to move it to our cache directory
+    local temp_backup_dir=$(mktemp -d)
+    
+    # Try to run et-user-backup
+    # Note: This may prompt for sudo password
+    if et-user-backup 2>&1 | tee -a "$LOG_FILE"; then
+        # et-user-backup creates file in home directory or current location
+        # Look for the most recent etc-user-backup tar in home
+        local user_backup_file
+        user_backup_file=$(find ~/ -maxdepth 1 -name "etc-user-backup-*.tar.gz" -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+        
+        if [ -n "$user_backup_file" ] && [ -f "$user_backup_file" ]; then
+            log "SUCCESS" "User backup created: $(basename "$user_backup_file")"
+            
+            # Check if there's already a backup and delete old ones (keep only latest per callsign)
+            local old_backups
+            old_backups=$(find "${cache_dir}" -name "etc-user-backup-${system_callsign}-*.tar.gz" -type f 2>/dev/null)
+            
+            if [ -n "$old_backups" ]; then
+                log "DEBUG" "Removing old backups for ${system_callsign}..."
+                echo "$old_backups" | while read -r old_file; do
+                    log "DEBUG" "Deleting: $(basename "$old_file")"
+                    rm -f "$old_file"
+                done
+            fi
+            
+            # Copy/rename the backup to cache with our naming convention
+            cp "$user_backup_file" "$backup_path"
+            log "SUCCESS" "Fresh user backup stored in cache: $backup_filename"
+            rm -f "$temp_backup_dir" "$user_backup_file" 2>/dev/null
+            return 0
+        else
+            log "WARN" "et-user-backup completed but output file not found"
+            rm -rf "$temp_backup_dir" 2>/dev/null
+            return 1
+        fi
+    else
+        local exit_code=$?
+        log "WARN" "et-user-backup failed with exit code: $exit_code"
+        log "INFO" "This is OK if running system is not ETC or et-user-backup is not available"
+        rm -rf "$temp_backup_dir" 2>/dev/null
+        return 0  # Don't fail the build, just warn
+    fi
+}
+
 restore_user_backup() {
     log "INFO" "Checking for ETC user backups in cache directory..."
     
@@ -3877,6 +3956,13 @@ main() {
     # Check prerequisites
     if ! check_prerequisites; then
         exit 2
+    fi
+    
+    # Capture fresh user backup from running system BEFORE build
+    log "INFO" "Capturing fresh user backup from running system..."
+    if ! create_fresh_user_backup; then
+        log "WARN" "Failed to create fresh user backup - will use cached backup if available"
+        # Don't fail the build, just warn
     fi
     
     # Get release information
