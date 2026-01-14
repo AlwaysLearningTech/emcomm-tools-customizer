@@ -2549,119 +2549,171 @@ customize_additional_packages() {
 }
 
 setup_first_login_packages() {
-    log "INFO" "Setting up first-login package installation (CHIRP, Microsoft Edge)..."
+    log "INFO" "Setting up first-login services (Anytone restoration, CHIRP, Microsoft Edge)..."
     
-    # Create a profile.d script that installs packages on first login
-    # This avoids ETC's post-install cleanup removing them as "development" packages
-    # User gets a notification on first login, can run manually anytime if needed
+    # CRITICAL: Anytone radio config MUST be restored via systemd service on first boot
+    # (NOT via profile.d because bash profile scripts don't run reliably on GUI logins)
+    # Profile.d script alone was unreliable - replaced with systemd service that runs early
     
-    local profile_d_dir="${SQUASHFS_DIR}/etc/profile.d"
-    local firstlogin_script="${profile_d_dir}/98-install-first-login-packages.sh"
+    local systemd_dir="${SQUASHFS_DIR}/etc/systemd/system"
+    local service_file="${systemd_dir}/emcomm-first-boot.service"
+    local service_script="${SQUASHFS_DIR}/usr/local/bin/emcomm-first-boot.sh"
     
-    mkdir -p "$profile_d_dir"
+    mkdir -p "$systemd_dir"
     
-    log "DEBUG" "Creating first-login package installer: $firstlogin_script"
+    log "DEBUG" "Creating first-boot systemd service script: $service_script"
     
-    cat > "$firstlogin_script" <<'FIRSTLOGIN_EOF'
+    # Create the executable script that systemd will run
+    cat > "$service_script" <<'FIRSTBOOT_SCRIPT_EOF'
 #!/bin/bash
-# EmComm Tools Customizer - First Login Package Installation
-# Installs CHIRP and Microsoft Edge on first login
-# This script only runs once (self-deleting) - prevents ETC post-install cleanup from removing them
+# EmComm Tools Customizer - First Boot Service
+# CRITICAL: Restores Anytone radio config BEFORE user login
+# Also installs CHIRP and Edge on first user login
+# Runs as root, early in boot process
 
-# Skip if already run (marker file exists)
-MARKER_FILE="${HOME}/.etc-firstlogin-packages-installed"
+set -e
+
+LOGFILE="/var/log/emcomm-first-boot.log"
+{
+    echo "[$(date)] EmComm first-boot service starting..."
+    
+    # === PHASE 1: Anytone Restoration (runs at boot, root access) ===
+    # This must happen early, before user login or ETC post-install resets it
+    
+    RADIOS_DIR="/opt/emcomm-tools/conf/radios.d"
+    MARKER_FILE="/var/lib/emcomm-first-boot-done"
+    
+    # Only run once
+    if [ -f "$MARKER_FILE" ]; then
+        echo "[$(date)] First-boot already completed (marker file exists)"
+        exit 0
+    fi
+    
+    if [ -f "${RADIOS_DIR}/anytone-d578uv.json" ]; then
+        echo "[$(date)] Restoring Anytone D578UV as active radio..."
+        if ln -sf "${RADIOS_DIR}/anytone-d578uv.json" "${RADIOS_DIR}/active-radio.json" 2>&1; then
+            echo "[$(date)] ✓ Anytone D578UV linked as active-radio.json"
+        else
+            echo "[$(date)] ✗ Failed to link Anytone (may already be correct)"
+        fi
+    else
+        echo "[$(date)] ✗ Anytone radio config not found at ${RADIOS_DIR}/anytone-d578uv.json"
+    fi
+    
+    # === PHASE 2: Schedule first-login package install ===
+    # Create profile.d script for CHIRP/Edge that runs on first user login
+    # (This is AFTER Anytone is already restored)
+    
+    mkdir -p /etc/profile.d
+    
+    cat > /etc/profile.d/99-install-chirp-edge.sh <<'PROFILE_EOF'
+#!/bin/bash
+# Install CHIRP and Microsoft Edge on first user login
+# Only runs for 'ubuntu' user, only once
+
+MARKER_FILE="${HOME}/.etc-install-chirp-edge-done"
 if [ -f "$MARKER_FILE" ]; then
-    return 0 2>/dev/null || exit 0  # In case sourced or executed
+    return 0 2>/dev/null || exit 0
 fi
 
-# Only run if interactive shell
-[[ $- == *i* ]] || return 0
-
-# Check if user is 'ubuntu' (first-login default user)
 if [ "$(id -un)" != "ubuntu" ]; then
     return 0
 fi
 
-# Run in background so it doesn't block the shell prompt
+# Only run in interactive shells
+[[ $- == *i* ]] || return 0
+
+# Run in background so it doesn't block login
 (
-    # Acquire lock to prevent multiple concurrent runs
-    LOCK_FILE="/tmp/.et-firstlogin-packages.lock"
-    exec 9>"$LOCK_FILE"
-    if ! flock -n 9; then
-        exit 0  # Another instance is running
-    fi
-    
-    # Set marker to prevent re-running
-    touch "$MARKER_FILE" 2>/dev/null
+    sleep 2  # Wait for system to settle after login
+    touch "$MARKER_FILE"
     
     echo ""
-    echo "=========================================="
-    echo "EmComm Tools Customizer - First Login Setup"
-    echo "=========================================="
-    echo "Installing radio programming tools and Edge browser..."
-    echo "This runs once and may take a few minutes."
+    echo "====== EmComm Tools: Installing Packages ======"
+    echo "Installing CHIRP and Microsoft Edge..."
     echo ""
     
-    # Install CHIRP (radio programming software)
-    echo "Installing CHIRP radio programmer..."
-    sudo apt-get update -qq >/dev/null 2>&1
-    
-    if sudo apt-get install -y -qq chirp >/dev/null 2>&1; then
-        echo "✓ CHIRP installed successfully"
-    else
-        echo "✗ CHIRP installation failed - you can install manually:"
-        echo "  sudo apt-get install chirp"
-    fi
-    
-    # Install Microsoft Edge browser
-    echo "Installing Microsoft Edge browser..."
-    
-    # Try direct .deb download
-    EDGE_DEB="/tmp/microsoft-edge-stable.deb"
-    EDGE_URL="https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_latest_amd64.deb"
-    
-    if wget -q --timeout=10 --tries=2 "$EDGE_URL" -O "$EDGE_DEB" 2>/dev/null && [ -f "$EDGE_DEB" ]; then
-        if sudo dpkg -i "$EDGE_DEB" >/dev/null 2>&1 && sudo apt-get install -y -f >/dev/null 2>&1; then
-            echo "✓ Microsoft Edge installed successfully"
+    # CHIRP
+    if sudo apt-get update -qq >/dev/null 2>&1; then
+        if sudo apt-get install -y -qq chirp >/dev/null 2>&1; then
+            echo "✓ CHIRP installed"
         else
-            echo "✗ Microsoft Edge installation failed - you can install from Microsoft's website"
+            echo "✗ CHIRP failed (can install manually: sudo apt-get install chirp)"
+        fi
+    fi
+    
+    # Microsoft Edge
+    EDGE_DEB="/tmp/microsoft-edge-stable.deb"
+    if wget -q --timeout=10 --tries=2 "https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_latest_amd64.deb" -O "$EDGE_DEB" 2>/dev/null && [ -f "$EDGE_DEB" ]; then
+        if sudo dpkg -i "$EDGE_DEB" >/dev/null 2>&1; then
+            sudo apt-get install -y -f >/dev/null 2>&1
+            echo "✓ Microsoft Edge installed"
         fi
         rm -f "$EDGE_DEB"
     else
-        echo "✗ Microsoft Edge download failed - you can install from Microsoft's website"
+        echo "✗ Edge download failed (install from Microsoft's website)"
     fi
     
-    # Restore Anytone D578UV as active radio (ETC post-install may have reset it)
-    echo "Configuring active radio (Anytone D578UV)..."
-    RADIOS_DIR="/opt/emcomm-tools/conf/radios.d"
-    
-    if [ -f "${RADIOS_DIR}/anytone-d578uv.json" ]; then
-        # Re-link active-radio.json to anytone-d578uv (in case ETC reset it)
-        if sudo ln -sf "${RADIOS_DIR}/anytone-d578uv.json" "${RADIOS_DIR}/active-radio.json" 2>/dev/null; then
-            echo "✓ Anytone D578UV set as active radio"
-        else
-            echo "✗ Could not set active radio (you may need to do this manually)"
-        fi
-    else
-        echo "✗ Anytone radio config not found - skipping radio setup"
-    fi
-    
+    echo "====== Package Installation Complete ======"
     echo ""
-    echo "First-login setup complete!"
-    echo "=========================================="
-    
 ) &
 disown 2>/dev/null
 
-# Return to avoid interrupting shell startup
 return 0 2>/dev/null || true
-FIRSTLOGIN_EOF
+PROFILE_EOF
     
-    chmod 755 "$firstlogin_script"
-    log "SUCCESS" "First-login package installer created"
-    log "DEBUG" "Script will run in background on first login (ubuntu user)"
-    log "DEBUG" "Marker file: ~/.etc-firstlogin-packages-installed"
+    chmod 755 /etc/profile.d/99-install-chirp-edge.sh
+    echo "[$(date)] Created /etc/profile.d/99-install-chirp-edge.sh for CHIRP/Edge installation"
+    
+    # === PHASE 3: Mark first-boot as complete ===
+    touch "$MARKER_FILE"
+    echo "[$(date)] ✓ First-boot service completed successfully"
+    
+} >> "$LOGFILE" 2>&1
+
+exit 0
+FIRSTBOOT_SCRIPT_EOF
+    
+    chmod 755 "$service_script"
+    
+    log "DEBUG" "Creating systemd service file: $service_file"
+    
+    # Create the systemd service that calls the script
+    cat > "$service_file" <<'SYSTEMD_SERVICE_EOF'
+[Unit]
+Description=EmComm Tools First Boot Setup
+After=network-online.target
+Wants=network-online.target
+Before=graphical.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/emcomm-first-boot.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SYSTEMD_SERVICE_EOF
+    
+    chmod 644 "$service_file"
+    log "SUCCESS" "First-boot systemd service created"
+    log "DEBUG" "Service will run on first boot with root privileges"
+    log "DEBUG" "Logs available in: /var/log/emcomm-first-boot.log"
+    log "DEBUG" "User packages (CHIRP, Edge) installed on first login via profile.d"
+    
+    # Enable the service so it runs automatically on boot
+    log "DEBUG" "Enabling systemd service for first-boot..."
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+    chroot "${SQUASHFS_DIR}" systemctl enable emcomm-first-boot.service 2>&1 | sed 's/^/  [systemctl] /' | tee -a "$LOG_FILE"
+    cleanup_chroot_mounts
+    trap - EXIT
+    log "DEBUG" "Systemd service enabled"
 }
+
 
 setup_vscode_workspace() {
     log "INFO" "Setting up VS Code workspace and project structure..."
