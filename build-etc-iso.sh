@@ -1530,7 +1530,7 @@ PATCH_EOF
         # Apply the patch using sed - simpler and more reliable than patch command
         sed -i '/^do_full_auto()/a\
   # CUSTOM FIX: Preserve Anytone D578UV if already configured\
-  if [ -L "${ET_HOME}/conf/radios.d/active-radio.json" ] && grep -q '"anytone' "${ET_HOME}/conf/radios.d/active-radio.json" 2>/dev/null; then\
+  if [ -L "${ET_HOME}/conf/radios.d/active-radio.json" ] && grep -q "anytone" "${ET_HOME}/conf/radios.d/active-radio.json" 2>/dev/null; then\
     et-log "Anytone D578UV is configured - preserving configuration"\
     return 0\
   fi\
@@ -1548,7 +1548,7 @@ PATCH_EOF
     mkdir -p "$systemd_dir"
     
     log "DEBUG" "Creating systemd service for rigctld..."
-    cat > "${systemd_dir}/rigctld.service" <<'EOF'
+    cat > "${systemd_dir}/rigctld.service" <<'EOFSERVICE'
 [Unit]
 Description=HAMlib Rig Control Daemon for EmComm Tools
 Documentation=https://www.hamlib.org/
@@ -1573,7 +1573,7 @@ TimeoutStartSec=10
 
 [Install]
 WantedBy=multi-user.target
-EOF
+EOFSERVICE
     
     chmod 644 "${systemd_dir}/rigctld.service"
     
@@ -3891,12 +3891,12 @@ main() {
     
     # Download files
     if ! download_ubuntu_iso; then
-        cleanup_work_dir
+        # cleanup_work_dir  # DISABLED: Keep work directory for debugging
         exit 1
     fi
     
     if ! download_etc_installer; then
-        cleanup_work_dir
+        # cleanup_work_dir  # DISABLED: Keep work directory for debugging
         exit 1
     fi
     
@@ -3906,13 +3906,13 @@ main() {
     
     # Extract ISO
     if ! extract_iso; then
-        cleanup_work_dir
+        # cleanup_work_dir  # DISABLED: Keep work directory for debugging
         exit 1
     fi
     
     # Install ETC in chroot (this is the main installation)
     if ! install_etc_in_chroot; then
-        cleanup_work_dir
+        # cleanup_work_dir  # DISABLED: Keep work directory for debugging
         exit 1
     fi
     
@@ -4051,11 +4051,11 @@ main() {
     log "INFO" "=== Rebuilding ISO ==="
     
     if ! rebuild_squashfs; then
-        cleanup_work_dir
+        # cleanup_work_dir  # DISABLED: Keep work directory for debugging
         exit 1
     fi
     if ! rebuild_iso; then
-        cleanup_work_dir
+        # cleanup_work_dir  # DISABLED: Keep work directory for debugging
         exit 1
     fi
     
@@ -4081,7 +4081,7 @@ main() {
     fi
     
     # Cleanup
-    cleanup_work_dir
+    # cleanup_work_dir  # DISABLED: Keep work directory for debugging
     
     # Summary
     echo ""
