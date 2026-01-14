@@ -1499,7 +1499,51 @@ EOF
     
     chmod 644 "${udev_dir}/99-emcomm-tools-cat.rules"
     
-    # Create systemd service for rigctld (ham radio CAT control daemon)
+    # === CRITICAL FIX: Protect Anytone D578UV from being overwritten by rigctld ===
+    # ETC's wrapper-rigctld.sh has a do_full_auto() function that destructively 
+    # replaces active-radio.json when a radio is detected. We patch it to preserve
+    # Anytone D578UV configuration.
+    log "DEBUG" "Patching rigctld wrapper to preserve Anytone D578UV..."
+    
+    local wrapper_script="${SQUASHFS_DIR}/opt/emcomm-tools/sbin/wrapper-rigctld.sh"
+    if [ -f "$wrapper_script" ]; then
+        # Backup the original
+        cp "$wrapper_script" "${wrapper_script}.backup"
+        
+        # Create a patch that adds an Anytone preservation check at the start of do_full_auto()
+        # This prevents the script from replacing our configured radio
+        cat > /tmp/anytone-preserve.patch << 'PATCH_EOF'
+--- a/wrapper-rigctld.sh
++++ b/wrapper-rigctld.sh
+@@ -13,6 +13,11 @@
+ do_full_auto() {
+   et-log "Found ET_DEVICE='${ET_DEVICE}'"
+ 
++  # CUSTOM FIX: Preserve Anytone D578UV if already configured
++  if [ -L "${ET_HOME}/conf/radios.d/active-radio.json" ] && grep -q '"anytone' "${ET_HOME}/conf/radios.d/active-radio.json" 2>/dev/null; then
++    et-log "Anytone D578UV is configured - preserving configuration"
++    return 0
++  fi
+   case "$1" in
+PATCH_EOF
+        
+        # Apply the patch using sed - simpler and more reliable than patch command
+        sed -i '/^do_full_auto()/a\
+  # CUSTOM FIX: Preserve Anytone D578UV if already configured\
+  if [ -L "${ET_HOME}/conf/radios.d/active-radio.json" ] && grep -q '"anytone' "${ET_HOME}/conf/radios.d/active-radio.json" 2>/dev/null; then\
+    et-log "Anytone D578UV is configured - preserving configuration"\
+    return 0\
+  fi\
+' "$wrapper_script" 2>/dev/null || log "WARN" "Failed to patch wrapper-rigctld.sh for Anytone preservation"
+        
+        if grep -q "Anytone D578UV is configured" "$wrapper_script"; then
+            log "SUCCESS" "wrapper-rigctld.sh successfully patched to preserve Anytone"
+        else
+            log "WARN" "Anytone preservation patch may not have applied correctly"
+        fi
+    else
+        log "WARN" "wrapper-rigctld.sh not found - radio may be overwritten by rigctld auto-configuration"
+    fi
     local systemd_dir="${SQUASHFS_DIR}/etc/systemd/system"
     mkdir -p "$systemd_dir"
     
@@ -2558,6 +2602,72 @@ setup_first_login_packages() {
     local systemd_dir="${SQUASHFS_DIR}/etc/systemd/system"
     local service_file="${systemd_dir}/emcomm-first-boot.service"
     local service_script="${SQUASHFS_DIR}/usr/local/bin/emcomm-first-boot.sh"
+    local profile_d_script="${SQUASHFS_DIR}/etc/profile.d/99-install-chirp-edge.sh"
+    
+    mkdir -p "$systemd_dir"
+    
+    # === CREATE PROFILE.D SCRIPT AT BUILD TIME (Fallback) ===
+    # Even if systemd service fails, users can still get CHIRP/Edge on login
+    log "DEBUG" "Creating profile.d script for CHIRP/Edge installation (fallback)..."
+    mkdir -p "$(dirname "$profile_d_script")"
+    cat > "$profile_d_script" <<'PROFILE_EOF'
+#!/bin/bash
+# Install CHIRP and Microsoft Edge on first user login
+# Fallback script in case systemd service doesn't run
+# Only runs for 'ubuntu' user, only once
+
+MARKER_FILE="${HOME}/.etc-install-chirp-edge-done"
+if [ -f "$MARKER_FILE" ]; then
+    return 0 2>/dev/null || exit 0
+fi
+
+if [ "$(id -un)" != "ubuntu" ]; then
+    return 0
+fi
+
+# Only run in interactive shells
+[[ $- == *i* ]] || return 0
+
+# Run in background so it doesn't block login
+(
+    sleep 2  # Wait for system to settle after login
+    touch "$MARKER_FILE"
+    
+    echo ""
+    echo "====== EmComm Tools: Installing Packages ======"
+    echo "Installing CHIRP and Microsoft Edge..."
+    echo ""
+    
+    # CHIRP
+    if sudo apt-get update -qq >/dev/null 2>&1; then
+        if sudo apt-get install -y -qq chirp >/dev/null 2>&1; then
+            echo "✓ CHIRP installed"
+        else
+            echo "✗ CHIRP failed (can install manually: sudo apt-get install chirp)"
+        fi
+    fi
+    
+    # Microsoft Edge
+    EDGE_DEB="/tmp/microsoft-edge-stable.deb"
+    if wget -q --timeout=10 --tries=2 "https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_latest_amd64.deb" -O "$EDGE_DEB" 2>/dev/null && [ -f "$EDGE_DEB" ]; then
+        if sudo dpkg -i "$EDGE_DEB" >/dev/null 2>&1; then
+            sudo apt-get install -y -f >/dev/null 2>&1
+            echo "✓ Microsoft Edge installed"
+        fi
+        rm -f "$EDGE_DEB"
+    else
+        echo "✗ Edge download failed (install from Microsoft's website)"
+    fi
+    
+    echo "====== Package Installation Complete ======"
+    echo ""
+) &
+disown 2>/dev/null
+
+return 0 2>/dev/null || true
+PROFILE_EOF
+    chmod 755 "$profile_d_script"
+    log "SUCCESS" "Fallback profile.d script created at build time"
     
     mkdir -p "$systemd_dir"
     
@@ -2682,9 +2792,9 @@ FIRSTBOOT_SCRIPT_EOF
     cat > "$service_file" <<'SYSTEMD_SERVICE_EOF'
 [Unit]
 Description=EmComm Tools First Boot Setup
-After=network-online.target
-Wants=network-online.target
-Before=graphical.target
+After=network.target
+Before=getty.target
+DefaultDependencies=no
 
 [Service]
 Type=oneshot
