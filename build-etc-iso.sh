@@ -1547,8 +1547,11 @@ customize_radio_configs() {
     # NOTE: Radio configs are now written in-chroot immediately after install.sh
     # This stub function is retained for API compatibility
     return 0
+}
 
-
+# ============================================================================
+# Integrate et-os-addons Optional Features
+# ============================================================================
 
 integrate_etosaddons_features() {
     log "INFO" "Integrating et-os-addons optional features..."
