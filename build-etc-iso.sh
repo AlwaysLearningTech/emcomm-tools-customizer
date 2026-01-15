@@ -2660,41 +2660,79 @@ customize_additional_packages() {
         log "WARN" "Some packages may have failed to install - see log for details"
     fi
     
-    # === CHIRP Installation ===
-    # Install CHIRP via pipx into /opt so all users get it
-    log "INFO" "Installing CHIRP radio programming software..."
-    chroot "${SQUASHFS_DIR}" /bin/bash -c "
-        # Ensure pipx is available
-        apt-get install -y -qq pipx 2>&1 | tail -3
-        # Install CHIRP globally via pipx
-        pipx install --system-site-packages chirp 2>&1 | tail -10 || log 'WARN' 'CHIRP installation may have had warnings'
-        # Make CHIRP available system-wide
-        ln -sf /root/.local/bin/chirp /usr/local/bin/chirp 2>/dev/null || true
-    " 2>&1 | tee -a "$LOG_FILE"
+    # === CHIRP Installation Setup ===
+    # Can't build CHIRP from source in chroot (numpy wheel build fails with old-releases)
+    # Install via post-install script that runs on first boot instead
+    log "INFO" "Setting up CHIRP installation for first boot..."
+    local chirp_install_script="${SQUASHFS_DIR}/usr/local/bin/install-chirp-first-boot.sh"
+    mkdir -p "$(dirname "$chirp_install_script")"
+    cat > "$chirp_install_script" <<'CHIRP_SCRIPT'
+#!/bin/bash
+# Install CHIRP on first boot - avoids build issues in chroot
+set -e
+MARKER="/var/lib/emcomm-chirp-installed"
+if [ -f "$MARKER" ]; then
+    exit 0
+fi
+apt-get update > /dev/null 2>&1 || true
+apt-get install -y python3-pip > /dev/null 2>&1 || true
+python3 -m pip install --upgrade pip setuptools wheel > /dev/null 2>&1 || true
+python3 -m pip install chirp > /dev/null 2>&1 && touch "$MARKER" || true
+CHIRP_SCRIPT
+    chmod +x "$chirp_install_script"
+    log "DEBUG" "CHIRP first-boot script created"
     
-    # === Microsoft Edge Installation ===
-    # Edge can't be installed from old-releases repos (Ubuntu 22.10 EOL)
-    # Install from upstream Microsoft repo instead
-    log "INFO" "Installing Microsoft Edge..."
-    chroot "${SQUASHFS_DIR}" /bin/bash -c "
-        # Add Microsoft's official Edge repo
-        apt-get install -y -qq curl gnupg 2>&1 | tail -2
-        curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | apt-key add - 2>&1 | tail -2 || true
-        
-        # Add Edge repository with proper key handling
-        echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-edge-browser.gpg] https://packages.microsoft.com/repos/edge stable main' > /etc/apt/sources.list.d/microsoft-edge-release.list
-        
-        # Try to get the key
-        wget -q https://packages.microsoft.com/keys/microsoft.asc -O - | apt-key add - 2>&1 | tail -2 || {
-            log 'INFO' 'Could not verify Edge repo key - attempting install anyway'
-        }
-        
-        # Update and install
-        apt-get update 2>&1 | tail -3 || true
-        apt-get install -y -qq microsoft-edge-stable 2>&1 | tail -10 || log 'WARN' 'Edge installation may have had issues'
-    " 2>&1 | tee -a "$LOG_FILE"
+    # === Microsoft Edge Installation Setup ===
+    # Edge repo has GPG issues with old-releases, use post-install instead
+    log "INFO" "Setting up Microsoft Edge installation for first boot..."
+    local edge_install_script="${SQUASHFS_DIR}/usr/local/bin/install-edge-first-boot.sh"
+    mkdir -p "$(dirname "$edge_install_script")"
+    cat > "$edge_install_script" <<'EDGE_SCRIPT'
+#!/bin/bash
+# Install Microsoft Edge on first boot
+set -e
+MARKER="/var/lib/emcomm-edge-installed"
+if [ -f "$MARKER" ]; then
+    exit 0
+fi
+apt-get update > /dev/null 2>&1 || true
+# Try to install from Debian packages directly (avoids repo issues)
+wget -q https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_latest_amd64.deb -O /tmp/edge.deb 2>/dev/null && \
+    dpkg -i /tmp/edge.deb > /dev/null 2>&1 && rm -f /tmp/edge.deb && touch "$MARKER" || {
+    # Fallback: use apt with repo
+    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | apt-key add - > /dev/null 2>&1 || true
+    echo 'deb [arch=amd64] https://packages.microsoft.com/repos/edge stable main' > /etc/apt/sources.list.d/microsoft-edge.list
+    apt-get update > /dev/null 2>&1 || true
+    apt-get install -y microsoft-edge-stable > /dev/null 2>&1 && touch "$MARKER" || true
+}
+EDGE_SCRIPT
+    chmod +x "$edge_install_script"
+    log "DEBUG" "Edge first-boot script created"
     
-    log "SUCCESS" "CHIRP and Microsoft Edge installation attempted"
+    # Create systemd service to run both scripts on first boot
+    local first_boot_service="${SQUASHFS_DIR}/etc/systemd/system/emcomm-first-boot-apps.service"
+    mkdir -p "$(dirname "$first_boot_service")"
+    cat > "$first_boot_service" <<'SERVICE_EOF'
+[Unit]
+Description=EmComm Tools First Boot Application Installation
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/var/lib/emcomm-first-boot-apps-done
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c '/usr/local/bin/install-chirp-first-boot.sh && /usr/local/bin/install-edge-first-boot.sh && touch /var/lib/emcomm-first-boot-apps-done'
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SERVICE_EOF
+    chroot "${SQUASHFS_DIR}" systemctl enable emcomm-first-boot-apps.service 2>/dev/null || log "WARN" "Could not enable systemd service"
+    log "DEBUG" "First-boot systemd service created and enabled"
+    
+    log "SUCCESS" "CHIRP and Microsoft Edge will be installed on first boot"
     
     cleanup_chroot_mounts
     trap - EXIT
