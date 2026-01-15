@@ -4090,27 +4090,71 @@ EOF
 # ============================================================================
 
 rebuild_squashfs() {
-    log "INFO" "Rebuilding squashfs filesystem (this can take 80-120 minutes due to xz compression)..."
+    # Source secrets for compression setting
+    # shellcheck source=/dev/null
+    source "$SECRETS_FILE"
+    
+    # Compression options: zstd (default), xz, gzip, lz4
+    local compression="${SQUASHFS_COMPRESSION:-zstd}"
+    
+    # Validate compression option
+    case "$compression" in
+        xz|zstd|gzip|lz4)
+            ;;
+        *)
+            log "WARN" "Unknown compression '$compression', using zstd"
+            compression="zstd"
+            ;;
+    esac
+    
+    # Estimate build time based on compression
+    local time_estimate
+    case "$compression" in
+        xz)   time_estimate="80-120 minutes" ;;
+        zstd) time_estimate="15-25 minutes" ;;
+        gzip) time_estimate="30-45 minutes" ;;
+        lz4)  time_estimate="5-10 minutes" ;;
+    esac
+    
+    log "INFO" "Rebuilding squashfs filesystem (compression: $compression, estimated: $time_estimate)..."
     
     local new_squashfs="${WORK_DIR}/filesystem.squashfs.new"
     log "DEBUG" "Creating new squashfs: $new_squashfs"
     log "DEBUG" "Source directory: $SQUASHFS_DIR"
-    log "DEBUG" "Compression: xz, block size: 1M"
+    log "DEBUG" "Compression: $compression, block size: 1M"
+    
+    # Build mksquashfs command based on compression type
+    local mksquashfs_args=(
+        "$SQUASHFS_DIR"
+        "$new_squashfs"
+        -comp "$compression"
+        -b 1M
+        -noappend
+        -progress
+    )
+    
+    # Add compression-specific options
+    case "$compression" in
+        xz)
+            # xz-specific: BCJ filter for x86 improves compression of executables
+            mksquashfs_args+=(-Xbcj x86)
+            ;;
+        zstd)
+            # zstd-specific: compression level (default 15, max 22)
+            # Level 19 gives near-xz compression with much better speed
+            mksquashfs_args+=(-Xcompression-level 19)
+            ;;
+    esac
     
     # Create new squashfs with compression - show progress
-    mksquashfs "$SQUASHFS_DIR" "$new_squashfs" \
-        -comp xz \
-        -b 1M \
-        -Xbcj x86 \
-        -noappend \
-        -progress 2>&1 | while IFS= read -r line; do
+    mksquashfs "${mksquashfs_args[@]}" 2>&1 | while IFS= read -r line; do
         # mksquashfs outputs progress on stderr
         if [[ "$line" =~ ^\[ ]] || [[ "$line" =~ % ]]; then
             printf "\r  %s" "$line"
         fi
     done
     echo ""  # newline after progress
-    log "DEBUG" "mksquashfs completed"
+    log "DEBUG" "mksquashfs completed with $compression compression"
     
     # Replace original squashfs
     log "DEBUG" "Moving new squashfs to: $SQUASHFS_FILE"
