@@ -1206,6 +1206,12 @@ update_release_info() {
         return 0
     fi
     
+    # Show current state BEFORE modification
+    log "DEBUG" "Current lsb-release BEFORE update:"
+    grep DISTRIB "$lsb_release_file" | while IFS= read -r line; do
+        log "DEBUG" "  [BEFORE] $line"
+    done
+    
     # Update DISTRIB_DESCRIPTION to show clean release info (what conky displays)
     # Format mirrors Cubic's official format: ETC_R5_FINAL (with customization note)
     # Reference: https://community.emcommtools.com/getting-stated/create-etc-image.html
@@ -1229,10 +1235,17 @@ update_release_info() {
     # Use sed to update the DISTRIB_DESCRIPTION line
     sed -i "s|DISTRIB_DESCRIPTION=.*|DISTRIB_DESCRIPTION=\"${custom_description}\"|" "$lsb_release_file"
     
-    log "SUCCESS" "Release info updated"
-    log "DEBUG" "New lsb-release:"
+    # VERIFY the change was applied
+    if grep -q "CUSTOMIZED" "$lsb_release_file"; then
+        log "SUCCESS" "Release info updated successfully"
+    else
+        log "ERROR" "DISTRIB_DESCRIPTION update FAILED!"
+        log "DEBUG" "sed command may have failed - check file permissions"
+    fi
+    
+    log "DEBUG" "lsb-release AFTER update:"
     grep DISTRIB "$lsb_release_file" | while IFS= read -r line; do
-        log "DEBUG" "  $line"
+        log "DEBUG" "  [AFTER] $line"
     done
 }
 
@@ -1580,48 +1593,86 @@ EOF
     
     # === CRITICAL FIX: Protect Anytone D578UV from being overwritten by rigctld ===
     # ETC's wrapper-rigctld.sh has a do_full_auto() function that destructively 
-    # replaces active-radio.json when a radio is detected. We patch it to preserve
-    # Anytone D578UV configuration.
+    # replaces active-radio.json when certain radios (like IC-705) are detected.
+    # We patch it to preserve our Anytone D578UV configuration.
+    #
+    # NOTE: The sed multi-line append syntax is tricky and often fails silently.
+    # This implementation uses a reliable approach: create temp file, then concatenate.
     log "DEBUG" "Patching rigctld wrapper to preserve Anytone D578UV..."
     
     local wrapper_script="${SQUASHFS_DIR}/opt/emcomm-tools/sbin/wrapper-rigctld.sh"
     if [ -f "$wrapper_script" ]; then
         # Backup the original
         cp "$wrapper_script" "${wrapper_script}.backup"
+        log "DEBUG" "Backed up wrapper-rigctld.sh to ${wrapper_script}.backup"
         
-        # Create a patch that adds an Anytone preservation check at the start of do_full_auto()
-        # This prevents the script from replacing our configured radio
-        cat > /tmp/anytone-preserve.patch << 'PATCH_EOF'
---- a/wrapper-rigctld.sh
-+++ b/wrapper-rigctld.sh
-@@ -13,6 +13,11 @@
- do_full_auto() {
-   et-log "Found ET_DEVICE='${ET_DEVICE}'"
- 
-+  # CUSTOM FIX: Preserve Anytone D578UV if already configured
-+  if [ -L "${ET_HOME}/conf/radios.d/active-radio.json" ] && grep -q '"anytone' "${ET_HOME}/conf/radios.d/active-radio.json" 2>/dev/null; then
-+    et-log "Anytone D578UV is configured - preserving configuration"
-+    return 0
-+  fi
-   case "$1" in
-PATCH_EOF
+        # Create the preservation code as a separate file
+        local patch_code
+        patch_code=$(mktemp)
+        cat > "$patch_code" << 'ANYTONE_PRESERVE_EOF'
+  # CUSTOM FIX: Preserve Anytone D578UV if already configured
+  # Added by EmComm Tools Customizer - prevents do_full_auto() from overwriting
+  if [ -L "${ET_HOME}/conf/radios.d/active-radio.json" ]; then
+    if grep -q '"anytone' "${ET_HOME}/conf/radios.d/active-radio.json" 2>/dev/null; then
+      et-log "Anytone D578UV is configured - preserving configuration"
+      return 0
+    fi
+  fi
+ANYTONE_PRESERVE_EOF
         
-        # Apply the patch using sed - simpler and more reliable than patch command
-        sed -i '/^do_full_auto()/a\
-  # CUSTOM FIX: Preserve Anytone D578UV if already configured\
-  if [ -L "${ET_HOME}/conf/radios.d/active-radio.json" ] && grep -q "anytone" "${ET_HOME}/conf/radios.d/active-radio.json" 2>/dev/null; then\
-    et-log "Anytone D578UV is configured - preserving configuration"\
-    return 0\
-  fi\
-' "$wrapper_script" 2>/dev/null || log "WARN" "Failed to patch wrapper-rigctld.sh for Anytone preservation"
+        # Find the line number of do_full_auto() function definition
+        local func_line
+        func_line=$(grep -n '^do_full_auto()' "$wrapper_script" | head -1 | cut -d: -f1)
         
-        if grep -q "Anytone D578UV is configured" "$wrapper_script"; then
-            log "SUCCESS" "wrapper-rigctld.sh successfully patched to preserve Anytone"
+        if [ -n "$func_line" ]; then
+            # Find the next line after the function opening brace (typically line after function def)
+            # The function body starts after the opening brace, usually on the line with 'et-log "Found ET_DEVICE'
+            local insert_line=$((func_line + 2))
+            
+            # Create new wrapper script with preservation code inserted
+            local new_wrapper
+            new_wrapper=$(mktemp)
+            
+            # Copy lines 1 to insert_line-1
+            head -n $((insert_line - 1)) "$wrapper_script" > "$new_wrapper"
+            
+            # Insert the preservation code
+            cat "$patch_code" >> "$new_wrapper"
+            
+            # Copy remaining lines
+            tail -n +$insert_line "$wrapper_script" >> "$new_wrapper"
+            
+            # Replace original with patched version
+            mv "$new_wrapper" "$wrapper_script"
+            chmod 755 "$wrapper_script"
+            
+            # Verify the patch was applied correctly
+            if grep -q "Anytone D578UV is configured - preserving configuration" "$wrapper_script"; then
+                log "SUCCESS" "wrapper-rigctld.sh successfully patched to preserve Anytone"
+                log "DEBUG" "Patch inserted at line $insert_line"
+                
+                # Show the patched function for verification
+                log "DEBUG" "Patched do_full_auto() function (first 15 lines):"
+                sed -n "${func_line},$((func_line + 15))p" "$wrapper_script" | while read -r line; do
+                    log "DEBUG" "  $line"
+                done
+            else
+                log "ERROR" "Anytone preservation patch FAILED to apply!"
+                log "DEBUG" "Restoring original wrapper-rigctld.sh from backup"
+                cp "${wrapper_script}.backup" "$wrapper_script"
+            fi
+            
+            rm -f "$patch_code"
         else
-            log "WARN" "Anytone preservation patch may not have applied correctly"
+            log "WARN" "Could not find do_full_auto() function in wrapper-rigctld.sh"
+            log "DEBUG" "Contents of wrapper-rigctld.sh (first 30 lines):"
+            head -30 "$wrapper_script" | while read -r line; do
+                log "DEBUG" "  $line"
+            done
         fi
     else
-        log "WARN" "wrapper-rigctld.sh not found - radio may be overwritten by rigctld auto-configuration"
+        log "WARN" "wrapper-rigctld.sh not found at: $wrapper_script"
+        log "WARN" "Radio may be overwritten by rigctld auto-configuration on boot"
     fi
     local systemd_dir="${SQUASHFS_DIR}/etc/systemd/system"
     mkdir -p "$systemd_dir"
@@ -2761,6 +2812,7 @@ setup_first_login_packages() {
 # Install CHIRP and Microsoft Edge on first user login
 # Fallback script in case systemd service doesn't run
 # Only runs for 'ubuntu' user, only once
+# CRITICAL: Ubuntu 22.10 is EOL - must fix apt sources first!
 
 MARKER_FILE="${HOME}/.etc-install-chirp-edge-done"
 if [ -f "$MARKER_FILE" ]; then
@@ -2781,31 +2833,51 @@ fi
     
     echo ""
     echo "====== EmComm Tools: Installing Packages ======"
-    echo "Installing CHIRP and Microsoft Edge..."
     echo ""
     
-    # CHIRP
-    if sudo apt-get update -qq >/dev/null 2>&1; then
-        if sudo apt-get install -y -qq chirp >/dev/null 2>&1; then
+    # CRITICAL: Fix apt sources for Ubuntu 22.10 (Kinetic) EOL
+    # Archive has moved to old-releases.ubuntu.com
+    echo "Fixing apt sources for Ubuntu 22.10 (EOL)..."
+    if grep -q "archive.ubuntu.com" /etc/apt/sources.list 2>/dev/null; then
+        sudo sed -i 's/archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+        sudo sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+        echo "✓ Apt sources updated to old-releases.ubuntu.com"
+    fi
+    
+    echo "Updating package lists (this may take a minute)..."
+    if sudo apt-get update -qq 2>/dev/null; then
+        echo "✓ Package lists updated"
+        
+        # CHIRP
+        echo "Installing CHIRP..."
+        if sudo apt-get install -y -qq chirp 2>/dev/null; then
             echo "✓ CHIRP installed"
         else
             echo "✗ CHIRP failed (can install manually: sudo apt-get install chirp)"
         fi
+    else
+        echo "✗ apt-get update failed - check network connectivity"
+        echo "  Manual fix: sudo apt-get update && sudo apt-get install chirp"
     fi
     
-    # Microsoft Edge
+    # Microsoft Edge (downloaded directly, doesn't need apt sources)
+    echo "Installing Microsoft Edge..."
     EDGE_DEB="/tmp/microsoft-edge-stable.deb"
-    if wget -q --timeout=10 --tries=2 "https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_latest_amd64.deb" -O "$EDGE_DEB" 2>/dev/null && [ -f "$EDGE_DEB" ]; then
+    if wget -q --timeout=30 --tries=3 "https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_latest_amd64.deb" -O "$EDGE_DEB" 2>/dev/null && [ -f "$EDGE_DEB" ] && [ -s "$EDGE_DEB" ]; then
         if sudo dpkg -i "$EDGE_DEB" >/dev/null 2>&1; then
             sudo apt-get install -y -f >/dev/null 2>&1
             echo "✓ Microsoft Edge installed"
+        else
+            echo "✗ Edge dpkg install failed"
         fi
         rm -f "$EDGE_DEB"
     else
-        echo "✗ Edge download failed (install from Microsoft's website)"
+        echo "✗ Edge download failed (install from https://www.microsoft.com/edge)"
     fi
     
+    echo ""
     echo "====== Package Installation Complete ======"
+    echo "Log: /var/log/emcomm-first-boot.log"
     echo ""
 ) &
 disown 2>/dev/null
@@ -2866,6 +2938,7 @@ LOGFILE="/var/log/emcomm-first-boot.log"
 #!/bin/bash
 # Install CHIRP and Microsoft Edge on first user login
 # Only runs for 'ubuntu' user, only once
+# CRITICAL: Ubuntu 22.10 is EOL - must fix apt sources first!
 
 MARKER_FILE="${HOME}/.etc-install-chirp-edge-done"
 if [ -f "$MARKER_FILE" ]; then
@@ -2886,31 +2959,51 @@ fi
     
     echo ""
     echo "====== EmComm Tools: Installing Packages ======"
-    echo "Installing CHIRP and Microsoft Edge..."
     echo ""
     
-    # CHIRP
-    if sudo apt-get update -qq >/dev/null 2>&1; then
-        if sudo apt-get install -y -qq chirp >/dev/null 2>&1; then
+    # CRITICAL: Fix apt sources for Ubuntu 22.10 (Kinetic) EOL
+    # Archive has moved to old-releases.ubuntu.com
+    echo "Fixing apt sources for Ubuntu 22.10 (EOL)..."
+    if grep -q "archive.ubuntu.com" /etc/apt/sources.list 2>/dev/null; then
+        sudo sed -i 's/archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+        sudo sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+        echo "✓ Apt sources updated to old-releases.ubuntu.com"
+    fi
+    
+    echo "Updating package lists (this may take a minute)..."
+    if sudo apt-get update -qq 2>/dev/null; then
+        echo "✓ Package lists updated"
+        
+        # CHIRP
+        echo "Installing CHIRP..."
+        if sudo apt-get install -y -qq chirp 2>/dev/null; then
             echo "✓ CHIRP installed"
         else
             echo "✗ CHIRP failed (can install manually: sudo apt-get install chirp)"
         fi
+    else
+        echo "✗ apt-get update failed - check network connectivity"
+        echo "  Manual fix: sudo apt-get update && sudo apt-get install chirp"
     fi
     
-    # Microsoft Edge
+    # Microsoft Edge (downloaded directly, doesn't need apt sources)
+    echo "Installing Microsoft Edge..."
     EDGE_DEB="/tmp/microsoft-edge-stable.deb"
-    if wget -q --timeout=10 --tries=2 "https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_latest_amd64.deb" -O "$EDGE_DEB" 2>/dev/null && [ -f "$EDGE_DEB" ]; then
+    if wget -q --timeout=30 --tries=3 "https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_latest_amd64.deb" -O "$EDGE_DEB" 2>/dev/null && [ -f "$EDGE_DEB" ] && [ -s "$EDGE_DEB" ]; then
         if sudo dpkg -i "$EDGE_DEB" >/dev/null 2>&1; then
             sudo apt-get install -y -f >/dev/null 2>&1
             echo "✓ Microsoft Edge installed"
+        else
+            echo "✗ Edge dpkg install failed"
         fi
         rm -f "$EDGE_DEB"
     else
-        echo "✗ Edge download failed (install from Microsoft's website)"
+        echo "✗ Edge download failed (install from https://www.microsoft.com/edge)"
     fi
     
+    echo ""
     echo "====== Package Installation Complete ======"
+    echo "Log: /var/log/emcomm-first-boot.log"
     echo ""
 ) &
 disown 2>/dev/null
@@ -3820,6 +3913,133 @@ EOF
     log "SUCCESS" "Cache files and build logs embedded (use -m for minimal build without cache)"
 }
 
+verify_customizations() {
+    # Final verification of all critical customizations BEFORE ISO creation
+    # This catches issues that would otherwise only be discovered after booting
+    log "INFO" "=== VERIFYING CRITICAL CUSTOMIZATIONS ==="
+    
+    local errors=0
+    local warnings=0
+    
+    # 1. Verify wrapper-rigctld.sh is patched for Anytone preservation
+    log "INFO" "Checking Anytone radio preservation patch..."
+    local wrapper_script="${SQUASHFS_DIR}/opt/emcomm-tools/sbin/wrapper-rigctld.sh"
+    if [ -f "$wrapper_script" ]; then
+        if grep -q "Anytone D578UV is configured - preserving configuration" "$wrapper_script"; then
+            log "SUCCESS" "  ✓ wrapper-rigctld.sh patched for Anytone preservation"
+        else
+            log "ERROR" "  ✗ wrapper-rigctld.sh NOT patched! Radio will be overwritten on boot!"
+            ((errors++))
+        fi
+    else
+        log "WARN" "  ⚠ wrapper-rigctld.sh not found (may be okay if ETC version changed)"
+        ((warnings++))
+    fi
+    
+    # 2. Verify active-radio.json symlink points to Anytone
+    log "INFO" "Checking active-radio.json symlink..."
+    local active_radio="${SQUASHFS_DIR}/opt/emcomm-tools/conf/radios.d/active-radio.json"
+    if [ -L "$active_radio" ]; then
+        local target
+        target=$(readlink "$active_radio")
+        if [[ "$target" =~ anytone ]]; then
+            log "SUCCESS" "  ✓ active-radio.json → $target"
+        else
+            log "WARN" "  ⚠ active-radio.json points to: $target (not Anytone)"
+            ((warnings++))
+        fi
+    else
+        log "WARN" "  ⚠ active-radio.json is not a symlink"
+        ((warnings++))
+    fi
+    
+    # 3. Verify anytone-d578uv.json exists
+    log "INFO" "Checking Anytone radio config file..."
+    local anytone_config="${SQUASHFS_DIR}/opt/emcomm-tools/conf/radios.d/anytone-d578uv.json"
+    if [ -f "$anytone_config" ]; then
+        log "SUCCESS" "  ✓ anytone-d578uv.json exists"
+    else
+        log "ERROR" "  ✗ anytone-d578uv.json NOT found!"
+        ((errors++))
+    fi
+    
+    # 4. Verify lsb-release has CUSTOMIZED
+    log "INFO" "Checking release info..."
+    local lsb_release="${SQUASHFS_DIR}/etc/lsb-release"
+    if [ -f "$lsb_release" ]; then
+        if grep -q "CUSTOMIZED" "$lsb_release"; then
+            local description
+            description=$(grep "DISTRIB_DESCRIPTION" "$lsb_release" | cut -d= -f2 | tr -d '"')
+            log "SUCCESS" "  ✓ Release: $description"
+        else
+            log "ERROR" "  ✗ lsb-release does NOT contain 'CUSTOMIZED'!"
+            log "DEBUG" "    Current value: $(grep 'DISTRIB_DESCRIPTION' "$lsb_release")"
+            ((errors++))
+        fi
+    else
+        log "ERROR" "  ✗ lsb-release file not found!"
+        ((errors++))
+    fi
+    
+    # 5. Verify profile.d script for CHIRP/Edge exists
+    log "INFO" "Checking CHIRP/Edge installation script..."
+    local profile_script="${SQUASHFS_DIR}/etc/profile.d/99-install-chirp-edge.sh"
+    if [ -f "$profile_script" ]; then
+        if grep -q "old-releases.ubuntu.com" "$profile_script"; then
+            log "SUCCESS" "  ✓ CHIRP/Edge script exists with apt source fix"
+        else
+            log "WARN" "  ⚠ CHIRP/Edge script exists but missing apt source fix"
+            ((warnings++))
+        fi
+    else
+        log "WARN" "  ⚠ CHIRP/Edge profile.d script not found"
+        ((warnings++))
+    fi
+    
+    # 6. Verify first-boot systemd service
+    log "INFO" "Checking first-boot systemd service..."
+    local service_file="${SQUASHFS_DIR}/etc/systemd/system/emcomm-first-boot.service"
+    if [ -f "$service_file" ]; then
+        log "SUCCESS" "  ✓ emcomm-first-boot.service exists"
+    else
+        log "WARN" "  ⚠ First-boot service not found"
+        ((warnings++))
+    fi
+    
+    # 7. Verify udev rules for CAT device
+    log "INFO" "Checking CAT udev rules..."
+    local udev_rules="${SQUASHFS_DIR}/etc/udev/rules.d/99-emcomm-tools-cat.rules"
+    if [ -f "$udev_rules" ]; then
+        log "SUCCESS" "  ✓ CAT udev rules exist"
+    else
+        log "WARN" "  ⚠ CAT udev rules not found"
+        ((warnings++))
+    fi
+    
+    # Summary
+    log "INFO" ""
+    log "INFO" "=== VERIFICATION SUMMARY ==="
+    if [ $errors -gt 0 ]; then
+        log "ERROR" "  ERRORS: $errors (build may produce broken ISO)"
+    else
+        log "SUCCESS" "  ERRORS: 0"
+    fi
+    if [ $warnings -gt 0 ]; then
+        log "WARN" "  WARNINGS: $warnings (review above)"
+    else
+        log "SUCCESS" "  WARNINGS: 0"
+    fi
+    log "INFO" ""
+    
+    # Return error code if there were critical failures
+    if [ $errors -gt 0 ]; then
+        log "ERROR" "Critical errors detected! Review logs before proceeding."
+        log "INFO" "Build will continue but ISO may not work correctly."
+    fi
+    
+    return 0  # Don't fail the build, just warn
+}
+
 create_build_manifest() {
     log "INFO" "Creating build manifest..."
     
@@ -4198,6 +4418,9 @@ main() {
     
     log "DEBUG" "Step 22/22: Final cleanup"
     log "DEBUG" "Step 22/22: Final cleanup COMPLETED"
+    
+    # VERIFY all customizations before ISO creation
+    verify_customizations
     
     # Rebuild ISO
     log "INFO" ""
