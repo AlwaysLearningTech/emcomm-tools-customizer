@@ -102,49 +102,38 @@ All features default to `"yes"` and are integrated explicitly into the build pro
 
 ## Fully Automated Installation
 
-The ISO uses **debian-installer (d-i)** with preseed for zero-interaction installation. All setup questions are answered automatically from your configuration.
+The ISO uses **Ubiquity** (Ubuntu's GUI installer) with preseed for zero-interaction installation. The `only-ubiquity` boot parameter triggers the installer immediately instead of booting to a live session.
 
 **Automated Installation Workflow**:
 1. Boot custom ISO from Ventoy
-2. GRUB menu shows all available OSes (dual-boot preserved)
-3. Select Ubuntu/EmComm Tools entry from menu
-4. GRUB loads preseed from `preseed/file=/cdrom/preseed.cfg`
-5. Preseed parameters: `auto=true priority=critical` (enable automatic mode)
-6. **Debian-installer runs WITHOUT user prompts** for:
+2. GRUB menu shows "Try or Install Ubuntu" (default selection)
+3. `only-ubiquity` parameter launches installer directly (skips live desktop)
+4. GRUB loads preseed from `file=/cdrom/preseed.cfg`
+5. **Ubiquity runs with preseed answers** for:
    - Keyboard layout
    - Locale / language
    - Hostname (set to `ETC-{CALLSIGN}`)
    - Username (set from config)
    - Password (hashed in preseed)
    - Timezone
-   - Partitioning (strategy-aware, respects dual-boot)
+   - Partitioning (strategy-aware)
    - Package selection (ubuntu-desktop task)
-7. System boots directly to desktop (or login prompt if autologin disabled)
-8. All customizations apply automatically (WiFi, APRS, desktop settings, CAT control, etc.)
+6. System boots directly to desktop (or login prompt if autologin disabled)
+7. All customizations apply automatically (WiFi, APRS, desktop settings, CAT control, etc.)
 
-**Why debian-installer instead of ubiquity?**
-
-The original approach used Ubuntu's ubiquity (GUI installer) with `automatic-ubiquity` boot parameter. However:
-- ✅ Ubiquity **ignores partitioning directives** in preseed - asks user anyway
-- ✅ Ubiquity **ignores many d-i settings** (not designed for full automation)
-- ✅ Ubiquity **can't skip accessibility/release notes questions**
-- ✅ Debian-installer **respects ALL preseed directives** including full partitioning
-- ✅ D-i is **text-based** - faster, no GUI overhead
-
-The debian-installer is the standard Debian/Ubuntu preseed solution and provides true "set it and forget it" automation.
-
-**Preseed File & Boot Parameters**:
+**Boot Parameters Explained**:
 
 The GRUB configuration is automatically updated to:
 ```bash
-linux /casper/vmlinuz preseed/file=/cdrom/preseed.cfg auto=true priority=critical maybe-ubiquity quiet splash ---
+linux /casper/vmlinuz file=/cdrom/preseed.cfg only-ubiquity quiet splash ---
 ```
 
-This tells debian-installer to:
-- Load preseed answers from `preseed/file=/cdrom/preseed.cfg`
-- `auto=true` - enable automatic mode (defer some early questions to allow preseed loading)
-- `priority=critical` - only ask questions marked critical; skip all others
-- `maybe-ubiquity` - still attempts GUI installer if available, falls back to text d-i
+This tells the system to:
+- `file=/cdrom/preseed.cfg` - Load preseed answers for installer questions
+- `only-ubiquity` - **Boot directly to installer** (skip live desktop "Try Ubuntu" mode)
+- `quiet splash` - Normal boot appearance
+
+**Note**: Without `only-ubiquity`, the ISO boots to a live session where you'd have to click "Install Ubuntu" manually.
 
 **Partitioning Behavior**:
 

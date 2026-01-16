@@ -2515,6 +2515,11 @@ update_grub_for_preseed() {
     # - To auto-start installer: add "only-ubiquity" boot parameter
     # - "only-ubiquity" = boot directly to Ubiquity installer, skip live desktop
     # - Preseed file provides answers to installer questions
+    #
+    # Ubuntu 22.10 GRUB entries that need modification:
+    # - "Try or Install Ubuntu" - default entry, needs only-ubiquity
+    # - "Ubuntu (safe graphics)" - fallback entry, needs only-ubiquity
+    # - "OEM install" - already has only-ubiquity, just update preseed path
     
     local grub_cfg="${ISO_EXTRACT_DIR}/boot/grub/grub.cfg"
     
@@ -2525,22 +2530,31 @@ update_grub_for_preseed() {
     
     log "DEBUG" "Modifying GRUB config: $grub_cfg"
     log "DEBUG" "GRUB config BEFORE modifications:"
-    grep "linux.*vmlinuz" "$grub_cfg" | head -3 | sed 's/^/  /'
+    grep "linux.*vmlinuz" "$grub_cfg" | head -5 | sed 's/^/  /'
     
-    # Step 1: Replace the preseed path and remove maybe-ubiquity
-    # Change: file=/cdrom/preseed/ubuntu.seed maybe-ubiquity -> file=/cdrom/preseed.cfg only-ubiquity
-    sed -i 's|file=/cdrom/preseed/ubuntu\.seed maybe-ubiquity|file=/cdrom/preseed.cfg only-ubiquity|g' "$grub_cfg"
+    # Step 1: Update preseed path in ALL entries (from ubuntu.seed to preseed.cfg)
+    # This catches: file=/cdrom/preseed/ubuntu.seed -> file=/cdrom/preseed.cfg
+    sed -i 's|file=/cdrom/preseed/ubuntu\.seed|file=/cdrom/preseed.cfg|g' "$grub_cfg"
+    log "DEBUG" "Updated preseed paths"
     
-    # Step 2: If preseed path was already updated but missing only-ubiquity, add it
-    # This handles cases where previous builds updated preseed path but not only-ubiquity
-    if grep -q "file=/cdrom/preseed.cfg" "$grub_cfg" && ! grep -q "only-ubiquity" "$grub_cfg"; then
-        # Add only-ubiquity after the preseed parameter
-        sed -i 's|file=/cdrom/preseed\.cfg quiet|file=/cdrom/preseed.cfg only-ubiquity quiet|g' "$grub_cfg"
-        log "DEBUG" "Added only-ubiquity to boot parameters"
-    fi
+    # Step 2: Add only-ubiquity to entries that DON'T already have it
+    # Pattern: "file=/cdrom/preseed.cfg quiet" -> "file=/cdrom/preseed.cfg only-ubiquity quiet"
+    # This adds only-ubiquity to "Try or Install" and "safe graphics" entries
+    # The OEM entry already has only-ubiquity, so it won't match this pattern
+    sed -i 's|file=/cdrom/preseed\.cfg quiet|file=/cdrom/preseed.cfg only-ubiquity quiet|g' "$grub_cfg"
+    log "DEBUG" "Added only-ubiquity to standard boot entries"
+    
+    # Step 3: Handle nomodeset (safe graphics) entry specifically
+    # Pattern: "nomodeset file=/cdrom/preseed.cfg quiet" -> "nomodeset file=/cdrom/preseed.cfg only-ubiquity quiet"
+    sed -i 's|nomodeset file=/cdrom/preseed\.cfg quiet|nomodeset file=/cdrom/preseed.cfg only-ubiquity quiet|g' "$grub_cfg"
+    log "DEBUG" "Updated safe graphics entry"
+    
+    # Step 4: Also handle maybe-ubiquity if present (older ISOs or ETC variants)
+    sed -i 's|maybe-ubiquity|only-ubiquity|g' "$grub_cfg"
+    log "DEBUG" "Replaced any maybe-ubiquity with only-ubiquity"
     
     log "DEBUG" "GRUB config AFTER modifications:"
-    grep "linux.*vmlinuz" "$grub_cfg" | head -3 | sed 's/^/  /'
+    grep "linux.*vmlinuz" "$grub_cfg" | head -5 | sed 's/^/  /'
     
     # Verify the changes took effect
     if grep -q "only-ubiquity" "$grub_cfg" && grep -q "file=/cdrom/preseed.cfg" "$grub_cfg"; then
