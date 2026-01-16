@@ -875,26 +875,48 @@ restore_user_backup() {
     local home_dir="$HOME"
     local user_backup=""
     local wine_backup=""
+    local backup_count=0
     
     # Auto-detect user backup (etc-user-backup-*.tar.gz)
     # Priority: 1) Home folder (et-user-backup default), 2) Cache folder
-    # Use the most recent one if multiple exist
+    # Always select the most recent (newest) backup by modification time
     if compgen -G "${home_dir}/etc-user-backup-*.tar.gz" > /dev/null 2>&1; then
+        backup_count=$(find "${home_dir}" -maxdepth 1 -name 'etc-user-backup-*.tar.gz' -type f 2>/dev/null | wc -l)
         user_backup=$(find "${home_dir}" -maxdepth 1 -name 'etc-user-backup-*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-        log "INFO" "Found user backup in home folder: $(basename "$user_backup")"
+        if [ "$backup_count" -gt 1 ]; then
+            log "INFO" "Found ${backup_count} user backups in home folder, using newest: $(basename "$user_backup")"
+        else
+            log "INFO" "Found user backup in home folder: $(basename "$user_backup")"
+        fi
     elif compgen -G "${cache_dir}/etc-user-backup-*.tar.gz" > /dev/null 2>&1; then
+        backup_count=$(find "${cache_dir}" -maxdepth 1 -name 'etc-user-backup-*.tar.gz' -type f 2>/dev/null | wc -l)
         user_backup=$(find "${cache_dir}" -maxdepth 1 -name 'etc-user-backup-*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-        log "INFO" "Found user backup in cache folder: $(basename "$user_backup")"
+        if [ "$backup_count" -gt 1 ]; then
+            log "INFO" "Found ${backup_count} user backups in cache folder, using newest: $(basename "$user_backup")"
+        else
+            log "INFO" "Found user backup in cache folder: $(basename "$user_backup")"
+        fi
     fi
     
     # Auto-detect wine backup (etc-wine-backup-*.tar.gz)
     # Priority: 1) Home folder, 2) Cache folder
+    # Always select the most recent (newest) backup by modification time
     if compgen -G "${home_dir}/etc-wine-backup-*.tar.gz" > /dev/null 2>&1; then
+        backup_count=$(find "${home_dir}" -maxdepth 1 -name 'etc-wine-backup-*.tar.gz' -type f 2>/dev/null | wc -l)
         wine_backup=$(find "${home_dir}" -maxdepth 1 -name 'etc-wine-backup-*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-        log "INFO" "Found Wine backup in home folder: $(basename "$wine_backup")"
+        if [ "$backup_count" -gt 1 ]; then
+            log "INFO" "Found ${backup_count} Wine backups in home folder, using newest: $(basename "$wine_backup")"
+        else
+            log "INFO" "Found Wine backup in home folder: $(basename "$wine_backup")"
+        fi
     elif compgen -G "${cache_dir}/etc-wine-backup-*.tar.gz" > /dev/null 2>&1; then
+        backup_count=$(find "${cache_dir}" -maxdepth 1 -name 'etc-wine-backup-*.tar.gz' -type f 2>/dev/null | wc -l)
         wine_backup=$(find "${cache_dir}" -maxdepth 1 -name 'etc-wine-backup-*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-        log "INFO" "Found Wine backup in cache folder: $(basename "$wine_backup")"
+        if [ "$backup_count" -gt 1 ]; then
+            log "INFO" "Found ${backup_count} Wine backups in cache folder, using newest: $(basename "$wine_backup")"
+        else
+            log "INFO" "Found Wine backup in cache folder: $(basename "$wine_backup")"
+        fi
     fi
     
     # Check if any backups were found
