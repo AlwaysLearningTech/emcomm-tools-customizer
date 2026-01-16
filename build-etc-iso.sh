@@ -1247,6 +1247,35 @@ update_release_info() {
     grep DISTRIB "$lsb_release_file" | while IFS= read -r line; do
         log "DEBUG" "  [AFTER] $line"
     done
+    
+    # CRITICAL: Update dpkg database with new MD5 hash for /etc/lsb-release
+    # Without this, the installer may restore the original file during installation
+    # because dpkg tracks conffile checksums and detects our modification
+    local dpkg_status="${SQUASHFS_DIR}/var/lib/dpkg/status"
+    if [ -f "$dpkg_status" ]; then
+        # Calculate MD5 of our modified lsb-release
+        local new_md5
+        new_md5=$(md5sum "$lsb_release_file" | cut -d' ' -f1)
+        log "DEBUG" "New lsb-release MD5: $new_md5"
+        
+        # Update the MD5 in dpkg status (base-files package owns /etc/lsb-release)
+        # The format is: " /etc/lsb-release <md5hash>"
+        if grep -q "/etc/lsb-release" "$dpkg_status"; then
+            sed -i "s| /etc/lsb-release [a-f0-9]*| /etc/lsb-release ${new_md5}|g" "$dpkg_status"
+            log "DEBUG" "Updated dpkg database with new lsb-release MD5"
+            
+            # Verify the update
+            if grep -q "/etc/lsb-release ${new_md5}" "$dpkg_status"; then
+                log "SUCCESS" "dpkg database MD5 updated successfully"
+            else
+                log "WARN" "dpkg database MD5 update may have failed"
+            fi
+        else
+            log "WARN" "Could not find /etc/lsb-release entry in dpkg status"
+        fi
+    else
+        log "WARN" "dpkg status file not found at: $dpkg_status"
+    fi
 }
 
 customize_desktop() {
@@ -2712,23 +2741,48 @@ customize_additional_packages() {
     fi
     
     # === CHIRP Installation Setup ===
-    # Can't build CHIRP from source in chroot (numpy wheel build fails with old-releases)
-    # Install via post-install script that runs on first boot instead
+    # CHIRP requires pipx installation with downloaded .whl file
+    # Reference: https://chirpmyradio.com/projects/chirp/wiki/ChirpOnLinux
     log "INFO" "Setting up CHIRP installation for first boot..."
     local chirp_install_script="${SQUASHFS_DIR}/usr/local/bin/install-chirp-first-boot.sh"
     mkdir -p "$(dirname "$chirp_install_script")"
     cat > "$chirp_install_script" <<'CHIRP_SCRIPT'
 #!/bin/bash
-# Install CHIRP on first boot - avoids build issues in chroot
+# Install CHIRP on first boot using pipx (official method)
+# Reference: https://chirpmyradio.com/projects/chirp/wiki/ChirpOnLinux
 set -e
 MARKER="/var/lib/emcomm-chirp-installed"
 if [ -f "$MARKER" ]; then
     exit 0
 fi
+
+# CRITICAL: Ubuntu 22.10 is EOL - fix apt sources first
+if grep -q "archive.ubuntu.com" /etc/apt/sources.list 2>/dev/null; then
+    sed -i 's/archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+    sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+fi
+
+# Install dependencies (system packages required by CHIRP)
 apt-get update > /dev/null 2>&1 || true
-apt-get install -y python3-pip > /dev/null 2>&1 || true
-python3 -m pip install --upgrade pip setuptools wheel > /dev/null 2>&1 || true
-python3 -m pip install chirp > /dev/null 2>&1 && touch "$MARKER" || true
+apt-get install -y python3-wxgtk4.0 pipx python3-yattag > /dev/null 2>&1 || true
+
+# Download latest CHIRP wheel from official archive
+# Find the latest date folder and download the wheel
+CHIRP_ARCHIVE="https://archive.chirpmyradio.com/chirp_next"
+LATEST_DATE=$(curl -s "$CHIRP_ARCHIVE/" | grep -oP 'href="\K[0-9]{8}(?=/")' | sort -r | head -1)
+if [ -n "$LATEST_DATE" ]; then
+    WHEEL_FILE=$(curl -s "$CHIRP_ARCHIVE/$LATEST_DATE/" | grep -oP 'href="\K[^"]+\.whl' | head -1)
+    if [ -n "$WHEEL_FILE" ]; then
+        WHEEL_URL="$CHIRP_ARCHIVE/$LATEST_DATE/$WHEEL_FILE"
+        wget -q "$WHEEL_URL" -O "/tmp/$WHEEL_FILE" 2>/dev/null
+        if [ -f "/tmp/$WHEEL_FILE" ]; then
+            # Install for root (system-wide effect)
+            pipx install --system-site-packages "/tmp/$WHEEL_FILE" > /dev/null 2>&1 || true
+            rm -f "/tmp/$WHEEL_FILE"
+            touch "$MARKER"
+        fi
+    fi
+fi
 CHIRP_SCRIPT
     chmod +x "$chirp_install_script"
     log "DEBUG" "CHIRP first-boot script created"
@@ -2746,6 +2800,13 @@ MARKER="/var/lib/emcomm-edge-installed"
 if [ -f "$MARKER" ]; then
     exit 0
 fi
+
+# CRITICAL: Ubuntu 22.10 is EOL - fix apt sources first
+if grep -q "archive.ubuntu.com" /etc/apt/sources.list 2>/dev/null; then
+    sed -i 's/archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+    sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+fi
+
 apt-get update > /dev/null 2>&1 || true
 # Try to install from Debian packages directly (avoids repo issues)
 wget -q https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_latest_amd64.deb -O /tmp/edge.deb 2>/dev/null && \
@@ -2848,16 +2909,38 @@ fi
     if sudo apt-get update -qq 2>/dev/null; then
         echo "✓ Package lists updated"
         
-        # CHIRP
-        echo "Installing CHIRP..."
-        if sudo apt-get install -y -qq chirp 2>/dev/null; then
-            echo "✓ CHIRP installed"
+        # CHIRP - Install via pipx with downloaded wheel (official method)
+        # Reference: https://chirpmyradio.com/projects/chirp/wiki/ChirpOnLinux
+        echo "Installing CHIRP dependencies..."
+        if sudo apt-get install -y -qq python3-wxgtk4.0 pipx python3-yattag 2>/dev/null; then
+            echo "✓ CHIRP dependencies installed"
+            echo "Downloading latest CHIRP wheel..."
+            CHIRP_ARCHIVE="https://archive.chirpmyradio.com/chirp_next"
+            LATEST_DATE=$(curl -s "$CHIRP_ARCHIVE/" | grep -oP 'href="\K[0-9]{8}(?=/")' | sort -r | head -1)
+            if [ -n "$LATEST_DATE" ]; then
+                WHEEL_FILE=$(curl -s "$CHIRP_ARCHIVE/$LATEST_DATE/" | grep -oP 'href="\K[^"]+\.whl' | head -1)
+                if [ -n "$WHEEL_FILE" ]; then
+                    WHEEL_URL="$CHIRP_ARCHIVE/$LATEST_DATE/$WHEEL_FILE"
+                    wget -q "$WHEEL_URL" -O "/tmp/$WHEEL_FILE" 2>/dev/null
+                    if [ -f "/tmp/$WHEEL_FILE" ]; then
+                        echo "Installing CHIRP via pipx..."
+                        pipx install --system-site-packages "/tmp/$WHEEL_FILE" 2>/dev/null && echo "✓ CHIRP installed" || echo "✗ CHIRP pipx install failed"
+                        rm -f "/tmp/$WHEEL_FILE"
+                    else
+                        echo "✗ CHIRP wheel download failed"
+                    fi
+                else
+                    echo "✗ Could not find CHIRP wheel file"
+                fi
+            else
+                echo "✗ Could not determine latest CHIRP version"
+            fi
         else
-            echo "✗ CHIRP failed (can install manually: sudo apt-get install chirp)"
+            echo "✗ CHIRP dependencies failed"
         fi
     else
         echo "✗ apt-get update failed - check network connectivity"
-        echo "  Manual fix: sudo apt-get update && sudo apt-get install chirp"
+        echo "  See: https://chirpmyradio.com/projects/chirp/wiki/ChirpOnLinux"
     fi
     
     # Microsoft Edge (downloaded directly, doesn't need apt sources)
@@ -2974,16 +3057,38 @@ fi
     if sudo apt-get update -qq 2>/dev/null; then
         echo "✓ Package lists updated"
         
-        # CHIRP
-        echo "Installing CHIRP..."
-        if sudo apt-get install -y -qq chirp 2>/dev/null; then
-            echo "✓ CHIRP installed"
+        # CHIRP - Install via pipx with downloaded wheel (official method)
+        # Reference: https://chirpmyradio.com/projects/chirp/wiki/ChirpOnLinux
+        echo "Installing CHIRP dependencies..."
+        if sudo apt-get install -y -qq python3-wxgtk4.0 pipx python3-yattag 2>/dev/null; then
+            echo "✓ CHIRP dependencies installed"
+            echo "Downloading latest CHIRP wheel..."
+            CHIRP_ARCHIVE="https://archive.chirpmyradio.com/chirp_next"
+            LATEST_DATE=$(curl -s "$CHIRP_ARCHIVE/" | grep -oP 'href="\K[0-9]{8}(?=/")' | sort -r | head -1)
+            if [ -n "$LATEST_DATE" ]; then
+                WHEEL_FILE=$(curl -s "$CHIRP_ARCHIVE/$LATEST_DATE/" | grep -oP 'href="\K[^"]+\.whl' | head -1)
+                if [ -n "$WHEEL_FILE" ]; then
+                    WHEEL_URL="$CHIRP_ARCHIVE/$LATEST_DATE/$WHEEL_FILE"
+                    wget -q "$WHEEL_URL" -O "/tmp/$WHEEL_FILE" 2>/dev/null
+                    if [ -f "/tmp/$WHEEL_FILE" ]; then
+                        echo "Installing CHIRP via pipx..."
+                        pipx install --system-site-packages "/tmp/$WHEEL_FILE" 2>/dev/null && echo "✓ CHIRP installed" || echo "✗ CHIRP pipx install failed"
+                        rm -f "/tmp/$WHEEL_FILE"
+                    else
+                        echo "✗ CHIRP wheel download failed"
+                    fi
+                else
+                    echo "✗ Could not find CHIRP wheel file"
+                fi
+            else
+                echo "✗ Could not determine latest CHIRP version"
+            fi
         else
-            echo "✗ CHIRP failed (can install manually: sudo apt-get install chirp)"
+            echo "✗ CHIRP dependencies failed"
         fi
     else
         echo "✗ apt-get update failed - check network connectivity"
-        echo "  Manual fix: sudo apt-get update && sudo apt-get install chirp"
+        echo "  See: https://chirpmyradio.com/projects/chirp/wiki/ChirpOnLinux"
     fi
     
     # Microsoft Edge (downloaded directly, doesn't need apt sources)

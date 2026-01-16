@@ -72,6 +72,9 @@ This customizer **respects upstream ETC architecture**. We:
   - No interactive prompts: keyboard, locale, hostname, username, password, timezone, partitioning all preseed-driven
   - Text-based installer (d-i) respects all preseed directives including partitioning
 - **Anytone D578UV radio**: Radio configuration added to et-radio menu (rigctrl ID 301)
+- **Release info persistence**: Custom release name (`ETC_R5_FINAL (CUSTOMIZED)`) persists after installation
+  - Uses dpkg conffile MD5 update to prevent installer from reverting `/etc/lsb-release`
+  - `et-system-info release` correctly shows custom build name
 
 ### Optional et-os-addons Features
 
@@ -667,9 +670,11 @@ The build automatically installs:
 - **VS Code** - editor
 - **Node.js & npm** - JavaScript development
 - **git** - version control
-- **CHIRP** - Radio programming software (via pipx)
+- **CHIRP** - Radio programming software (installed via pipx with official wheel from https://archive.chirpmyradio.com/)
 
 Additional packages can be configured in `secrets.env` via `ADDITIONAL_PACKAGES` variable.
+
+**Note on CHIRP**: Ubuntu 22.10 repos have outdated CHIRP packages. The build uses the official installation method (pipx with downloaded wheel) as documented at https://chirpmyradio.com/projects/chirp/wiki/ChirpOnLinux.
 
 ### Automatic Backup Restoration
 

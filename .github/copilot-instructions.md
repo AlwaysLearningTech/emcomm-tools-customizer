@@ -16,8 +16,8 @@
 10. **UPDATE DOCUMENTATION IN-PLACE** - Modify existing README.md directly.
 11. **COMMIT BEFORE BUILDS** - ALWAYS remind user to commit and sync changes before starting a build. After build completes, user may overwrite OS with new ISO before syncing!
 12. **SUDO PASSWORD ALERT** - When a terminal command requires sudo and prompts for password, STOP immediately and notify the user. User often doesn't notice terminal prompts while chat is processing.
-12. **NO TEE IN BUILD COMMANDS** - Never use `tee` in build scripts when running with sudo (causes hangs/timeouts). Output goes to logs/ automatically.
-13. **UBUNTU 22.10 IS EOL** - CRITICAL: Kinetic (22.10) is end-of-life. ALWAYS fix apt sources before any apt operations in chroot:
+13. **NO TEE IN BUILD COMMANDS** - Never use `tee` in build scripts when running with sudo (causes hangs/timeouts). Output goes to logs/ automatically.
+14. **UBUNTU 22.10 IS EOL** - CRITICAL: Kinetic (22.10) is end-of-life. ALWAYS fix apt sources before any apt operations in chroot:
     ```bash
     chroot "${SQUASHFS_DIR}" sed -i 's/archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
     chroot "${SQUASHFS_DIR}" sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
@@ -25,6 +25,8 @@
     Do this BEFORE apt-get update or any apt-get install commands. This MUST happen early in customize_packages() function.
 15. **SQUASHFS REBUILD TIME** - Realistic estimate is 90-120 minutes total build time, not 10-20 minutes. xz compression with mksquashfs takes significant time. Update docs if time estimates are shown to user.
 16. **NEVER DELETE FILES WITHOUT ASKING** - Do NOT use `rm -rf` on ISOs, build artifacts, or any user files without explicit permission. Always ask first or make backups.
+17. **CHIRP USES PIPX, NOT APT** - CHIRP must be installed via pipx with wheel file from https://archive.chirpmyradio.com/chirp_next/, NOT apt-get or pip. See CHIRP Installation section below.
+18. **DPKG CONFFILE MD5 MATTERS** - When modifying dpkg conffiles like `/etc/lsb-release`, ALSO update the MD5 hash in `/var/lib/dpkg/status` or the installer may reset the file.
 
 ## VERIFICATION REQUIREMENTS - NON-NEGOTIABLE
 **When code claims to fix a problem or user says something is broken:**
@@ -120,6 +122,17 @@ The et-os-addons repository exists to extend ETC with optional features (GridTra
 - Our xorriso-based automated build **must replicate** Cubic's metadata step
 - This is NOT a bug in ETC's install.sh - it's by design: install.sh handles system config, Cubic handles ISO metadata
 - Therefore, our `update_release_info()` function correctly replaces Cubic's metadata finalization
+
+**CRITICAL: dpkg Conffile MD5 Hash Update**
+The `/etc/lsb-release` file is a dpkg "conffile" owned by the `base-files` package. Ubuntu's installer (Ubiquity) tracks conffile checksums in `/var/lib/dpkg/status`:
+- Original Ubuntu lsb-release has MD5 hash stored in dpkg status
+- When we modify lsb-release, dpkg detects the mismatch
+- **Without updating the MD5**, the installer may restore the original file during installation!
+- Our `update_release_info()` function now:
+  1. Modifies `/etc/lsb-release` with our DISTRIB_DESCRIPTION
+  2. Calculates the new MD5 hash of the modified file
+  3. Updates `/var/lib/dpkg/status` with the new MD5 hash
+- This ensures the release info persists after installation, not just in live session
 
 ### Official Build Method (from https://community.emcommtools.com)
 The official ETC build process uses **Cubic** (GUI tool) to:
@@ -270,6 +283,30 @@ Automated customization of EmComm Tools Community (ETC) ISO images.
 - Ham radio: Winlink/Pat, VARA (Wine), JS8Call, WSJT-X, fldigi, direwolf, YAAC
 - Development: VS Code
 - Utilities: et-user, et-radio, et-mode
+
+### CHIRP Installation (CRITICAL - Use pipx!)
+**CHIRP MUST be installed via pipx, NOT apt-get or pip.**
+
+Reference: https://chirpmyradio.com/projects/chirp/wiki/ChirpOnLinux
+
+**Correct installation method:**
+```bash
+# 1. Install system dependencies
+sudo apt-get install -y python3-wxgtk4.0 pipx python3-yattag
+
+# 2. Download latest wheel from official archive
+CHIRP_ARCHIVE="https://archive.chirpmyradio.com/chirp_next"
+LATEST_DATE=$(curl -s "$CHIRP_ARCHIVE/" | grep -oP 'href="\K[0-9]{8}(?=/")' | sort -r | head -1)
+WHEEL_FILE=$(curl -s "$CHIRP_ARCHIVE/$LATEST_DATE/" | grep -oP 'href="\K[^"]+\.whl' | head -1)
+wget "$CHIRP_ARCHIVE/$LATEST_DATE/$WHEEL_FILE" -O "/tmp/$WHEEL_FILE"
+
+# 3. Install via pipx with system site packages (for wxPython)
+pipx install --system-site-packages "/tmp/$WHEEL_FILE"
+```
+
+**Why NOT apt-get:** Ubuntu 22.10 repos don't have current CHIRP; the packaged version is outdated.
+**Why NOT pip:** CHIRP needs wxPython from system packages; pure pip install breaks GUI.
+**Why pipx:** Provides isolated environment while still accessing system wx libraries via `--system-site-packages`.
 
 ### What This Project Customizes
 
