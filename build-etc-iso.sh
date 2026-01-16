@@ -1247,35 +1247,6 @@ update_release_info() {
     grep DISTRIB "$lsb_release_file" | while IFS= read -r line; do
         log "DEBUG" "  [AFTER] $line"
     done
-    
-    # CRITICAL: Update dpkg database with new MD5 hash for /etc/lsb-release
-    # Without this, the installer may restore the original file during installation
-    # because dpkg tracks conffile checksums and detects our modification
-    local dpkg_status="${SQUASHFS_DIR}/var/lib/dpkg/status"
-    if [ -f "$dpkg_status" ]; then
-        # Calculate MD5 of our modified lsb-release
-        local new_md5
-        new_md5=$(md5sum "$lsb_release_file" | cut -d' ' -f1)
-        log "DEBUG" "New lsb-release MD5: $new_md5"
-        
-        # Update the MD5 in dpkg status (base-files package owns /etc/lsb-release)
-        # The format is: " /etc/lsb-release <md5hash>"
-        if grep -q "/etc/lsb-release" "$dpkg_status"; then
-            sed -i "s| /etc/lsb-release [a-f0-9]*| /etc/lsb-release ${new_md5}|g" "$dpkg_status"
-            log "DEBUG" "Updated dpkg database with new lsb-release MD5"
-            
-            # Verify the update
-            if grep -q "/etc/lsb-release ${new_md5}" "$dpkg_status"; then
-                log "SUCCESS" "dpkg database MD5 updated successfully"
-            else
-                log "WARN" "dpkg database MD5 update may have failed"
-            fi
-        else
-            log "WARN" "Could not find /etc/lsb-release entry in dpkg status"
-        fi
-    else
-        log "WARN" "dpkg status file not found at: $dpkg_status"
-    fi
 }
 
 customize_desktop() {
@@ -2378,6 +2349,16 @@ d-i finish-install/reboot_in_background boolean true
 
 # Don't prompt to remove media - go straight to reboot
 d-i cdrom-detect/eject boolean true
+
+### Late command (runs after installation, before reboot)
+# Ensure our customized lsb-release persists by verifying it in /target
+# This handles any post-install package updates that might overwrite it
+d-i preseed/late_command string \
+    if grep -q "CUSTOMIZED" /target/etc/lsb-release; then \
+        echo "lsb-release already contains customizations"; \
+    else \
+        sed -i 's/DISTRIB_DESCRIPTION=.*/DISTRIB_DESCRIPTION="RELEASE_DESCRIPTION_VAR"/' /target/etc/lsb-release; \
+    fi
 EOF
     
     if [ $? -ne 0 ]; then
@@ -2407,6 +2388,21 @@ EOF
     sed -i "s|USERNAME_VAR|$username|g" "$preseed_file"
     sed -i "s|PASSWORD_HASH_VAR|$hashed_password|g" "$preseed_file"
     sed -i "s|INSTALL_DISK_VAR|${target_disk:-/dev/sda}|g" "$preseed_file"
+    
+    # Build release description for late_command (same format as update_release_info)
+    local release_type=""
+    if [[ "$RELEASE_TAG" =~ -final ]]; then
+        release_type="FINAL"
+    elif [[ "$RELEASE_TAG" =~ build[0-9]+ ]]; then
+        release_type="$BUILD_NUMBER"
+    else
+        release_type="DEV"
+    fi
+    local release_number_upper="${RELEASE_NUMBER^^}"
+    local release_description="ETC_${release_number_upper}_${release_type} (CUSTOMIZED)"
+    sed -i "s|RELEASE_DESCRIPTION_VAR|$release_description|g" "$preseed_file"
+    log "DEBUG" "[PRESEED] Release description for late_command: $release_description"
+    
     log "DEBUG" "[PRESEED] Variable substitution completed"
     
     # Generate partitioning preseed based on detected strategy
@@ -2508,11 +2504,17 @@ PARTMAN_CONFIG
 }
 
 update_grub_for_preseed() {
-    log "INFO" "Updating GRUB boot parameters to use preseed file with debian-installer..."
+    log "INFO" "Updating GRUB boot parameters for automated installation..."
     
     # GRUB config is in the extracted ISO directory (not in squashfs)
     # Location: .work/iso/boot/grub/grub.cfg
     # Reference: https://help.ubuntu.com/community/InstallCDCustomization
+    #
+    # CRITICAL: Ubuntu Desktop ISOs use Casper (live boot) + Ubiquity (installer)
+    # - By default, boots to live session ("Try Ubuntu") and waits for user to click Install
+    # - To auto-start installer: add "only-ubiquity" boot parameter
+    # - "only-ubiquity" = boot directly to Ubiquity installer, skip live desktop
+    # - Preseed file provides answers to installer questions
     
     local grub_cfg="${ISO_EXTRACT_DIR}/boot/grub/grub.cfg"
     
@@ -2522,32 +2524,32 @@ update_grub_for_preseed() {
     fi
     
     log "DEBUG" "Modifying GRUB config: $grub_cfg"
+    log "DEBUG" "GRUB config BEFORE modifications:"
+    grep "linux.*vmlinuz" "$grub_cfg" | head -3 | sed 's/^/  /'
     
-    # CRITICAL: Only modify Ubuntu installer entries, preserve dual-boot entries!
-    # Per Ubuntu InstallCDCustomization documentation, preseed params for GRUB should be:
-    #   file=/cdrom/preseed.cfg debian-installer/locale=en_US console-setup/layoutcode=us
-    # 
-    # Do NOT use auto=true/priority=critical for desktop ISOs with preseed file in ISO root
-    # (those are for Debian's auto-mode which is different from simple preseed file loading)
-    #
-    # The preseed file we created at ISO root (/preseed.cfg) should be loaded via:
-    #   file=/cdrom/preseed.cfg
-    #
-    # Reference: https://www.debian.org/releases/stable/amd64/apbs02.en.html#preseed-usage
+    # Step 1: Replace the preseed path and remove maybe-ubiquity
+    # Change: file=/cdrom/preseed/ubuntu.seed maybe-ubiquity -> file=/cdrom/preseed.cfg only-ubiquity
+    sed -i 's|file=/cdrom/preseed/ubuntu\.seed maybe-ubiquity|file=/cdrom/preseed.cfg only-ubiquity|g' "$grub_cfg"
     
-    # Replace the preseed path AND remove maybe-ubiquity (forces d-i instead of ubiquity)
-    # Change: file=/cdrom/preseed/ubuntu.seed maybe-ubiquity -> file=/cdrom/preseed.cfg
-    sed -i 's|file=/cdrom/preseed/ubuntu\.seed maybe-ubiquity|file=/cdrom/preseed.cfg|g' "$grub_cfg"
+    # Step 2: If preseed path was already updated but missing only-ubiquity, add it
+    # This handles cases where previous builds updated preseed path but not only-ubiquity
+    if grep -q "file=/cdrom/preseed.cfg" "$grub_cfg" && ! grep -q "only-ubiquity" "$grub_cfg"; then
+        # Add only-ubiquity after the preseed parameter
+        sed -i 's|file=/cdrom/preseed\.cfg quiet|file=/cdrom/preseed.cfg only-ubiquity quiet|g' "$grub_cfg"
+        log "DEBUG" "Added only-ubiquity to boot parameters"
+    fi
     
-    log "DEBUG" "GRUB config updated for preseed file loading"
+    log "DEBUG" "GRUB config AFTER modifications:"
+    grep "linux.*vmlinuz" "$grub_cfg" | head -3 | sed 's/^/  /'
     
     # Verify the changes took effect
-    if grep -q "file=/cdrom/preseed.cfg" "$grub_cfg"; then
-        log "SUCCESS" "Boot parameters configured to load preseed from /cdrom/preseed.cfg"
-        log "DEBUG" "Verified preseed parameter in GRUB:"
-        grep "file=/cdrom/preseed.cfg" "$grub_cfg" | head -2 | sed 's/^/  /'
+    if grep -q "only-ubiquity" "$grub_cfg" && grep -q "file=/cdrom/preseed.cfg" "$grub_cfg"; then
+        log "SUCCESS" "GRUB configured for automatic Ubiquity installation"
+        log "DEBUG" "Boot parameters: file=/cdrom/preseed.cfg only-ubiquity"
     else
-        log "WARN" "GRUB config update may have failed - verify file=/cdrom/preseed.cfg is present"
+        log "WARN" "GRUB config update may have failed"
+        log "DEBUG" "Current linux lines:"
+        grep "linux.*vmlinuz" "$grub_cfg" | sed 's/^/  /'
     fi
     
     # Warn user if we detect other OSes in GRUB menu
@@ -2741,48 +2743,23 @@ customize_additional_packages() {
     fi
     
     # === CHIRP Installation Setup ===
-    # CHIRP requires pipx installation with downloaded .whl file
-    # Reference: https://chirpmyradio.com/projects/chirp/wiki/ChirpOnLinux
+    # Can't build CHIRP from source in chroot (numpy wheel build fails with old-releases)
+    # Install via post-install script that runs on first boot instead
     log "INFO" "Setting up CHIRP installation for first boot..."
     local chirp_install_script="${SQUASHFS_DIR}/usr/local/bin/install-chirp-first-boot.sh"
     mkdir -p "$(dirname "$chirp_install_script")"
     cat > "$chirp_install_script" <<'CHIRP_SCRIPT'
 #!/bin/bash
-# Install CHIRP on first boot using pipx (official method)
-# Reference: https://chirpmyradio.com/projects/chirp/wiki/ChirpOnLinux
+# Install CHIRP on first boot - avoids build issues in chroot
 set -e
 MARKER="/var/lib/emcomm-chirp-installed"
 if [ -f "$MARKER" ]; then
     exit 0
 fi
-
-# CRITICAL: Ubuntu 22.10 is EOL - fix apt sources first
-if grep -q "archive.ubuntu.com" /etc/apt/sources.list 2>/dev/null; then
-    sed -i 's/archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
-    sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
-fi
-
-# Install dependencies (system packages required by CHIRP)
 apt-get update > /dev/null 2>&1 || true
-apt-get install -y python3-wxgtk4.0 pipx python3-yattag > /dev/null 2>&1 || true
-
-# Download latest CHIRP wheel from official archive
-# Find the latest date folder and download the wheel
-CHIRP_ARCHIVE="https://archive.chirpmyradio.com/chirp_next"
-LATEST_DATE=$(curl -s "$CHIRP_ARCHIVE/" | grep -oP 'href="\K[0-9]{8}(?=/")' | sort -r | head -1)
-if [ -n "$LATEST_DATE" ]; then
-    WHEEL_FILE=$(curl -s "$CHIRP_ARCHIVE/$LATEST_DATE/" | grep -oP 'href="\K[^"]+\.whl' | head -1)
-    if [ -n "$WHEEL_FILE" ]; then
-        WHEEL_URL="$CHIRP_ARCHIVE/$LATEST_DATE/$WHEEL_FILE"
-        wget -q "$WHEEL_URL" -O "/tmp/$WHEEL_FILE" 2>/dev/null
-        if [ -f "/tmp/$WHEEL_FILE" ]; then
-            # Install for root (system-wide effect)
-            pipx install --system-site-packages "/tmp/$WHEEL_FILE" > /dev/null 2>&1 || true
-            rm -f "/tmp/$WHEEL_FILE"
-            touch "$MARKER"
-        fi
-    fi
-fi
+apt-get install -y python3-pip > /dev/null 2>&1 || true
+python3 -m pip install --upgrade pip setuptools wheel > /dev/null 2>&1 || true
+python3 -m pip install chirp > /dev/null 2>&1 && touch "$MARKER" || true
 CHIRP_SCRIPT
     chmod +x "$chirp_install_script"
     log "DEBUG" "CHIRP first-boot script created"
@@ -2800,13 +2777,6 @@ MARKER="/var/lib/emcomm-edge-installed"
 if [ -f "$MARKER" ]; then
     exit 0
 fi
-
-# CRITICAL: Ubuntu 22.10 is EOL - fix apt sources first
-if grep -q "archive.ubuntu.com" /etc/apt/sources.list 2>/dev/null; then
-    sed -i 's/archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
-    sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
-fi
-
 apt-get update > /dev/null 2>&1 || true
 # Try to install from Debian packages directly (avoids repo issues)
 wget -q https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_latest_amd64.deb -O /tmp/edge.deb 2>/dev/null && \
@@ -2909,38 +2879,16 @@ fi
     if sudo apt-get update -qq 2>/dev/null; then
         echo "✓ Package lists updated"
         
-        # CHIRP - Install via pipx with downloaded wheel (official method)
-        # Reference: https://chirpmyradio.com/projects/chirp/wiki/ChirpOnLinux
-        echo "Installing CHIRP dependencies..."
-        if sudo apt-get install -y -qq python3-wxgtk4.0 pipx python3-yattag 2>/dev/null; then
-            echo "✓ CHIRP dependencies installed"
-            echo "Downloading latest CHIRP wheel..."
-            CHIRP_ARCHIVE="https://archive.chirpmyradio.com/chirp_next"
-            LATEST_DATE=$(curl -s "$CHIRP_ARCHIVE/" | grep -oP 'href="\K[0-9]{8}(?=/")' | sort -r | head -1)
-            if [ -n "$LATEST_DATE" ]; then
-                WHEEL_FILE=$(curl -s "$CHIRP_ARCHIVE/$LATEST_DATE/" | grep -oP 'href="\K[^"]+\.whl' | head -1)
-                if [ -n "$WHEEL_FILE" ]; then
-                    WHEEL_URL="$CHIRP_ARCHIVE/$LATEST_DATE/$WHEEL_FILE"
-                    wget -q "$WHEEL_URL" -O "/tmp/$WHEEL_FILE" 2>/dev/null
-                    if [ -f "/tmp/$WHEEL_FILE" ]; then
-                        echo "Installing CHIRP via pipx..."
-                        pipx install --system-site-packages "/tmp/$WHEEL_FILE" 2>/dev/null && echo "✓ CHIRP installed" || echo "✗ CHIRP pipx install failed"
-                        rm -f "/tmp/$WHEEL_FILE"
-                    else
-                        echo "✗ CHIRP wheel download failed"
-                    fi
-                else
-                    echo "✗ Could not find CHIRP wheel file"
-                fi
-            else
-                echo "✗ Could not determine latest CHIRP version"
-            fi
+        # CHIRP
+        echo "Installing CHIRP..."
+        if sudo apt-get install -y -qq chirp 2>/dev/null; then
+            echo "✓ CHIRP installed"
         else
-            echo "✗ CHIRP dependencies failed"
+            echo "✗ CHIRP failed (can install manually: sudo apt-get install chirp)"
         fi
     else
         echo "✗ apt-get update failed - check network connectivity"
-        echo "  See: https://chirpmyradio.com/projects/chirp/wiki/ChirpOnLinux"
+        echo "  Manual fix: sudo apt-get update && sudo apt-get install chirp"
     fi
     
     # Microsoft Edge (downloaded directly, doesn't need apt sources)
@@ -3057,38 +3005,16 @@ fi
     if sudo apt-get update -qq 2>/dev/null; then
         echo "✓ Package lists updated"
         
-        # CHIRP - Install via pipx with downloaded wheel (official method)
-        # Reference: https://chirpmyradio.com/projects/chirp/wiki/ChirpOnLinux
-        echo "Installing CHIRP dependencies..."
-        if sudo apt-get install -y -qq python3-wxgtk4.0 pipx python3-yattag 2>/dev/null; then
-            echo "✓ CHIRP dependencies installed"
-            echo "Downloading latest CHIRP wheel..."
-            CHIRP_ARCHIVE="https://archive.chirpmyradio.com/chirp_next"
-            LATEST_DATE=$(curl -s "$CHIRP_ARCHIVE/" | grep -oP 'href="\K[0-9]{8}(?=/")' | sort -r | head -1)
-            if [ -n "$LATEST_DATE" ]; then
-                WHEEL_FILE=$(curl -s "$CHIRP_ARCHIVE/$LATEST_DATE/" | grep -oP 'href="\K[^"]+\.whl' | head -1)
-                if [ -n "$WHEEL_FILE" ]; then
-                    WHEEL_URL="$CHIRP_ARCHIVE/$LATEST_DATE/$WHEEL_FILE"
-                    wget -q "$WHEEL_URL" -O "/tmp/$WHEEL_FILE" 2>/dev/null
-                    if [ -f "/tmp/$WHEEL_FILE" ]; then
-                        echo "Installing CHIRP via pipx..."
-                        pipx install --system-site-packages "/tmp/$WHEEL_FILE" 2>/dev/null && echo "✓ CHIRP installed" || echo "✗ CHIRP pipx install failed"
-                        rm -f "/tmp/$WHEEL_FILE"
-                    else
-                        echo "✗ CHIRP wheel download failed"
-                    fi
-                else
-                    echo "✗ Could not find CHIRP wheel file"
-                fi
-            else
-                echo "✗ Could not determine latest CHIRP version"
-            fi
+        # CHIRP
+        echo "Installing CHIRP..."
+        if sudo apt-get install -y -qq chirp 2>/dev/null; then
+            echo "✓ CHIRP installed"
         else
-            echo "✗ CHIRP dependencies failed"
+            echo "✗ CHIRP failed (can install manually: sudo apt-get install chirp)"
         fi
     else
         echo "✗ apt-get update failed - check network connectivity"
-        echo "  See: https://chirpmyradio.com/projects/chirp/wiki/ChirpOnLinux"
+        echo "  Manual fix: sudo apt-get update && sudo apt-get install chirp"
     fi
     
     # Microsoft Edge (downloaded directly, doesn't need apt sources)
