@@ -818,102 +818,89 @@ create_fresh_user_backup() {
     # Only create backup if running system has et-user-backup installed
     if ! command -v et-user-backup &> /dev/null; then
         log "INFO" "et-user-backup command not found - system not running ETC or command not in PATH"
-        log "INFO" "Skipping fresh backup creation (will use cached backup if available)"
+        log "INFO" "Skipping fresh backup creation (will use existing backup if available)"
         return 0
     fi
     
-    local cache_dir="${SCRIPT_DIR}/cache"
-    mkdir -p "$cache_dir"
+    # Check for existing backup from today in home folder (et-user-backup default location)
+    local today_date
+    today_date=$(date +'%Y%m%d')
+    local existing_backup
+    existing_backup=$(find "$HOME" -maxdepth 1 -name "etc-user-backup-*-${today_date}.tar.gz" -type f 2>/dev/null | head -1)
     
-    # Get current callsign from running system if available
-    local system_callsign=""
-    if [ -f "$HOME/.config/emcomm-tools/user.json" ]; then
-        system_callsign=$(grep -o '"callsign":"[^"]*' "$HOME/.config/emcomm-tools/user.json" | cut -d'"' -f4)
+    if [ -n "$existing_backup" ] && [ -f "$existing_backup" ]; then
+        log "INFO" "Found existing backup from today: $(basename "$existing_backup")"
+        log "INFO" "Skipping backup creation (delete file to force new backup)"
+        return 0
     fi
     
-    # Get hostname to identify the system
-    local system_hostname=$(hostname)
-    system_callsign="${system_callsign:-${system_hostname}}"
+    log "INFO" "Running et-user-backup (answering prompts automatically)..."
     
-    # Create timestamped backup filename
-    local backup_date=$(date +'%Y%m%d')
-    local backup_filename="etc-user-backup-${system_callsign}-${backup_date}.tar.gz"
-    local backup_path="${cache_dir}/${backup_filename}"
-    
-    log "INFO" "Running et-user-backup to create: $backup_filename"
-    log "DEBUG" "Backup will be saved to: $backup_path"
-    
-    # Run et-user-backup and capture the output
-    # et-user-backup typically creates a tarball and outputs the path
-    # We need to move it to our cache directory
-    local temp_backup_dir=$(mktemp -d)
-    
-    # Try to run et-user-backup
-    # Note: This may prompt for sudo password
-    if et-user-backup 2>&1 | tee -a "$LOG_FILE"; then
-        # et-user-backup creates file in home directory or current location
-        # Look for the most recent etc-user-backup tar in home
-        local user_backup_file
-        user_backup_file=$(find ~/ -maxdepth 1 -name "etc-user-backup-*.tar.gz" -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-        
-        if [ -n "$user_backup_file" ] && [ -f "$user_backup_file" ]; then
-            log "SUCCESS" "User backup created: $(basename "$user_backup_file")"
-            
-            # Check if there's already a backup and delete old ones (keep only latest per callsign)
-            local old_backups
-            old_backups=$(find "${cache_dir}" -name "etc-user-backup-${system_callsign}-*.tar.gz" -type f 2>/dev/null)
-            
-            if [ -n "$old_backups" ]; then
-                log "DEBUG" "Removing old backups for ${system_callsign}..."
-                echo "$old_backups" | while read -r old_file; do
-                    log "DEBUG" "Deleting: $(basename "$old_file")"
-                    rm -f "$old_file"
-                done
-            fi
-            
-            # Copy/rename the backup to cache with our naming convention
-            cp "$user_backup_file" "$backup_path"
-            log "SUCCESS" "Fresh user backup stored in cache: $backup_filename"
-            rm -f "$temp_backup_dir" "$user_backup_file" 2>/dev/null
-            return 0
-        else
-            log "WARN" "et-user-backup completed but output file not found"
-            rm -rf "$temp_backup_dir" 2>/dev/null
-            return 1
-        fi
+    # et-user-backup has interactive prompts:
+    # 1. "Can [file] be overwritten? (y/n)" - if backup exists
+    # 2. "Do you want see the full list of files backed up? (y/n)" - at end
+    # We answer 'y' to overwrite and 'n' to skip file list
+    # Use timeout to prevent infinite hangs
+    if timeout 60 bash -c 'yes y | head -1; yes n | head -1' | et-user-backup 2>&1 | grep -v "^$" | tee -a "$LOG_FILE"; then
+        log "DEBUG" "et-user-backup command completed"
     else
         local exit_code=$?
-        log "WARN" "et-user-backup failed with exit code: $exit_code"
-        log "INFO" "This is OK if running system is not ETC or et-user-backup is not available"
-        rm -rf "$temp_backup_dir" 2>/dev/null
-        return 0  # Don't fail the build, just warn
+        if [ $exit_code -eq 124 ]; then
+            log "WARN" "et-user-backup timed out after 60 seconds"
+        else
+            log "DEBUG" "et-user-backup exited with code: $exit_code (may still have succeeded)"
+        fi
+    fi
+    
+    # Look for the backup file in home directory (where et-user-backup puts it)
+    local user_backup_file
+    user_backup_file=$(find "$HOME" -maxdepth 1 -name "etc-user-backup-*.tar.gz" -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+    
+    if [ -n "$user_backup_file" ] && [ -f "$user_backup_file" ]; then
+        local backup_size
+        backup_size=$(du -h "$user_backup_file" | cut -f1)
+        log "SUCCESS" "User backup created: $(basename "$user_backup_file") (${backup_size})"
+        log "INFO" "Backup location: $user_backup_file"
+        return 0
+    else
+        log "WARN" "et-user-backup completed but output file not found in home directory"
+        return 1
     fi
 }
 
 restore_user_backup() {
-    log "INFO" "Checking for ETC user backups in cache directory..."
+    log "INFO" "Checking for ETC user backups..."
     
     local cache_dir="${SCRIPT_DIR}/cache"
+    local home_dir="$HOME"
     local user_backup=""
     local wine_backup=""
     
     # Auto-detect user backup (etc-user-backup-*.tar.gz)
+    # Priority: 1) Home folder (et-user-backup default), 2) Cache folder
     # Use the most recent one if multiple exist
-    if compgen -G "${cache_dir}/etc-user-backup-*.tar.gz" > /dev/null 2>&1; then
+    if compgen -G "${home_dir}/etc-user-backup-*.tar.gz" > /dev/null 2>&1; then
+        user_backup=$(find "${home_dir}" -maxdepth 1 -name 'etc-user-backup-*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+        log "INFO" "Found user backup in home folder: $(basename "$user_backup")"
+    elif compgen -G "${cache_dir}/etc-user-backup-*.tar.gz" > /dev/null 2>&1; then
         user_backup=$(find "${cache_dir}" -maxdepth 1 -name 'etc-user-backup-*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-        log "DEBUG" "Found user backup: $user_backup"
+        log "INFO" "Found user backup in cache folder: $(basename "$user_backup")"
     fi
     
     # Auto-detect wine backup (etc-wine-backup-*.tar.gz)
-    if compgen -G "${cache_dir}/etc-wine-backup-*.tar.gz" > /dev/null 2>&1; then
+    # Priority: 1) Home folder, 2) Cache folder
+    if compgen -G "${home_dir}/etc-wine-backup-*.tar.gz" > /dev/null 2>&1; then
+        wine_backup=$(find "${home_dir}" -maxdepth 1 -name 'etc-wine-backup-*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+        log "INFO" "Found Wine backup in home folder: $(basename "$wine_backup")"
+    elif compgen -G "${cache_dir}/etc-wine-backup-*.tar.gz" > /dev/null 2>&1; then
         wine_backup=$(find "${cache_dir}" -maxdepth 1 -name 'etc-wine-backup-*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-        log "DEBUG" "Found Wine backup: $wine_backup"
+        log "INFO" "Found Wine backup in cache folder: $(basename "$wine_backup")"
     fi
     
     # Check if any backups were found
     if [ -z "$user_backup" ] && [ -z "$wine_backup" ]; then
-        log "DEBUG" "No backup files found in ${cache_dir}/"
-        log "INFO" "To use backups, place etc-user-backup-*.tar.gz in cache/"
+        log "DEBUG" "No backup files found in home (~/) or cache/"
+        log "INFO" "To use backups, run 'et-user-backup' or place etc-user-backup-*.tar.gz in ~/ or cache/"
         return 0
     fi
     
