@@ -2529,54 +2529,85 @@ update_grub_for_preseed() {
     # - "Try or Install Ubuntu" - default entry, needs only-ubiquity
     # - "Ubuntu (safe graphics)" - fallback entry, needs only-ubiquity
     # - "OEM install" - already has only-ubiquity, just update preseed path
+    #
+    # CRITICAL: Must also update loopback.cfg for Ventoy/GRUB loopback boot!
+    # The loopback.cfg is used when booting the ISO via Ventoy or grub loopback
     
     local grub_cfg="${ISO_EXTRACT_DIR}/boot/grub/grub.cfg"
+    local loopback_cfg="${ISO_EXTRACT_DIR}/boot/grub/loopback.cfg"
     
-    if [ ! -f "$grub_cfg" ]; then
-        log "WARN" "GRUB config not found at: $grub_cfg"
-        return 0
-    fi
+    # Helper function to apply preseed modifications to a GRUB config file
+    apply_preseed_modifications() {
+        local cfg_file="$1"
+        local cfg_name="$2"
+        
+        if [ ! -f "$cfg_file" ]; then
+            log "WARN" "$cfg_name not found at: $cfg_file"
+            return 1
+        fi
+        
+        log "DEBUG" "Modifying $cfg_name: $cfg_file"
+        log "DEBUG" "$cfg_name BEFORE modifications:"
+        grep "linux.*vmlinuz" "$cfg_file" 2>/dev/null | head -5 | while read -r line; do
+            log "DEBUG" "  $line"
+        done
+        
+        # Step 1: Update preseed path in ALL entries (from ubuntu.seed to preseed.cfg)
+        # This catches: file=/cdrom/preseed/ubuntu.seed -> file=/cdrom/preseed.cfg
+        sed -i 's|file=/cdrom/preseed/ubuntu\.seed|file=/cdrom/preseed.cfg|g' "$cfg_file"
+        
+        # Step 2: Also handle maybe-ubiquity FIRST (before checking quiet pattern)
+        # This ensures entries like "maybe-ubiquity iso-scan/filename" become "only-ubiquity iso-scan/filename"
+        sed -i 's|maybe-ubiquity|only-ubiquity|g' "$cfg_file"
+        
+        # Step 3: Add only-ubiquity to entries that DON'T already have it
+        # Pattern: "file=/cdrom/preseed.cfg quiet" -> "file=/cdrom/preseed.cfg only-ubiquity quiet"
+        # Pattern: "file=/cdrom/preseed.cfg iso-scan" -> "file=/cdrom/preseed.cfg only-ubiquity iso-scan"
+        # This adds only-ubiquity to "Try or Install" and "safe graphics" entries
+        # The OEM entry already has only-ubiquity, so it won't match this pattern
+        sed -i 's|file=/cdrom/preseed\.cfg quiet|file=/cdrom/preseed.cfg only-ubiquity quiet|g' "$cfg_file"
+        sed -i 's|file=/cdrom/preseed\.cfg iso-scan|file=/cdrom/preseed.cfg only-ubiquity iso-scan|g' "$cfg_file"
+        
+        # Step 4: Handle nomodeset (safe graphics) entry specifically
+        # Pattern: "nomodeset file=/cdrom/preseed.cfg quiet" -> "nomodeset file=/cdrom/preseed.cfg only-ubiquity quiet"
+        sed -i 's|nomodeset file=/cdrom/preseed\.cfg quiet|nomodeset file=/cdrom/preseed.cfg only-ubiquity quiet|g' "$cfg_file"
+        sed -i 's|nomodeset file=/cdrom/preseed\.cfg iso-scan|nomodeset file=/cdrom/preseed.cfg only-ubiquity iso-scan|g' "$cfg_file"
+        
+        log "DEBUG" "$cfg_name AFTER modifications:"
+        grep "linux.*vmlinuz" "$cfg_file" 2>/dev/null | head -5 | while read -r line; do
+            log "DEBUG" "  $line"
+        done
+        
+        # Verify the changes took effect
+        if grep -q "only-ubiquity" "$cfg_file" && grep -q "file=/cdrom/preseed.cfg" "$cfg_file"; then
+            log "SUCCESS" "$cfg_name configured for automatic Ubiquity installation"
+            return 0
+        else
+            log "WARN" "$cfg_name update may have failed"
+            return 1
+        fi
+    }
     
-    log "DEBUG" "Modifying GRUB config: $grub_cfg"
-    log "DEBUG" "GRUB config BEFORE modifications:"
-    grep "linux.*vmlinuz" "$grub_cfg" | head -5 | sed 's/^/  /'
+    # Update main grub.cfg (used for direct BIOS/EFI boot)
+    apply_preseed_modifications "$grub_cfg" "grub.cfg"
+    local grub_result=$?
     
-    # Step 1: Update preseed path in ALL entries (from ubuntu.seed to preseed.cfg)
-    # This catches: file=/cdrom/preseed/ubuntu.seed -> file=/cdrom/preseed.cfg
-    sed -i 's|file=/cdrom/preseed/ubuntu\.seed|file=/cdrom/preseed.cfg|g' "$grub_cfg"
-    log "DEBUG" "Updated preseed paths"
+    # Update loopback.cfg (used for Ventoy and GRUB loopback boot)
+    # This is CRITICAL for users booting via Ventoy USB drives!
+    apply_preseed_modifications "$loopback_cfg" "loopback.cfg"
+    local loopback_result=$?
     
-    # Step 2: Add only-ubiquity to entries that DON'T already have it
-    # Pattern: "file=/cdrom/preseed.cfg quiet" -> "file=/cdrom/preseed.cfg only-ubiquity quiet"
-    # This adds only-ubiquity to "Try or Install" and "safe graphics" entries
-    # The OEM entry already has only-ubiquity, so it won't match this pattern
-    sed -i 's|file=/cdrom/preseed\.cfg quiet|file=/cdrom/preseed.cfg only-ubiquity quiet|g' "$grub_cfg"
-    log "DEBUG" "Added only-ubiquity to standard boot entries"
-    
-    # Step 3: Handle nomodeset (safe graphics) entry specifically
-    # Pattern: "nomodeset file=/cdrom/preseed.cfg quiet" -> "nomodeset file=/cdrom/preseed.cfg only-ubiquity quiet"
-    sed -i 's|nomodeset file=/cdrom/preseed\.cfg quiet|nomodeset file=/cdrom/preseed.cfg only-ubiquity quiet|g' "$grub_cfg"
-    log "DEBUG" "Updated safe graphics entry"
-    
-    # Step 4: Also handle maybe-ubiquity if present (older ISOs or ETC variants)
-    sed -i 's|maybe-ubiquity|only-ubiquity|g' "$grub_cfg"
-    log "DEBUG" "Replaced any maybe-ubiquity with only-ubiquity"
-    
-    log "DEBUG" "GRUB config AFTER modifications:"
-    grep "linux.*vmlinuz" "$grub_cfg" | head -5 | sed 's/^/  /'
-    
-    # Verify the changes took effect
-    if grep -q "only-ubiquity" "$grub_cfg" && grep -q "file=/cdrom/preseed.cfg" "$grub_cfg"; then
-        log "SUCCESS" "GRUB configured for automatic Ubiquity installation"
+    if [ $grub_result -eq 0 ] && [ $loopback_result -eq 0 ]; then
+        log "SUCCESS" "Both grub.cfg and loopback.cfg configured for preseed"
         log "DEBUG" "Boot parameters: file=/cdrom/preseed.cfg only-ubiquity"
+    elif [ $grub_result -eq 0 ]; then
+        log "WARN" "grub.cfg updated but loopback.cfg failed - Ventoy boot may not use preseed"
     else
-        log "WARN" "GRUB config update may have failed"
-        log "DEBUG" "Current linux lines:"
-        grep "linux.*vmlinuz" "$grub_cfg" | sed 's/^/  /'
+        log "ERROR" "GRUB configuration failed"
     fi
     
     # Warn user if we detect other OSes in GRUB menu
-    if grep -iq "windows\|boot.*windows\|other os" "$grub_cfg"; then
+    if grep -iq "windows\|boot.*windows\|other os" "$grub_cfg" 2>/dev/null; then
         log "WARN" "Detected other OSes in GRUB menu - they should not be affected by preseed changes"
     fi
 }
