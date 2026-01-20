@@ -2517,18 +2517,19 @@ update_grub_for_preseed() {
     
     # GRUB config is in the extracted ISO directory (not in squashfs)
     # Location: .work/iso/boot/grub/grub.cfg
-    # Reference: https://help.ubuntu.com/community/InstallCDCustomization
+    # Reference: https://wiki.ubuntu.com/UbiquityAutomation
     #
     # CRITICAL: Ubuntu Desktop ISOs use Casper (live boot) + Ubiquity (installer)
-    # - By default, boots to live session ("Try Ubuntu") and waits for user to click Install
-    # - To auto-start installer: add "only-ubiquity" boot parameter
-    # - "only-ubiquity" = boot directly to Ubiquity installer, skip live desktop
-    # - Preseed file provides answers to installer questions
+    # For AUTOMATED installation, we need TWO boot parameters:
     #
-    # Ubuntu 22.10 GRUB entries that need modification:
-    # - "Try or Install Ubuntu" - default entry, needs only-ubiquity
-    # - "Ubuntu (safe graphics)" - fallback entry, needs only-ubiquity
-    # - "OEM install" - already has only-ubiquity, just update preseed path
+    #   1. only-ubiquity = Skip live desktop, boot directly to Ubiquity installer
+    #   2. automatic-ubiquity = Enable preseed automation (respect 'seen' flag)
+    #
+    # WITHOUT automatic-ubiquity, Ubiquity IGNORES preseed values because it:
+    #   "ignores the 'seen' flag...by default" (Ubuntu wiki)
+    #
+    # Final boot line should look like:
+    #   linux /casper/vmlinuz file=/cdrom/preseed.cfg automatic-ubiquity only-ubiquity quiet splash ---
     #
     # CRITICAL: Must also update loopback.cfg for Ventoy/GRUB loopback boot!
     # The loopback.cfg is used when booting the ISO via Ventoy or grub loopback
@@ -2556,34 +2557,43 @@ update_grub_for_preseed() {
         # This catches: file=/cdrom/preseed/ubuntu.seed -> file=/cdrom/preseed.cfg
         sed -i 's|file=/cdrom/preseed/ubuntu\.seed|file=/cdrom/preseed.cfg|g' "$cfg_file"
         
-        # Step 2: Also handle maybe-ubiquity FIRST (before checking quiet pattern)
-        # This ensures entries like "maybe-ubiquity iso-scan/filename" become "only-ubiquity iso-scan/filename"
-        sed -i 's|maybe-ubiquity|only-ubiquity|g' "$cfg_file"
+        # Step 2: Replace maybe-ubiquity with automatic-ubiquity only-ubiquity
+        # CRITICAL: Ubuntu wiki states we need BOTH parameters:
+        #   - only-ubiquity = Skip live desktop, boot directly to installer
+        #   - automatic-ubiquity = Enable preseed automation (respect 'seen' flag)
+        # Without automatic-ubiquity, preseed values are IGNORED!
+        # Reference: https://wiki.ubuntu.com/UbiquityAutomation
+        sed -i 's|maybe-ubiquity|automatic-ubiquity only-ubiquity|g' "$cfg_file"
         
-        # Step 3: Add only-ubiquity to entries that DON'T already have it
-        # Pattern: "file=/cdrom/preseed.cfg quiet" -> "file=/cdrom/preseed.cfg only-ubiquity quiet"
-        # Pattern: "file=/cdrom/preseed.cfg iso-scan" -> "file=/cdrom/preseed.cfg only-ubiquity iso-scan"
-        # This adds only-ubiquity to "Try or Install" and "safe graphics" entries
-        # The OEM entry already has only-ubiquity, so it won't match this pattern
-        sed -i 's|file=/cdrom/preseed\.cfg quiet|file=/cdrom/preseed.cfg only-ubiquity quiet|g' "$cfg_file"
-        sed -i 's|file=/cdrom/preseed\.cfg iso-scan|file=/cdrom/preseed.cfg only-ubiquity iso-scan|g' "$cfg_file"
+        # Step 3: Add automation params to entries that have preseed but no ubiquity params
+        # Pattern: "file=/cdrom/preseed.cfg quiet" -> "file=/cdrom/preseed.cfg automatic-ubiquity only-ubiquity quiet"
+        # Pattern: "file=/cdrom/preseed.cfg iso-scan" -> "file=/cdrom/preseed.cfg automatic-ubiquity only-ubiquity iso-scan"
+        sed -i 's|file=/cdrom/preseed\.cfg quiet|file=/cdrom/preseed.cfg automatic-ubiquity only-ubiquity quiet|g' "$cfg_file"
+        sed -i 's|file=/cdrom/preseed\.cfg iso-scan|file=/cdrom/preseed.cfg automatic-ubiquity only-ubiquity iso-scan|g' "$cfg_file"
         
         # Step 4: Handle nomodeset (safe graphics) entry specifically
-        # Pattern: "nomodeset file=/cdrom/preseed.cfg quiet" -> "nomodeset file=/cdrom/preseed.cfg only-ubiquity quiet"
-        sed -i 's|nomodeset file=/cdrom/preseed\.cfg quiet|nomodeset file=/cdrom/preseed.cfg only-ubiquity quiet|g' "$cfg_file"
-        sed -i 's|nomodeset file=/cdrom/preseed\.cfg iso-scan|nomodeset file=/cdrom/preseed.cfg only-ubiquity iso-scan|g' "$cfg_file"
+        sed -i 's|nomodeset file=/cdrom/preseed\.cfg quiet|nomodeset file=/cdrom/preseed.cfg automatic-ubiquity only-ubiquity quiet|g' "$cfg_file"
+        sed -i 's|nomodeset file=/cdrom/preseed\.cfg iso-scan|nomodeset file=/cdrom/preseed.cfg automatic-ubiquity only-ubiquity iso-scan|g' "$cfg_file"
+        
+        # Step 5: Update existing only-ubiquity (without automatic-ubiquity) to include it
+        # Pattern: "only-ubiquity" without "automatic-ubiquity" before it
+        # This handles OEM install entry that already has only-ubiquity
+        sed -i 's|preseed\.cfg only-ubiquity|preseed.cfg automatic-ubiquity only-ubiquity|g' "$cfg_file"
+        
+        # Step 6: Clean up any duplicate automatic-ubiquity (from step 2 + step 5)
+        sed -i 's|automatic-ubiquity automatic-ubiquity|automatic-ubiquity|g' "$cfg_file"
         
         log "DEBUG" "$cfg_name AFTER modifications:"
         grep "linux.*vmlinuz" "$cfg_file" 2>/dev/null | head -5 | while read -r line; do
             log "DEBUG" "  $line"
         done
         
-        # Verify the changes took effect
-        if grep -q "only-ubiquity" "$cfg_file" && grep -q "file=/cdrom/preseed.cfg" "$cfg_file"; then
+        # Verify the changes took effect - must have BOTH automation params
+        if grep -q "automatic-ubiquity" "$cfg_file" && grep -q "only-ubiquity" "$cfg_file" && grep -q "file=/cdrom/preseed.cfg" "$cfg_file"; then
             log "SUCCESS" "$cfg_name configured for automatic Ubiquity installation"
             return 0
         else
-            log "WARN" "$cfg_name update may have failed"
+            log "WARN" "$cfg_name update may have failed - missing automation parameters"
             return 1
         fi
     }
