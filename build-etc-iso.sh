@@ -48,7 +48,8 @@ RELEASE_MODE="latest"
 SPECIFIED_TAG=""
 MINIMAL_BUILD=0                           # When 1, omit cache files from ISO to reduce size
 KEEP_WORK=0                               # When 1, preserve .work directory for iterative debugging
-COPY_TO_PATH=""                           # Optional: copy finished ISO to this path
+WRITE_TO_USB=""                           # USB device path for dd write (e.g., /dev/sdb)
+VENTOY_MOUNT=""                           # Path to mounted Ventoy USB
 
 # Colors for output
 RED='\033[0;31m'
@@ -121,10 +122,18 @@ BUILD OPTIONS:
     -k        Keep work directory after build (for iterative debugging)
     -m        Minimal build (omit cache files from ISO to reduce size)
     -v        Verbose mode (enable bash -x debugging)
-    --copy-to PATH
-              Copy finished ISO to specified directory (in addition to output/)
-              Example: ./build-etc-iso.sh -r stable --copy-to /media/user/Ventoy/ISO/
     -h        Show this help message
+
+USB WRITE OPTIONS:
+    --write-to /dev/sdX
+              Write ISO directly to USB device with dd (ERASES DEVICE!)
+              Automatically ejects when complete. This is the recommended method.
+              Example: sudo ./build-etc-iso.sh -r stable --write-to /dev/sdb
+              
+    --ventoy /path/to/ventoy
+              Copy ISO + config files to mounted Ventoy USB
+              Ventoy ignores ISO boot params, so extra config files are needed.
+              Example: sudo ./build-etc-iso.sh -r stable --ventoy /media/user/Ventoy
 
 DIRECTORY STRUCTURE:
     cache/    Downloaded ISOs and tarballs (persistent)
@@ -148,6 +157,12 @@ EXAMPLES:
     # Build from stable release (recommended)
     sudo ./build-etc-iso.sh -r stable
 
+    # Build and write directly to USB (recommended for install)
+    sudo ./build-etc-iso.sh -r stable --write-to /dev/sdb
+
+    # Build and copy to Ventoy USB
+    sudo ./build-etc-iso.sh -r stable --ventoy /media/\$USER/Ventoy
+
     # Build from latest development tag
     sudo ./build-etc-iso.sh -r latest
 
@@ -155,7 +170,7 @@ EXAMPLES:
     sudo ./build-etc-iso.sh -r tag -t emcomm-tools-os-community-20251113-r5-build17
 
     # Build with debug output for troubleshooting
-    sudo ./build-etc-iso.sh -r stable -D
+    sudo ./build-etc-iso.sh -r stable -d
 
     # Minimal build (smaller ISO, no embedded cache)
     sudo ./build-etc-iso.sh -r stable -m
@@ -4384,6 +4399,471 @@ rebuild_iso() {
 }
 
 # ============================================================================
+# Ventoy Configuration Generator
+# ============================================================================
+# CRITICAL: Ventoy does NOT use the ISO's grub.cfg boot parameters!
+# When booting via Ventoy, the automatic-ubiquity and preseed parameters
+# in our ISO's grub.cfg are IGNORED. Ventoy has its own boot system.
+#
+# To enable automated installation with Ventoy, we must:
+#   1. Create ventoy.json with auto_install and boot_conf plugins
+#   2. Copy preseed.cfg to the output directory for placement on Ventoy USB
+#   3. Provide clear instructions for setting up the Ventoy USB
+#
+# Reference: https://www.ventoy.net/en/plugin_autoinstall.html
+
+generate_ventoy_config() {
+    log "INFO" "Generating Ventoy configuration for automated installation..."
+    
+    local iso_filename
+    iso_filename=$(basename "$OUTPUT_ISO")
+    local ventoy_dir="${OUTPUT_DIR}/ventoy"
+    
+    # Create ventoy directory in output
+    mkdir -p "$ventoy_dir"
+    
+    # Copy preseed.cfg from ISO work directory
+    local preseed_src="${ISO_EXTRACT_DIR}/preseed.cfg"
+    local preseed_dst="${ventoy_dir}/preseed.cfg"
+    
+    if [ -f "$preseed_src" ]; then
+        cp "$preseed_src" "$preseed_dst"
+        log "DEBUG" "Copied preseed.cfg to $preseed_dst"
+    else
+        log "WARN" "Preseed file not found at $preseed_src - Ventoy auto-install may not work"
+    fi
+    
+    # Generate ventoy.json
+    local ventoy_json="${ventoy_dir}/ventoy.json"
+    
+    cat > "$ventoy_json" <<EOF
+{
+    "control": [
+        { "VTOY_DEFAULT_MENU_MODE": "1" }
+    ],
+    "auto_install": [
+        {
+            "image": "/${iso_filename}",
+            "template": "/ventoy/preseed.cfg"
+        }
+    ],
+    "conf_replace": [
+        {
+            "image": "/${iso_filename}",
+            "org": "/boot/grub/loopback.cfg",
+            "new": "/ventoy/loopback.cfg"
+        }
+    ]
+}
+EOF
+    log "DEBUG" "Generated ventoy.json at $ventoy_json"
+    
+    # Generate a custom loopback.cfg with automation parameters
+    # This replaces the ISO's loopback.cfg when booted via Ventoy
+    local loopback_cfg="${ventoy_dir}/loopback.cfg"
+    cat > "$loopback_cfg" <<'EOF'
+# Ventoy-compatible loopback.cfg for EmComm Tools automated installation
+# This file is injected by Ventoy to enable preseed automation
+#
+# CRITICAL: Ventoy sets ${iso_path} and ${vtoy_iso_part} automatically
+# We use file= to point to the preseed on the Ventoy USB drive
+
+set timeout=5
+set default=0
+
+menuentry "Install EmComm Tools (Automated)" {
+    linux /casper/vmlinuz file=/cdrom/preseed.cfg automatic-ubiquity only-ubiquity noprompt quiet splash --- 
+    initrd /casper/initrd
+}
+
+menuentry "Install EmComm Tools (Safe Graphics - Automated)" {
+    linux /casper/vmlinuz nomodeset file=/cdrom/preseed.cfg automatic-ubiquity only-ubiquity noprompt quiet splash ---
+    initrd /casper/initrd
+}
+
+menuentry "Try EmComm Tools without installing" {
+    linux /casper/vmlinuz maybe-ubiquity quiet splash ---
+    initrd /casper/initrd
+}
+
+menuentry "Check disc for defects" {
+    linux /casper/vmlinuz integrity-check quiet splash ---
+    initrd /casper/initrd
+}
+EOF
+    log "DEBUG" "Generated custom loopback.cfg at $loopback_cfg"
+    
+    # Generate README for Ventoy setup
+    local ventoy_readme="${ventoy_dir}/README.txt"
+    cat > "$ventoy_readme" <<EOF
+============================================================
+   EmComm Tools Custom ISO - Ventoy Setup (OPTIONAL)
+============================================================
+
+NOTE: If you're writing the ISO directly with dd, you DON'T need
+any of these files! The ISO works correctly when written with:
+
+   sudo dd if=<iso-file> of=/dev/sdX bs=4M status=progress conv=fsync
+
+This directory is ONLY needed if you're using Ventoy.
+
+WHY VENTOY NEEDS EXTRA CONFIG:
+------------------------------
+Ventoy has its own boot system that IGNORES the ISO's grub.cfg 
+boot parameters. Without these files, Ventoy won't pass the 
+preseed and automation parameters to the installer.
+
+QUICK SETUP (run this script):
+------------------------------
+   ./copy-to-ventoy.sh /path/to/ventoy/mount
+
+MANUAL SETUP STEPS:
+-------------------
+
+1. Copy the ISO to your Ventoy USB:
+   cp "${OUTPUT_ISO}" /path/to/ventoy/
+
+2. Create the ventoy directory on your Ventoy USB:
+   mkdir -p /path/to/ventoy/ventoy
+
+3. Copy all files from this directory to the Ventoy USB:
+   cp -r ${ventoy_dir}/* /path/to/ventoy/ventoy/
+
+Final structure on Ventoy USB:
+   /your-ventoy-mount/
+   ├── ${iso_filename}
+   └── ventoy/
+       ├── ventoy.json
+       ├── preseed.cfg
+       ├── loopback.cfg
+       └── README.txt
+
+4. Safely eject and boot from the Ventoy USB
+
+WHAT THIS DOES:
+---------------
+- ventoy.json: Tells Ventoy to use preseed.cfg for auto-installation
+- preseed.cfg: Contains your user account, timezone, and partition settings
+- loopback.cfg: Boot menu with automation parameters
+
+NOTE: Partitioning still requires confirmation in the installer due to
+Ubuntu Desktop (Ubiquity) limitations with preseed automation.
+
+============================================================
+Generated by EmComm Tools Customizer on $(date)
+============================================================
+EOF
+    log "DEBUG" "Generated README at $ventoy_readme"
+    
+    # Generate convenience copy script
+    local copy_script="${OUTPUT_DIR}/copy-to-ventoy.sh"
+    cat > "$copy_script" <<EOF
+#!/bin/bash
+# Copy EmComm Tools ISO and Ventoy config to a Ventoy USB drive
+# Generated by EmComm Tools Customizer
+#
+# NOTE: This is only needed if using Ventoy. If you write the ISO
+# directly with dd, it works without any extra config files.
+
+set -e
+
+VENTOY_MOUNT="\$1"
+SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+ISO_FILE="${OUTPUT_ISO}"
+VENTOY_DIR="\${SCRIPT_DIR}/ventoy"
+
+echo "========================================"
+echo "EmComm Tools - Copy to Ventoy (Optional)"
+echo "========================================"
+echo ""
+
+if [[ -z "\$VENTOY_MOUNT" ]]; then
+    echo "Usage: \$0 <VENTOY_MOUNT_PATH>"
+    echo ""
+    echo "Example: \$0 /media/\$USER/Ventoy"
+    echo "         \$0 /mnt/usb"
+    echo ""
+    echo "This script copies the ISO and Ventoy config files."
+    echo "Only needed if using Ventoy (not for dd-written USB)."
+    exit 1
+fi
+
+# Check if target exists
+if [[ ! -d "\$VENTOY_MOUNT" ]]; then
+    echo "ERROR: Target path not found: \$VENTOY_MOUNT"
+    echo ""
+    echo "Make sure your Ventoy USB is mounted first!"
+    exit 1
+fi
+
+# Check for ISO file
+if [[ ! -f "\$ISO_FILE" ]]; then
+    echo "ERROR: ISO file not found: \$ISO_FILE"
+    exit 1
+fi
+
+# Check for ventoy config directory
+if [[ ! -d "\$VENTOY_DIR" ]]; then
+    echo "ERROR: Ventoy config directory not found: \$VENTOY_DIR"
+    exit 1
+fi
+
+echo "Source ISO: \$ISO_FILE"
+echo "Source config: \$VENTOY_DIR"
+echo "Target: \$VENTOY_MOUNT"
+echo ""
+
+# Copy ISO
+echo "Copying ISO (this may take a few minutes)..."
+cp -v "\$ISO_FILE" "\$VENTOY_MOUNT/"
+echo ""
+
+# Create ventoy directory and copy config
+echo "Copying Ventoy configuration..."
+mkdir -p "\$VENTOY_MOUNT/ventoy"
+cp -v "\$VENTOY_DIR/"* "\$VENTOY_MOUNT/ventoy/"
+echo ""
+
+# Sync to ensure all data is written
+echo "Syncing..."
+sync
+echo ""
+
+echo "========================================"
+echo "SUCCESS! Files copied to Ventoy USB"
+echo "========================================"
+echo ""
+echo "You can now safely eject the USB and boot from it."
+echo ""
+echo "When you boot, select '${iso_filename}' from the Ventoy menu."
+echo "The installer will run in semi-automated mode."
+echo ""
+EOF
+    chmod +x "$copy_script"
+    log "DEBUG" "Generated copy script at $copy_script"
+    
+    log "SUCCESS" "Ventoy configuration generated at: $ventoy_dir (for Ventoy users only)"
+}
+
+# ============================================================================
+# USB Write Functions
+# ============================================================================
+
+# Write ISO directly to USB with dd and eject when complete
+# This is the RECOMMENDED method - preserves grub.cfg boot parameters
+write_to_usb() {
+    local device="$1"
+    local iso_file="$2"
+    
+    # Validate device parameter
+    if [[ -z "$device" ]]; then
+        log "ERROR" "No USB device specified for --write-to"
+        return 1
+    fi
+    
+    # Validate ISO file
+    if [[ ! -f "$iso_file" ]]; then
+        log "ERROR" "ISO file not found: $iso_file"
+        return 1
+    fi
+    
+    # Safety checks for device
+    if [[ ! -b "$device" ]]; then
+        log "ERROR" "Not a block device: $device"
+        log "ERROR" "Expected something like /dev/sdb, /dev/sdc, etc."
+        return 1
+    fi
+    
+    # Prevent writing to nvme drives (likely system drives)
+    if [[ "$device" == *nvme* ]]; then
+        log "ERROR" "Refusing to write to NVMe device: $device"
+        log "ERROR" "NVMe devices are typically system drives, not USB devices"
+        return 1
+    fi
+    
+    # Prevent writing to partition (should be whole disk like /dev/sdb, not /dev/sdb1)
+    if [[ "$device" =~ [0-9]$ ]]; then
+        log "ERROR" "Device appears to be a partition: $device"
+        log "ERROR" "Use the whole disk device (e.g., /dev/sdb not /dev/sdb1)"
+        return 1
+    fi
+    
+    # Get device info for confirmation
+    local device_name
+    device_name=$(basename "$device")
+    local device_size=""
+    local device_model=""
+    
+    if [[ -f "/sys/block/${device_name}/size" ]]; then
+        local size_sectors
+        size_sectors=$(cat "/sys/block/${device_name}/size" 2>/dev/null || echo "0")
+        device_size="$((size_sectors * 512 / 1024 / 1024 / 1024))GB"
+    fi
+    
+    if [[ -f "/sys/block/${device_name}/device/model" ]]; then
+        device_model=$(cat "/sys/block/${device_name}/device/model" 2>/dev/null | xargs)
+    fi
+    
+    # Confirm with user (this is destructive!)
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║   ⚠️  WARNING: USB WRITE WILL ERASE ALL DATA ⚠️               ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "  Device: $device"
+    [[ -n "$device_size" ]] && echo "  Size:   $device_size"
+    [[ -n "$device_model" ]] && echo "  Model:  $device_model"
+    echo ""
+    echo "  ISO:    $(basename "$iso_file")"
+    echo "  Size:   $(du -h "$iso_file" | cut -f1)"
+    echo ""
+    echo "  ALL DATA ON $device WILL BE DESTROYED!"
+    echo ""
+    
+    # Check if device has mounted partitions
+    local mounted_parts
+    mounted_parts=$(mount | grep "^${device}" | awk '{print $1 " mounted at " $3}' || true)
+    if [[ -n "$mounted_parts" ]]; then
+        echo "  MOUNTED PARTITIONS DETECTED:"
+        echo "$mounted_parts" | sed 's/^/    /'
+        echo ""
+        log "INFO" "Unmounting partitions on $device..."
+        # Unmount all partitions on this device
+        for part in $(mount | grep "^${device}" | awk '{print $1}'); do
+            log "DEBUG" "Unmounting $part"
+            if ! umount "$part" 2>/dev/null; then
+                log "ERROR" "Failed to unmount $part"
+                log "ERROR" "Please manually unmount before running build"
+                return 1
+            fi
+        done
+        log "SUCCESS" "All partitions unmounted"
+        echo ""
+    fi
+    
+    read -r -p "Type 'YES' to confirm write to $device: " confirm
+    echo ""
+    
+    if [[ "$confirm" != "YES" ]]; then
+        log "INFO" "USB write cancelled by user"
+        return 0
+    fi
+    
+    # Write ISO with dd
+    log "INFO" "Writing ISO to $device (this will take several minutes)..."
+    log "INFO" "You can monitor progress in the terminal"
+    echo ""
+    
+    if ! dd if="$iso_file" of="$device" bs=4M status=progress conv=fsync 2>&1; then
+        log "ERROR" "Failed to write ISO to $device"
+        return 1
+    fi
+    
+    echo ""
+    log "SUCCESS" "ISO written to $device"
+    
+    # Sync to ensure all data is flushed
+    log "INFO" "Syncing data..."
+    sync
+    
+    # Eject the device
+    log "INFO" "Ejecting $device..."
+    if eject "$device" 2>/dev/null; then
+        log "SUCCESS" "USB device ejected - safe to remove!"
+    else
+        log "WARN" "Could not auto-eject device. Please eject manually before removing."
+    fi
+    
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║   ✅ USB WRITE COMPLETE                                       ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "  Your bootable USB is ready!"
+    echo "  Insert into target computer and boot from USB."
+    echo ""
+    
+    return 0
+}
+
+# Copy ISO and Ventoy config to a mounted Ventoy USB
+# Use this ONLY if you prefer Ventoy over dd
+copy_to_ventoy() {
+    local ventoy_mount="$1"
+    local iso_file="$2"
+    local ventoy_config_dir="${OUTPUT_DIR}/ventoy"
+    
+    # Validate parameters
+    if [[ -z "$ventoy_mount" ]]; then
+        log "ERROR" "No Ventoy mount path specified"
+        return 1
+    fi
+    
+    if [[ ! -d "$ventoy_mount" ]]; then
+        log "ERROR" "Ventoy mount path not found: $ventoy_mount"
+        log "ERROR" "Make sure your Ventoy USB is mounted"
+        return 1
+    fi
+    
+    if [[ ! -f "$iso_file" ]]; then
+        log "ERROR" "ISO file not found: $iso_file"
+        return 1
+    fi
+    
+    if [[ ! -d "$ventoy_config_dir" ]]; then
+        log "ERROR" "Ventoy config directory not found: $ventoy_config_dir"
+        log "ERROR" "This should have been generated during build"
+        return 1
+    fi
+    
+    # Check for ventoy.json (indicates this is a Ventoy USB)
+    local existing_ventoy="${ventoy_mount}/ventoy"
+    
+    log "INFO" "Copying ISO to Ventoy USB..."
+    echo ""
+    echo "  Source: $(basename "$iso_file") ($(du -h "$iso_file" | cut -f1))"
+    echo "  Target: $ventoy_mount/"
+    echo ""
+    
+    # Copy ISO
+    if ! cp -v "$iso_file" "$ventoy_mount/"; then
+        log "ERROR" "Failed to copy ISO to $ventoy_mount"
+        return 1
+    fi
+    
+    # Create ventoy config directory
+    log "INFO" "Copying Ventoy configuration..."
+    mkdir -p "$ventoy_mount/ventoy"
+    
+    # Copy all Ventoy config files
+    if ! cp -v "$ventoy_config_dir/"* "$ventoy_mount/ventoy/"; then
+        log "ERROR" "Failed to copy Ventoy config files"
+        return 1
+    fi
+    
+    # Sync to ensure data is written
+    log "INFO" "Syncing..."
+    sync
+    
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║   ✅ VENTOY COPY COMPLETE                                     ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "  Files copied to Ventoy USB:"
+    echo "    - $(basename "$iso_file")"
+    echo "    - ventoy/ventoy.json"
+    echo "    - ventoy/preseed.cfg"
+    echo "    - ventoy/loopback.cfg"
+    echo ""
+    echo "  You can safely eject the USB and boot from it."
+    echo "  Select the ISO from Ventoy's boot menu."
+    echo ""
+    
+    return 0
+}
+
+# ============================================================================
 # Cleanup
 # ============================================================================
 
@@ -4611,24 +5091,26 @@ main() {
         exit 1
     fi
     
-    # Copy ISO to additional location if specified
-    if [[ -n "$COPY_TO_PATH" ]]; then
-        log "INFO" "Copying ISO to: $COPY_TO_PATH"
-        
-        # Create target directory if it doesn't exist
-        if ! mkdir -p "$COPY_TO_PATH"; then
-            log "ERROR" "Failed to create directory: $COPY_TO_PATH"
-            log "WARN" "ISO available at: $OUTPUT_ISO"
-        else
-            # Copy the ISO
-            local iso_filename
-            iso_filename=$(basename "$OUTPUT_ISO")
-            if cp "$OUTPUT_ISO" "$COPY_TO_PATH/$iso_filename"; then
-                log "SUCCESS" "ISO copied to: $COPY_TO_PATH/$iso_filename"
-            else
-                log "ERROR" "Failed to copy ISO to: $COPY_TO_PATH"
-                log "WARN" "ISO available at: $OUTPUT_ISO"
-            fi
+    # Generate Ventoy configuration files (optional - only needed if using Ventoy)
+    # When booting via dd-written USB, the ISO's grub.cfg works correctly.
+    # Ventoy ignores ISO boot parameters, so it needs separate config files.
+    generate_ventoy_config
+    
+    # Write to USB if --write-to specified (recommended method)
+    if [[ -n "$WRITE_TO_USB" ]]; then
+        log "INFO" ""
+        log "INFO" "=== Writing ISO to USB Device ==="
+        if ! write_to_usb "$WRITE_TO_USB" "$OUTPUT_ISO"; then
+            log "ERROR" "USB write failed"
+            exit 1
+        fi
+    # Copy to Ventoy if --ventoy specified (alternative method)
+    elif [[ -n "$VENTOY_MOUNT" ]]; then
+        log "INFO" ""
+        log "INFO" "=== Copying to Ventoy USB ==="
+        if ! copy_to_ventoy "$VENTOY_MOUNT" "$OUTPUT_ISO"; then
+            log "ERROR" "Ventoy copy failed"
+            exit 1
         fi
     fi
     
@@ -4642,14 +5124,31 @@ main() {
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo ""
     log "SUCCESS" "Custom ISO: $OUTPUT_ISO"
-    if [[ -n "$COPY_TO_PATH" ]]; then
-        log "SUCCESS" "Copied to: $COPY_TO_PATH/$(basename "$OUTPUT_ISO")"
+    
+    # Show appropriate next steps based on what was done
+    if [[ -n "$WRITE_TO_USB" ]]; then
+        log "INFO" "USB device ready at: $WRITE_TO_USB"
+    elif [[ -n "$VENTOY_MOUNT" ]]; then
+        log "SUCCESS" "Copied to Ventoy at: $VENTOY_MOUNT"
+    else
+        # No USB write requested - show manual instructions
+        log "INFO" ""
+        log "INFO" "=== Next Steps: Write ISO to USB ==="
+        log "INFO" ""
+        log "INFO" "OPTION 1 - Write directly (recommended):"
+        log "INFO" "  # Find your USB device (BE CAREFUL - this erases the drive!)"
+        log "INFO" "  lsblk"
+        log "INFO" ""
+        log "INFO" "  # Write ISO to USB (replace sdX with your device)"
+        log "INFO" "  sudo dd if=\"$OUTPUT_ISO\" of=/dev/sdX bs=4M status=progress conv=fsync"
+        log "INFO" ""
+        log "INFO" "  # Safely eject"
+        log "INFO" "  sudo eject /dev/sdX"
+        log "INFO" ""
+        log "INFO" "OPTION 2 - Use Ventoy (requires extra config):"
+        log "INFO" "  Ventoy ignores ISO boot params, so use the copy script:"
+        log "INFO" "  ${OUTPUT_DIR}/copy-to-ventoy.sh /media/\$USER/Ventoy"
     fi
-    log "INFO" ""
-    log "INFO" "Next steps:"
-    log "INFO" "  1. Copy ISO to Ventoy USB: cp \"$OUTPUT_ISO\" /media/\$USER/Ventoy/"
-    log "INFO" "  2. Safely eject the USB drive"
-    log "INFO" "  3. Boot target system from Ventoy"
     log "INFO" ""
     log "INFO" "Build log: $LOG_FILE"
 }
@@ -4697,14 +5196,24 @@ while [[ $# -gt 0 ]]; do
             set -x
             shift
             ;;
-        --copy-to)
-            COPY_TO_PATH="$2"
-            if [[ -z "$COPY_TO_PATH" ]]; then
-                echo "ERROR: --copy-to requires a path argument" >&2
+        --write-to)
+            WRITE_TO_USB="$2"
+            if [[ -z "$WRITE_TO_USB" ]]; then
+                echo "ERROR: --write-to requires a device path argument" >&2
                 usage
                 exit 1
             fi
-            log "INFO" "ISO will be copied to: $COPY_TO_PATH"
+            log "INFO" "ISO will be written to USB device: $WRITE_TO_USB"
+            shift 2
+            ;;
+        --ventoy)
+            VENTOY_MOUNT="$2"
+            if [[ -z "$VENTOY_MOUNT" ]]; then
+                echo "ERROR: --ventoy requires a mount path argument" >&2
+                usage
+                exit 1
+            fi
+            log "INFO" "ISO will be copied to Ventoy at: $VENTOY_MOUNT"
             shift 2
             ;;
         -h)
