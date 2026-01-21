@@ -841,18 +841,32 @@ WIKIPEDIASCRIPT
 create_fresh_user_backup() {
     log "INFO" "Creating fresh user backup from running ETC system..."
     
-    # Only create backup if running system has et-user-backup installed
-    if ! command -v et-user-backup &> /dev/null; then
-        log "INFO" "et-user-backup command not found - system not running ETC or command not in PATH"
+    # ETC installs et-user-backup to /opt/emcomm-tools/bin/ which may not be in PATH
+    # Check both PATH and the known ETC location
+    local et_user_backup_cmd=""
+    if command -v et-user-backup &> /dev/null; then
+        et_user_backup_cmd="et-user-backup"
+    elif [ -x "/opt/emcomm-tools/bin/et-user-backup" ]; then
+        et_user_backup_cmd="/opt/emcomm-tools/bin/et-user-backup"
+        log "DEBUG" "Found et-user-backup at ETC install location"
+    else
+        log "INFO" "et-user-backup not found - system not running ETC"
         log "INFO" "Skipping fresh backup creation (will use existing backup if available)"
         return 0
     fi
     
     # Check for existing backup from today in home folder (et-user-backup default location)
+    # Use SUDO_USER's home if running as root via sudo
+    local real_home="${HOME}"
+    if [ -n "${SUDO_USER:-}" ] && [ "$EUID" -eq 0 ]; then
+        real_home=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+        log "DEBUG" "Running as sudo, using real user home: $real_home"
+    fi
+    
     local today_date
     today_date=$(date +'%Y%m%d')
     local existing_backup
-    existing_backup=$(find "$HOME" -maxdepth 1 -name "etc-user-backup-*-${today_date}.tar.gz" -type f 2>/dev/null | head -1)
+    existing_backup=$(find "$real_home" -maxdepth 1 -name "etc-user-backup-*-${today_date}.tar.gz" -type f 2>/dev/null | head -1)
     
     if [ -n "$existing_backup" ] && [ -f "$existing_backup" ]; then
         log "INFO" "Found existing backup from today: $(basename "$existing_backup")"
@@ -866,8 +880,14 @@ create_fresh_user_backup() {
     # 1. "Can [file] be overwritten? (y/n)" - if backup exists
     # 2. "Do you want see the full list of files backed up? (y/n)" - at end
     # We answer 'y' to overwrite and 'n' to skip file list
+    # Run as the real user (not root) so backup goes to their home
+    local run_cmd="$et_user_backup_cmd"
+    if [ -n "${SUDO_USER:-}" ] && [ "$EUID" -eq 0 ]; then
+        run_cmd="sudo -u $SUDO_USER $et_user_backup_cmd"
+    fi
+    
     # Use timeout to prevent infinite hangs
-    if timeout 60 bash -c 'yes y | head -1; yes n | head -1' | et-user-backup 2>&1 | grep -v "^$" | tee -a "$LOG_FILE"; then
+    if timeout 60 bash -c "yes y | head -1; yes n | head -1" | $run_cmd 2>&1 | grep -v "^$" | tee -a "$LOG_FILE"; then
         log "DEBUG" "et-user-backup command completed"
     else
         local exit_code=$?
@@ -878,9 +898,9 @@ create_fresh_user_backup() {
         fi
     fi
     
-    # Look for the backup file in home directory (where et-user-backup puts it)
+    # Look for the backup file in real user's home directory (where et-user-backup puts it)
     local user_backup_file
-    user_backup_file=$(find "$HOME" -maxdepth 1 -name "etc-user-backup-*.tar.gz" -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+    user_backup_file=$(find "$real_home" -maxdepth 1 -name "etc-user-backup-*.tar.gz" -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
     
     if [ -n "$user_backup_file" ] && [ -f "$user_backup_file" ]; then
         local backup_size
@@ -898,7 +918,12 @@ restore_user_backup() {
     log "INFO" "Checking for ETC user backups..."
     
     local cache_dir="${SCRIPT_DIR}/cache"
+    # Use SUDO_USER's home if running as root via sudo
     local home_dir="$HOME"
+    if [ -n "${SUDO_USER:-}" ] && [ "$EUID" -eq 0 ]; then
+        home_dir=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+        log "DEBUG" "Running as sudo, looking for backups in real user home: $home_dir"
+    fi
     local user_backup=""
     local wine_backup=""
     local backup_count=0
