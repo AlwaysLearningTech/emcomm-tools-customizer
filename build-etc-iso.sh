@@ -125,10 +125,13 @@ BUILD OPTIONS:
     -h        Show this help message
 
 USB WRITE OPTIONS:
-    --write-to /dev/sdX
+    --write-to [/dev/sdX]
               Write ISO directly to USB device with dd (ERASES DEVICE!)
+              If device is omitted, detects USB drives and prompts for selection.
               Automatically ejects when complete. This is the recommended method.
-              Example: sudo ./build-etc-iso.sh -r stable --write-to /dev/sdb
+              Examples:
+                sudo ./build-etc-iso.sh -r stable --write-to          # auto-detect
+                sudo ./build-etc-iso.sh -r stable --write-to /dev/sdb # specific device
               
     --ventoy /path/to/ventoy
               Copy ISO + config files to mounted Ventoy USB
@@ -157,7 +160,10 @@ EXAMPLES:
     # Build from stable release (recommended)
     sudo ./build-etc-iso.sh -r stable
 
-    # Build and write directly to USB (recommended for install)
+    # Build and write to USB (auto-detect device - RECOMMENDED)
+    sudo ./build-etc-iso.sh -r stable --write-to
+
+    # Build and write to specific USB device
     sudo ./build-etc-iso.sh -r stable --write-to /dev/sdb
 
     # Build and copy to Ventoy USB
@@ -4649,13 +4655,99 @@ EOF
 # USB Write Functions
 # ============================================================================
 
+# Detect and select a USB device interactively
+# Returns the selected device path in the global variable SELECTED_USB_DEVICE
+select_usb_device() {
+    local devices=()
+    local device_info=()
+    
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║   Detecting USB Devices                                       ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+    
+    # Find removable block devices (USB drives)
+    # Look for devices where removable=1 or hotplug transport
+    while IFS= read -r line; do
+        local dev_name dev_size dev_model dev_tran dev_rm
+        dev_name=$(echo "$line" | awk '{print $1}')
+        dev_size=$(echo "$line" | awk '{print $2}')
+        dev_tran=$(echo "$line" | awk '{print $3}')
+        dev_rm=$(echo "$line" | awk '{print $4}')
+        dev_model=$(echo "$line" | awk '{$1=$2=$3=$4=""; print $0}' | xargs)
+        
+        # Skip if not a disk
+        [[ -z "$dev_name" ]] && continue
+        
+        # Skip nvme devices (system drives)
+        [[ "$dev_name" == nvme* ]] && continue
+        
+        # Include if removable=1 OR transport is usb
+        if [[ "$dev_rm" == "1" ]] || [[ "$dev_tran" == "usb" ]]; then
+            devices+=("/dev/$dev_name")
+            device_info+=("$dev_size  $dev_model")
+        fi
+    done < <(lsblk -d -n -o NAME,SIZE,TRAN,RM,MODEL 2>/dev/null | grep -E "^sd|^hd")
+    
+    # Check if any USB devices found
+    if [[ ${#devices[@]} -eq 0 ]]; then
+        log "ERROR" "No USB devices detected!"
+        echo ""
+        echo "  Make sure your USB drive is plugged in."
+        echo "  If it's a new drive, it may need to be formatted first."
+        echo ""
+        echo "  All detected disks:"
+        lsblk -d -o NAME,SIZE,TRAN,RM,MODEL 2>/dev/null | head -20
+        echo ""
+        return 1
+    fi
+    
+    # Display menu
+    echo "  Available USB devices:"
+    echo ""
+    for i in "${!devices[@]}"; do
+        printf "    [%d] %-12s %s\n" "$((i+1))" "${devices[$i]}" "${device_info[$i]}"
+    done
+    echo ""
+    echo "    [0] Cancel"
+    echo ""
+    
+    # Get user selection
+    local selection
+    while true; do
+        read -r -p "  Select device [1-${#devices[@]}]: " selection
+        
+        if [[ "$selection" == "0" ]]; then
+            log "INFO" "USB write cancelled by user"
+            return 1
+        fi
+        
+        if [[ "$selection" =~ ^[0-9]+$ ]] && [[ "$selection" -ge 1 ]] && [[ "$selection" -le ${#devices[@]} ]]; then
+            SELECTED_USB_DEVICE="${devices[$((selection-1))]}"
+            log "INFO" "Selected: $SELECTED_USB_DEVICE"
+            return 0
+        fi
+        
+        echo "  Invalid selection. Enter 1-${#devices[@]} or 0 to cancel."
+    done
+}
+
 # Write ISO directly to USB with dd and eject when complete
 # This is the RECOMMENDED method - preserves grub.cfg boot parameters
 write_to_usb() {
     local device="$1"
     local iso_file="$2"
     
-    # Validate device parameter
+    # If device is empty or "auto", run interactive selection
+    if [[ -z "$device" ]] || [[ "$device" == "auto" ]]; then
+        if ! select_usb_device; then
+            return 1
+        fi
+        device="$SELECTED_USB_DEVICE"
+    fi
+    
+    # Validate device parameter (should not happen after selection, but safety check)
     if [[ -z "$device" ]]; then
         log "ERROR" "No USB device specified for --write-to"
         return 1
@@ -5197,14 +5289,17 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --write-to)
-            WRITE_TO_USB="$2"
-            if [[ -z "$WRITE_TO_USB" ]]; then
-                echo "ERROR: --write-to requires a device path argument" >&2
-                usage
-                exit 1
+            # Check if next arg is a device path or another option/missing
+            if [[ -n "$2" ]] && [[ "$2" != -* ]]; then
+                WRITE_TO_USB="$2"
+                log "INFO" "ISO will be written to USB device: $WRITE_TO_USB"
+                shift 2
+            else
+                # No device specified - will auto-detect after build
+                WRITE_TO_USB="auto"
+                log "INFO" "ISO will be written to USB (device auto-detect after build)"
+                shift
             fi
-            log "INFO" "ISO will be written to USB device: $WRITE_TO_USB"
-            shift 2
             ;;
         --ventoy)
             VENTOY_MOUNT="$2"
