@@ -5290,7 +5290,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --write-to)
             # Check if next arg is a device path or another option/missing
-            if [[ -n "$2" ]] && [[ "$2" != -* ]]; then
+            if [[ $# -ge 2 ]] && [[ "${2:-}" != -* ]]; then
                 WRITE_TO_USB="$2"
                 log "INFO" "ISO will be written to USB device: $WRITE_TO_USB"
                 shift 2
@@ -5302,7 +5302,7 @@ while [[ $# -gt 0 ]]; do
             fi
             ;;
         --ventoy)
-            VENTOY_MOUNT="$2"
+            VENTOY_MOUNT="${2:-}"
             if [[ -z "$VENTOY_MOUNT" ]]; then
                 echo "ERROR: --ventoy requires a mount path argument" >&2
                 usage
