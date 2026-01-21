@@ -423,6 +423,11 @@ extract_iso() {
     SQUASHFS_DIR="$squashfs_dir"
     SQUASHFS_FILE="$squashfs_file"
     
+    # CRITICAL: Make boot config files writable (ISO files extract read-only)
+    # Without this, sed modifications to grub.cfg silently fail!
+    log "DEBUG" "Making boot configuration files writable..."
+    chmod -R u+w "${iso_extract_dir}/boot" 2>/dev/null || log "WARN" "Could not set boot directory permissions"
+    
     log "SUCCESS" "ISO extracted successfully"
     return 0
 }
@@ -2561,6 +2566,13 @@ update_grub_for_preseed() {
             log "WARN" "$cfg_name not found at: $cfg_file"
             return 1
         fi
+        
+        # CRITICAL: ISO extracted files are READ-ONLY by default!
+        # Make writable before attempting sed modifications
+        chmod +w "$cfg_file" 2>/dev/null || {
+            log "ERROR" "Cannot make $cfg_name writable - sed will silently fail!"
+            return 1
+        }
         
         log "DEBUG" "Modifying $cfg_name: $cfg_file"
         log "DEBUG" "$cfg_name BEFORE modifications:"
