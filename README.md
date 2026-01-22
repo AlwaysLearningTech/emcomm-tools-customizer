@@ -243,10 +243,14 @@ cd emcomm-tools-customizer
 cp secrets.env.template secrets.env
 nano secrets.env  # Fill in your values
 
-# Build from stable release (downloads ETC + Ubuntu ISO automatically)
-sudo ./build-etc-iso.sh -r stable
+# Build from stable release and write to USB (RECOMMENDED)
+sudo ./build-etc-iso.sh -r stable --write-to
+# Script auto-detects USB drives and prompts you to select
 
-# Output: output/<release-tag>-custom.iso
+# Or specify USB device directly (skip menu)
+sudo ./build-etc-iso.sh -r stable --write-to /dev/sdb
+
+# Output: Custom ISO written to USB, ready to boot!
 ```
 
 ### Skip ISO Download
@@ -259,7 +263,7 @@ mkdir -p cache
 cp ~/Downloads/ubuntu-22.10-desktop-amd64.iso cache/
 
 # Now build - ISO download will be skipped!
-sudo ./build-etc-iso.sh -r stable
+sudo ./build-etc-iso.sh -r stable --write-to
 ```
 
 The script checks `cache/ubuntu-22.10-desktop-amd64.iso` before downloading.
@@ -270,23 +274,23 @@ The script checks `cache/ubuntu-22.10-desktop-amd64.iso` before downloading.
 # List available releases and tags from GitHub
 ./build-etc-iso.sh -l
 
-# Build from stable release (recommended for most users)
+# Build from stable release and write to USB (RECOMMENDED)
+sudo ./build-etc-iso.sh -r stable --write-to
+
+# Build from latest development tag with USB auto-detect
+sudo ./build-etc-iso.sh -r latest --write-to
+
+# Build a specific tag and write to specific USB device
+sudo ./build-etc-iso.sh -r tag -t emcomm-tools-os-community-20251113-r5-build17 --write-to /dev/sdb
+
+# Minimal build (smaller ISO, no embedded cache files) with USB write
+sudo ./build-etc-iso.sh -r stable -m --write-to
+
+# Debug mode with USB write
+sudo ./build-etc-iso.sh -r stable -d --write-to
+
+# Build only (no USB write) - manual copy later
 sudo ./build-etc-iso.sh -r stable
-
-# Build from latest development tag (bleeding edge)
-sudo ./build-etc-iso.sh -r latest
-
-# Build a specific tag by name
-sudo ./build-etc-iso.sh -r tag -t emcomm-tools-os-community-20251113-r5-build17
-
-# Minimal build (smaller ISO, no embedded cache files)
-sudo ./build-etc-iso.sh -r stable -m
-
-# Debug mode (show detailed DEBUG log messages)
-sudo ./build-etc-iso.sh -r stable -d
-
-# Verbose mode for maximum debugging (bash -x)
-sudo ./build-etc-iso.sh -r stable -v
 ```
 
 ### Option Reference
@@ -296,12 +300,37 @@ sudo ./build-etc-iso.sh -r stable -v
 | `-r <stable\|latest\|tag>` | Release mode |
 | `-t <tag>` | Specific tag name (required with `-r tag`) |
 | `-l` | List available releases and tags |
+| `--write-to [/dev/sdX]` | **Auto-detect and write to USB** (no device = interactive selection) |
+| `--ventoy <mount-path>` | Copy ISO to mounted Ventoy USB |
 | `-m` | Minimal build (exclude cache files, saves ~4GB) |
 | `-d` | Debug mode (show DEBUG log messages) |
 | `-v` | Verbose mode (bash -x tracing) |
 | `-h` | Show help |
 
 **Note**: Optional et-os-addons features are enabled by default via `ENABLE_ETOSADDONS_*` variables. Disable individual features by setting them to `"no"` in `secrets.env`.
+
+### USB Writing (Auto-Detection)
+
+The `--write-to` option includes built-in USB auto-detection:
+
+```bash
+# Interactive device selection (RECOMMENDED)
+# Script lists USB devices and you choose from menu
+sudo ./build-etc-iso.sh -r stable --write-to
+
+# Specific device (skip menu)
+# Write directly to /dev/sdb without prompting
+sudo ./build-etc-iso.sh -r stable --write-to /dev/sdb
+```
+
+**Auto-Detection Features**:
+- Queries `lsblk` for removable or usb-transport devices
+- Filters out nvme devices (system drives) automatically
+- Displays device size and model for confirmation
+- Auto-unmounts any mounted partitions
+- Requires explicit "YES" confirmation before writing
+- Shows real-time `dd` progress during write
+- Auto-ejects device when complete
 
 ### Release Modes
 

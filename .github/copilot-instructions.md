@@ -14,8 +14,7 @@
 8. **READ CONFIG FILES FIRST** - Before investigating issues, READ the actual config file being used (e.g., `/etc/conky/conky.conf`, `/etc/lsb-release`, `/opt/emcomm-tools/bin/et-system-info`). Don't guess - let the code tell you what's happening.
 9. **LOOK AT ACTUAL FILES FIRST** - Verify current state before changes.
 10. **UPDATE DOCUMENTATION IN-PLACE** - Modify existing README.md directly.
-11. **COMMIT BEFORE BUILDS** - ALWAYS remind user to commit and sync changes before starting a build. After build completes, user may overwrite OS with new ISO before syncing!
-12. **SUDO PASSWORD ALERT** - When a terminal command requires sudo and prompts for password, STOP immediately and notify the user. User often doesn't notice terminal prompts while chat is processing.
+11. **SUDO PASSWORD ALERT** - When a terminal command requires sudo and prompts for password, STOP immediately and notify the user. User often doesn't notice terminal prompts while chat is processing.
 12. **NO TEE IN BUILD COMMANDS** - Never use `tee` in build scripts when running with sudo (causes hangs/timeouts). Output goes to logs/ automatically.
 13. **UBUNTU 22.10 IS EOL** - CRITICAL: Kinetic (22.10) is end-of-life. ALWAYS fix apt sources before any apt operations in chroot:
     ```bash
@@ -23,8 +22,8 @@
     chroot "${SQUASHFS_DIR}" sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
     ```
     Do this BEFORE apt-get update or any apt-get install commands. This MUST happen early in customize_packages() function.
-15. **SQUASHFS REBUILD TIME** - Realistic estimate is 90-120 minutes total build time, not 10-20 minutes. xz compression with mksquashfs takes significant time. Update docs if time estimates are shown to user.
-16. **NEVER DELETE FILES WITHOUT ASKING** - Do NOT use `rm -rf` on ISOs, build artifacts, or any user files without explicit permission. Always ask first or make backups.
+14. **SQUASHFS REBUILD TIME** - Realistic estimate is 90-120 minutes total build time, not 10-20 minutes. xz compression with mksquashfs takes significant time. Update docs if time estimates are shown to user.
+15. **NEVER DELETE FILES WITHOUT ASKING** - Do NOT use `rm -rf` on ISOs, build artifacts, or any user files without explicit permission. Always ask first or make backups.
 
 ## VERIFICATION REQUIREMENTS - NON-NEGOTIABLE
 **When code claims to fix a problem or user says something is broken:**
@@ -48,6 +47,47 @@
 - **Estimate fix probability** - When prompting about repair vs defer, estimate likelihood of first-time fix success so we don't skip easy fixes.
 - **Core components**: hostname, WiFi, user account, desktop settings, APRS/direwolf, squashfs/ISO creation
 - **Deferrable**: Wine backup restore, Pat aliases, Wikipedia tools, cache embedding
+
+## USB Writing: How It Works (Auto-Detection Built-in)
+
+**The build script includes comprehensive USB auto-detection and safety checks.**
+
+**Workflow when using `--write-to` (RECOMMENDED)**:
+1. Build completes and ISO saved to `./output/`
+2. Script runs `select_usb_device()` function:
+   - Queries `lsblk` for removable devices or usb-transport devices
+   - Filters out nvme devices (system drives) automatically
+   - Displays interactive menu with device size and model number
+   - Waits for user numbered selection (1, 2, 3, or 0 to cancel)
+3. Script validates selected device:
+   - Confirms it's a block device (not a partition)
+   - Rejects nvme devices and partitions (safety checks)
+4. Before writing:
+   - Shows device info and ISO filename for confirmation
+   - Checks for mounted partitions and unmounts them automatically
+   - Asks user to type "YES" to confirm (prevents accidental erasures)
+5. Writes ISO with `dd if=iso of=/dev/sdX bs=4M status=progress`:
+   - Shows real-time progress bar
+   - Syncs data with `fsync` to ensure completion
+6. Ejects device and marks as safe to remove
+
+**Usage Examples**:
+```bash
+# Interactive device selection (RECOMMENDED - user selects from menu)
+sudo ./build-etc-iso.sh -r stable --write-to
+
+# Specific device (skip menu, write directly)
+sudo ./build-etc-iso.sh -r stable --write-to /dev/sdb
+
+# With other options
+sudo ./build-etc-iso.sh -r stable -d --write-to    # Debug mode + auto-detect USB
+```
+
+**Why `--write-to` is better than Ventoy**:
+- Writes directly to USB (preserves GRUB boot parameters in ISO)
+- Faster than Ventoy (no extra layer of indirection)
+- Simpler workflow (no separate Ventoy setup required)
+- Better for deployment (one command, one USB, done)
 
 ## Critical Rule: NO Parallel Overlay Systems
 
@@ -335,6 +375,8 @@ emcomm-tools-customizer/
 | `-d` | Debug mode (show DEBUG log messages) |
 | `-m` | Minimal build (skip cache embedding) |
 | `-v` | Verbose mode (bash -x tracing) |
+| `--write-to [/dev/sdX]` | **Auto-detect and write to USB** (no device = interactive selection) |
+| `--ventoy <mount-path>` | Copy ISO to mounted Ventoy USB (alternative to `--write-to`) |
 | `-h` | Show help |
 
 ## User Account Configuration
