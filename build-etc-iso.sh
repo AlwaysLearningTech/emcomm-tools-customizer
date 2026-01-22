@@ -4359,33 +4359,97 @@ rebuild_iso() {
     (cd "$ISO_EXTRACT_DIR" && find . -type f -print0 | xargs -0 md5sum > md5sum.txt) 2>/dev/null || true
     log "DEBUG" "Checksums calculated"
     
-    # Rebuild ISO with xorriso for UEFI-only boot
+    # Rebuild ISO with xorriso for hybrid BIOS/UEFI boot
     # Using -iso-level 3 to allow files over 4GB (embedded cache makes squashfs large)
-    log "INFO" "Creating UEFI bootable ISO image..."
+    log "INFO" "Creating hybrid BIOS/UEFI bootable ISO image..."
     log "DEBUG" "Output ISO: $OUTPUT_ISO"
     log "DEBUG" "ISO label: ETC_${RELEASE_NUMBER^^}_CUSTOM"
     
-    # Check if EFI boot image exists
+    # Create proper EFI boot image from existing bootloaders
     local efi_boot_img="$ISO_EXTRACT_DIR/boot/grub/efi.img"
+    local efi_dir="$ISO_EXTRACT_DIR/EFI/boot"
     
-    if [ ! -f "$efi_boot_img" ]; then
-        log "DEBUG" "EFI boot image not found, creating minimal stub..."
+    if [ -d "$efi_dir" ] && [ -f "$efi_dir/bootx64.efi" ]; then
+        log "INFO" "Creating EFI boot image from existing bootloaders..."
+        
+        # Calculate required size for FAT image (EFI files + overhead)
+        local efi_size
+        efi_size=$(du -sk "$efi_dir" | cut -f1)
+        # Add 50% overhead and round up to 2880 sectors minimum (1.44MB floppy)
+        local fat_size=$(( (efi_size * 3 / 2 + 1440) / 1440 * 1440 ))
+        [ "$fat_size" -lt 2880 ] && fat_size=2880
+        
+        log "DEBUG" "EFI directory size: ${efi_size}KB, FAT image size: ${fat_size} sectors"
+        
         mkdir -p "$(dirname "$efi_boot_img")"
-        dd if=/dev/zero of="$efi_boot_img" bs=512 count=2880 2>/dev/null || true
+        
+        # Create FAT12/16 filesystem image
+        dd if=/dev/zero of="$efi_boot_img" bs=512 count=$fat_size 2>/dev/null
+        /sbin/mkfs.vfat -F 12 "$efi_boot_img" >/dev/null 2>&1 || mkfs.vfat -F 12 "$efi_boot_img" >/dev/null 2>&1
+        
+        # Mount and copy EFI bootloaders
+        local efi_mount="/tmp/efi_mount_$$"
+        mkdir -p "$efi_mount"
+        sudo mount -o loop "$efi_boot_img" "$efi_mount"
+        sudo mkdir -p "$efi_mount/EFI/boot"
+        sudo cp -v "$efi_dir"/*.efi "$efi_mount/EFI/boot/" 2>/dev/null || true
+        sudo cp -v "$efi_dir"/*.EFI "$efi_mount/EFI/boot/" 2>/dev/null || true
+        # Also copy grub.cfg if it exists in EFI directory
+        [ -f "$efi_dir/grub.cfg" ] && sudo cp -v "$efi_dir/grub.cfg" "$efi_mount/EFI/boot/"
+        sudo umount "$efi_mount"
+        rmdir "$efi_mount"
+        
+        log "SUCCESS" "EFI boot image created"
+    else
+        log "WARN" "No EFI bootloaders found at $efi_dir, creating empty EFI image"
+        mkdir -p "$(dirname "$efi_boot_img")"
+        dd if=/dev/zero of="$efi_boot_img" bs=512 count=2880 2>/dev/null
     fi
     
-    # Create UEFI-only ISO (no MBR, no legacy boot)
-    xorriso -as mkisofs \
-        -r -V "ETC_${RELEASE_NUMBER^^}_CUSTOM" \
-        -iso-level 3 \
-        -J -joliet-long \
-        -l \
-        -eltorito-alt-boot \
-        -e boot/grub/efi.img \
-        -no-emul-boot \
-        -append_partition 2 0xef "$efi_boot_img" \
-        -o "$OUTPUT_ISO" \
-        "$ISO_EXTRACT_DIR" 2>&1 | tee -a "$LOG_FILE"
+    # Check for BIOS bootloader (eltorito)
+    local bios_boot_img="$ISO_EXTRACT_DIR/boot/grub/i386-pc/eltorito.img"
+    local use_bios_boot=""
+    
+    if [ -f "$bios_boot_img" ]; then
+        log "INFO" "Found BIOS bootloader, creating hybrid ISO..."
+        use_bios_boot="yes"
+    else
+        log "WARN" "No BIOS bootloader found, creating UEFI-only ISO"
+    fi
+    
+    # Create hybrid BIOS/UEFI bootable ISO
+    if [ "$use_bios_boot" = "yes" ]; then
+        # Full hybrid boot: BIOS (El Torito) + UEFI (EFI System Partition)
+        xorriso -as mkisofs \
+            -r -V "ETC_${RELEASE_NUMBER^^}_CUSTOM" \
+            -iso-level 3 \
+            -J -joliet-long \
+            -l \
+            -b boot/grub/i386-pc/eltorito.img \
+            -no-emul-boot \
+            -boot-load-size 4 \
+            -boot-info-table \
+            --grub2-boot-info \
+            -eltorito-alt-boot \
+            -e boot/grub/efi.img \
+            -no-emul-boot \
+            -isohybrid-gpt-basdat \
+            -o "$OUTPUT_ISO" \
+            "$ISO_EXTRACT_DIR" 2>&1 | tee -a "$LOG_FILE"
+    else
+        # UEFI-only boot
+        xorriso -as mkisofs \
+            -r -V "ETC_${RELEASE_NUMBER^^}_CUSTOM" \
+            -iso-level 3 \
+            -J -joliet-long \
+            -l \
+            -eltorito-alt-boot \
+            -e boot/grub/efi.img \
+            -no-emul-boot \
+            -append_partition 2 0xef "$efi_boot_img" \
+            -o "$OUTPUT_ISO" \
+            "$ISO_EXTRACT_DIR" 2>&1 | tee -a "$LOG_FILE"
+    fi
     
     # Strict check - UEFI-only ISO creation must succeed
     if [ ! -f "$OUTPUT_ISO" ] || [ ! -s "$OUTPUT_ISO" ]; then
