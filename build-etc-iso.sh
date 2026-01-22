@@ -2069,7 +2069,7 @@ EOF
 # ============================================================================
 
 detect_partition_strategy() {
-    # Analyze current disk layout and determine optimal partition strategy
+    # Analyze current disk layout using lsblk (not parted, which can hang waiting for user input)
     # Returns: partition_strategy, target_disk, ext4_size, swap_size
     # NOTE: log function redirects console output to stderr, keeping stdout clean for pipe-delimited output
     
@@ -2101,15 +2101,15 @@ detect_partition_strategy() {
     # If we reach here, either no specific partition was set, or it doesn't exist
     # Try to detect current disk layout for analysis
     
-    log "INFO" "Running partition auto-detection..."
+    log "INFO" "Running partition auto-detection using lsblk..."
     
-    # Count partitions on potential target disk
+    # Find target disk
     local target_disk
     if [[ -n "$target_device" && "$target_device" =~ ^/dev/[a-z] ]]; then
         target_disk="$target_device"
     else
         # Find first non-removable disk
-        target_disk=$(lsblk -d -n -o NAME,TYPE | grep "disk" | head -1 | awk '{print $1}')
+        target_disk=$(lsblk -d -n -o NAME,TYPE 2>/dev/null | grep "disk" | head -1 | awk '{print $1}')
         target_disk="/dev/$target_disk"
     fi
     
@@ -2121,60 +2121,60 @@ detect_partition_strategy() {
     
     log "DEBUG" "Target disk for analysis: $target_disk"
     
-    # Cache parted output to avoid multiple hanging calls
-    local parted_output
-    parted_output=$(parted -l "$target_disk" 2>/dev/null) || parted_output=""
+    # Use lsblk instead of parted (parted can hang waiting for user input)
+    # lsblk is fast and provides all info we need: partition count and filesystem types
+    local lsblk_output
+    lsblk_output=$(lsblk -b "$target_disk" -o NAME,FSTYPE,TYPE 2>/dev/null) || lsblk_output=""
     
-    if [ -z "$parted_output" ]; then
-        log "WARN" "parted -l failed or hung - defaulting to partition mode"
+    if [ -z "$lsblk_output" ]; then
+        log "WARN" "lsblk failed or returned empty - defaulting to partition mode"
         echo "partition|$target_disk|0|fallback"
         return 0
     fi
     
-    # Analyze partition table from cached output
+    # Count partitions from lsblk output
     local partition_count
-    partition_count=$(echo "$parted_output" | grep -c "^ " || echo "0")
+    partition_count=$(echo "$lsblk_output" | grep -c "part" || echo "0")
     
     local has_windows=0
     local has_linux=0
     local total_disk_gb=0
-    local free_space_gb=0
     
-    # Check for Windows/Linux partitions from cached output
-    if echo "$parted_output" | grep -qi "ntfs\|fat32\|microsoft"; then
+    # Check for Windows/Linux filesystems from lsblk output
+    if echo "$lsblk_output" | grep -qi "ntfs\|fat"; then
         has_windows=1
-        log "INFO" "Detected Windows partition on $target_disk"
+        log "INFO" "Detected Windows partition (NTFS/FAT) on $target_disk"
     fi
     
-    if echo "$parted_output" | grep -qi "ext4\|ext3\|btrfs"; then
+    if echo "$lsblk_output" | grep -qi "ext4\|ext3\|btrfs"; then
         has_linux=1
         log "INFO" "Detected Linux partition on $target_disk"
     fi
     
-    # Get disk size
+    # Get disk size using blockdev
     if command -v blockdev &>/dev/null; then
         local disk_size_sectors
         disk_size_sectors=$(blockdev --getsz "$target_disk" 2>/dev/null || echo "0")
         total_disk_gb=$((disk_size_sectors / 2097152))  # Convert to GB
-        log "DEBUG" "Total disk size: ~${total_disk_gb}GB"
+        log "DEBUG" "Total disk size: ~${total_disk_gb}GB, Partition count: $partition_count"
     fi
     
-    # Decision logic
+    # Decision logic based on partition analysis
     if [ $partition_count -eq 0 ]; then
         log "INFO" "No partitions found - entire disk available (~${total_disk_gb}GB)"
         echo "entire-disk|$target_disk|${total_disk_gb}GB|calculated"
     elif [ $has_windows -eq 1 ] && [ $has_linux -eq 0 ]; then
         log "INFO" "Windows partition(s) detected, no Linux partitions"
-        # Check for free space from cached output
-        if echo "$parted_output" | grep -q "Free Space"; then
-            log "INFO" "Free space available after Windows partition"
+        # For Windows-only disks, suggest free-space mode to preserve Windows
+        if [ $partition_count -le 4 ]; then
+            log "INFO" "Partition table has room for new partitions - using free-space mode"
             echo "free-space|$target_disk|${total_disk_gb}GB|calculated"
         else
-            log "INFO" "No free space - will need to repartition entire disk"
+            log "WARN" "Partition table is full - will need to repartition entire disk"
             echo "entire-disk|$target_disk|${total_disk_gb}GB|calculated"
         fi
     elif [ $has_linux -eq 1 ] || [ $partition_count -le 2 ]; then
-        log "INFO" "Linux partition(s) or simple partition table detected"
+        log "INFO" "Linux partition(s) or simple partition table detected (safe partition mode)"
         echo "partition|$target_disk|${total_disk_gb}GB|calculated"
     else
         log "INFO" "Complex partition table detected - defaulting to safe partition mode"
