@@ -2121,22 +2121,32 @@ detect_partition_strategy() {
     
     log "DEBUG" "Target disk for analysis: $target_disk"
     
-    # Analyze partition table
+    # Cache parted output to avoid multiple hanging calls
+    local parted_output
+    parted_output=$(parted -l "$target_disk" 2>/dev/null) || parted_output=""
+    
+    if [ -z "$parted_output" ]; then
+        log "WARN" "parted -l failed or hung - defaulting to partition mode"
+        echo "partition|$target_disk|0|fallback"
+        return 0
+    fi
+    
+    # Analyze partition table from cached output
     local partition_count
-    partition_count=$(parted -l "$target_disk" 2>/dev/null | grep -c "^ " || echo "0")
+    partition_count=$(echo "$parted_output" | grep -c "^ " || echo "0")
     
     local has_windows=0
     local has_linux=0
     local total_disk_gb=0
     local free_space_gb=0
     
-    # Check for Windows/Linux partitions
-    if parted -l "$target_disk" 2>/dev/null | grep -qi "ntfs\|fat32\|microsoft"; then
+    # Check for Windows/Linux partitions from cached output
+    if echo "$parted_output" | grep -qi "ntfs\|fat32\|microsoft"; then
         has_windows=1
         log "INFO" "Detected Windows partition on $target_disk"
     fi
     
-    if parted -l "$target_disk" 2>/dev/null | grep -qi "ext4\|ext3\|btrfs"; then
+    if echo "$parted_output" | grep -qi "ext4\|ext3\|btrfs"; then
         has_linux=1
         log "INFO" "Detected Linux partition on $target_disk"
     fi
@@ -2155,8 +2165,8 @@ detect_partition_strategy() {
         echo "entire-disk|$target_disk|${total_disk_gb}GB|calculated"
     elif [ $has_windows -eq 1 ] && [ $has_linux -eq 0 ]; then
         log "INFO" "Windows partition(s) detected, no Linux partitions"
-        # Check for free space (simplified: assume we can use parted free space)
-        if parted -l "$target_disk" 2>/dev/null | grep -q "Free Space"; then
+        # Check for free space from cached output
+        if echo "$parted_output" | grep -q "Free Space"; then
             log "INFO" "Free space available after Windows partition"
             echo "free-space|$target_disk|${total_disk_gb}GB|calculated"
         else
