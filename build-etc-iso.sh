@@ -4416,50 +4416,21 @@ rebuild_iso() {
         dd if=/dev/zero of="$efi_boot_img" bs=512 count=2880 2>/dev/null
     fi
     
-    # Check for BIOS bootloader (eltorito)
-    local bios_boot_img="$ISO_EXTRACT_DIR/boot/grub/i386-pc/eltorito.img"
-    local use_bios_boot=""
+    # Force UEFI-only boot (no legacy BIOS support)
+    log "INFO" "Creating UEFI-only bootable ISO (no legacy BIOS)..."
     
-    if [ -f "$bios_boot_img" ]; then
-        log "INFO" "Found BIOS bootloader, creating hybrid ISO..."
-        use_bios_boot="yes"
-    else
-        log "WARN" "No BIOS bootloader found, creating UEFI-only ISO"
-    fi
-    
-    # Create hybrid BIOS/UEFI bootable ISO
-    if [ "$use_bios_boot" = "yes" ]; then
-        # Full hybrid boot: BIOS (El Torito) + UEFI (EFI System Partition)
-        xorriso -as mkisofs \
-            -r -V "ETC_${RELEASE_NUMBER^^}_CUSTOM" \
-            -iso-level 3 \
-            -J -joliet-long \
-            -l \
-            -b boot/grub/i386-pc/eltorito.img \
-            -no-emul-boot \
-            -boot-load-size 4 \
-            -boot-info-table \
-            --grub2-boot-info \
-            -eltorito-alt-boot \
-            -e boot/grub/efi.img \
-            -no-emul-boot \
-            -isohybrid-gpt-basdat \
-            -o "$OUTPUT_ISO" \
-            "$ISO_EXTRACT_DIR" 2>&1 | tee -a "$LOG_FILE"
-    else
-        # UEFI-only boot
-        xorriso -as mkisofs \
-            -r -V "ETC_${RELEASE_NUMBER^^}_CUSTOM" \
-            -iso-level 3 \
-            -J -joliet-long \
-            -l \
-            -eltorito-alt-boot \
-            -e boot/grub/efi.img \
-            -no-emul-boot \
-            -append_partition 2 0xef "$efi_boot_img" \
-            -o "$OUTPUT_ISO" \
-            "$ISO_EXTRACT_DIR" 2>&1 | tee -a "$LOG_FILE"
-    fi
+    # UEFI-only boot with proper GPT partition table
+    xorriso -as mkisofs \
+        -r -V "ETC_${RELEASE_NUMBER^^}_CUSTOM" \
+        -iso-level 3 \
+        -J -joliet-long \
+        -l \
+        -e boot/grub/efi.img \
+        -no-emul-boot \
+        -append_partition 2 0xef "$efi_boot_img" \
+        -partition_offset 16 \
+        -o "$OUTPUT_ISO" \
+        "$ISO_EXTRACT_DIR" 2>&1 | tee -a "$LOG_FILE"
     
     # Strict check - UEFI-only ISO creation must succeed
     if [ ! -f "$OUTPUT_ISO" ] || [ ! -s "$OUTPUT_ISO" ]; then
