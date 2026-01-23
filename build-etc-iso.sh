@@ -4812,10 +4812,10 @@ select_usb_device() {
     echo "    [0] Cancel"
     echo ""
     
-    # Get user selection
+    # Get user selection from /dev/tty to support background processes
     local selection
     while true; do
-        read -r -p "  Select device [1-${#devices[@]}]: " selection
+        read -r -p "  Select device [1-${#devices[@]}]: " selection < /dev/tty
         
         if [[ "$selection" == "0" ]]; then
             log "INFO" "USB write cancelled by user"
@@ -4932,7 +4932,8 @@ write_to_usb() {
         echo ""
     fi
     
-    read -r -p "Type 'YES' to confirm write to $device: " confirm
+    # Read from /dev/tty to support background processes (when stdout/stdin redirected)
+    read -r -p "Type 'YES' to confirm write to $device: " confirm < /dev/tty
     echo ""
     
     if [[ "$confirm" != "YES" ]]; then
