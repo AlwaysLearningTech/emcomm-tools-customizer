@@ -4757,24 +4757,18 @@ EOF
 # Detect and select a USB device interactively
 # Returns the selected device path in the global variable SELECTED_USB_DEVICE
 select_usb_device() {
-    local devices=()
-    local device_info=()
+    # Auto-detect single USB device without interactive prompts
+    # If exactly one USB device found, use it
+    # If multiple or none, fail with clear error message
     
-    echo ""
-    echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║   Detecting USB Devices                                       ║"
-    echo "╚══════════════════════════════════════════════════════════════╝"
-    echo ""
+    local devices=()
     
     # Find removable block devices (USB drives)
-    # Look for devices where removable=1 or hotplug transport
     while IFS= read -r line; do
-        local dev_name dev_size dev_model dev_tran dev_rm
+        local dev_name dev_tran dev_rm
         dev_name=$(echo "$line" | awk '{print $1}')
-        dev_size=$(echo "$line" | awk '{print $2}')
-        dev_tran=$(echo "$line" | awk '{print $3}')
-        dev_rm=$(echo "$line" | awk '{print $4}')
-        dev_model=$(echo "$line" | awk '{$1=$2=$3=$4=""; print $0}' | xargs)
+        dev_tran=$(echo "$line" | awk '{print $2}')
+        dev_rm=$(echo "$line" | awk '{print $3}')
         
         # Skip if not a disk
         [[ -z "$dev_name" ]] && continue
@@ -4785,51 +4779,26 @@ select_usb_device() {
         # Include if removable=1 OR transport is usb
         if [[ "$dev_rm" == "1" ]] || [[ "$dev_tran" == "usb" ]]; then
             devices+=("/dev/$dev_name")
-            device_info+=("$dev_size  $dev_model")
         fi
-    done < <(lsblk -d -n -o NAME,SIZE,TRAN,RM,MODEL 2>/dev/null | grep -E "^sd|^hd")
+    done < <(lsblk -d -n -o NAME,TRAN,RM 2>/dev/null | grep -E "^sd|^hd")
     
-    # Check if any USB devices found
+    # Check results
     if [[ ${#devices[@]} -eq 0 ]]; then
-        log "ERROR" "No USB devices detected!"
-        echo ""
-        echo "  Make sure your USB drive is plugged in."
-        echo "  If it's a new drive, it may need to be formatted first."
-        echo ""
-        echo "  All detected disks:"
-        lsblk -d -o NAME,SIZE,TRAN,RM,MODEL 2>/dev/null | head -20
-        echo ""
+        log "ERROR" "No USB devices detected. Plug in a USB drive or specify --write-to /dev/sdX explicitly"
+        return 1
+    elif [[ ${#devices[@]} -gt 1 ]]; then
+        log "ERROR" "Multiple USB devices detected. Specify which one explicitly: --write-to /dev/sdb"
+        echo "  Available devices:" >&2
+        for dev in "${devices[@]}"; do
+            echo "    $dev" >&2
+        done
         return 1
     fi
     
-    # Display menu
-    echo "  Available USB devices:"
-    echo ""
-    for i in "${!devices[@]}"; do
-        printf "    [%d] %-12s %s\n" "$((i+1))" "${devices[$i]}" "${device_info[$i]}"
-    done
-    echo ""
-    echo "    [0] Cancel"
-    echo ""
-    
-    # Get user selection from /dev/tty to support background processes
-    local selection
-    while true; do
-        read -r -p "  Select device [1-${#devices[@]}]: " selection < /dev/tty
-        
-        if [[ "$selection" == "0" ]]; then
-            log "INFO" "USB write cancelled by user"
-            return 1
-        fi
-        
-        if [[ "$selection" =~ ^[0-9]+$ ]] && [[ "$selection" -ge 1 ]] && [[ "$selection" -le ${#devices[@]} ]]; then
-            SELECTED_USB_DEVICE="${devices[$((selection-1))]}"
-            log "INFO" "Selected: $SELECTED_USB_DEVICE"
-            return 0
-        fi
-        
-        echo "  Invalid selection. Enter 1-${#devices[@]} or 0 to cancel."
-    done
+    # Exactly one device found
+    SELECTED_USB_DEVICE="${devices[0]}"
+    log "INFO" "Auto-detected USB device: $SELECTED_USB_DEVICE"
+    return 0
 }
 
 # Write ISO directly to USB with dd and eject when complete
@@ -4898,7 +4867,7 @@ write_to_usb() {
     # Confirm with user (this is destructive!)
     echo ""
     echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║   ⚠️  WARNING: USB WRITE WILL ERASE ALL DATA ⚠️               ║"
+    echo "║   Writing ISO to USB: $device                                ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo ""
     echo "  Device: $device"
@@ -4908,14 +4877,12 @@ write_to_usb() {
     echo "  ISO:    $(basename "$iso_file")"
     echo "  Size:   $(du -h "$iso_file" | cut -f1)"
     echo ""
-    echo "  ALL DATA ON $device WILL BE DESTROYED!"
-    echo ""
     
     # Check if device has mounted partitions
     local mounted_parts
     mounted_parts=$(mount | grep "^${device}" | awk '{print $1 " mounted at " $3}' || true)
     if [[ -n "$mounted_parts" ]]; then
-        echo "  MOUNTED PARTITIONS DETECTED:"
+        echo "  MOUNTED PARTITIONS DETECTED - UNMOUNTING:"
         echo "$mounted_parts" | sed 's/^/    /'
         echo ""
         log "INFO" "Unmounting partitions on $device..."
@@ -4930,15 +4897,6 @@ write_to_usb() {
         done
         log "SUCCESS" "All partitions unmounted"
         echo ""
-    fi
-    
-    # Read from /dev/tty to support background processes (when stdout/stdin redirected)
-    read -r -p "Type 'YES' to confirm write to $device: " confirm < /dev/tty
-    echo ""
-    
-    if [[ "$confirm" != "YES" ]]; then
-        log "INFO" "USB write cancelled by user"
-        return 0
     fi
     
     # Write ISO with dd
