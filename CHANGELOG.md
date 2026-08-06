@@ -134,6 +134,71 @@ reports failure **even when grep matches**. The capability probes would have
 always returned false, so GPS beaconing would have stayed disabled even after a
 successful rebuild. Both now capture output first and let grep alone decide.
 
+### Fixed - addons silently installed nothing on a first run
+
+`fetch_addons()` returned the overlay path on stdout while `log()` also writes
+to stdout, so `ov=$(fetch_addons ...)` captured the "Cloning..." banner into the
+path:
+
+```
+ov = "[INFO] Cloning https://github.com/clifjones/et-os-addons.git...
+      /var/cache/emcomm-tools-customizer/et-os-addons/overlay"
+```
+
+Every source lookup then missed and the whole addon step installed nothing while
+reporting only per-file warnings. It reproduced **only on a cold cache**, since a
+warm one never logs -- which is why it survived initial testing. The path is now
+returned via a global, and a malformed overlay fails loudly instead of degrading
+into per-file warnings.
+
+### Fixed - the Hamlib revert manifest was empty
+
+`build-hamlib-anytone.sh` recorded ETC's `/usr/local` -> `/opt/hamlib` symlinks
+by testing `readlink -f` output against `/opt/hamlib/*`. But **`/opt/hamlib` is
+itself a symlink** (`-> /opt/hamlib-4.5` on ETC v6), so `readlink -f`
+canonicalises past it and the pattern never matched. Result: a zero-byte
+manifest and a `--revert` that restored nothing.
+
+Now canonicalises the reference path, reconstructs entries for links already
+replaced by `make install`, refuses to proceed if it records zero entries, and
+adds `--rebuild-manifest` to regenerate from `/opt/hamlib` after the fact.
+`--revert` now rejects an empty manifest instead of silently succeeding.
+
+Worth recording: the CowboyPilot fork bumps the soname to `libhamlib.so.5`,
+while ETC's Hamlib 4.5 is `libhamlib.so.4`. Installing to `/usr/local` therefore
+left `libhamlib.so.4` untouched -- `direwolf`, `fldigi`, `js8call` and `wsjtx`
+keep loading ETC's original library, and only `rigctld` picks up the fork. The
+apps reach the radio over NET rigctl anyway, so this is the desired split.
+
+### Fixed - post-install.sh verification was broken in four ways
+
+`post-install.sh` is the **user-level** companion to the root-level
+`apply-to-live-system.sh`; it must not run under sudo or it would restore
+archives into `/root`. It now refuses to. Its checks were badly broken:
+
+- **`direwolf -v` is not a valid flag.** It reported
+  `direwolf: invalid option -- 'v'` as the version string.
+- **The iGate check could never pass.** It grepped lowercase `igate`; the
+  template contains `IGSERVER`, `IGLOGIN` and `iGate`. With no `else` branch it
+  failed silently.
+- **The WiFi check read the wrong file in the wrong format** --
+  `conf.d/30-emcomm-tools.conf` rather than the `.nmconnection` files in
+  `system-connections/` -- and `grep -c ... || echo "0"` produced `$'0\n0'`,
+  because `grep -c` prints `0` *and* exits 1, making the numeric test throw
+  "integer expression expected".
+- **The backup search path resolved outside the repository**
+  (`$SCRIPT_DIR/../cache`), so `--restore` never found anything. It now searches
+  `$HOME` first, where `et-user-backup` actually writes.
+
+Verification moved to `lib/verify.sh`, shared by `post-install.sh --verify` and
+the new `apply-to-live-system.sh --verify`. It now also checks the things v2
+introduced: Hamlib model 37001, the AnyTone backend, profile JSON validity, a
+dangling `active-radio.json`, gpsd support, that the beacon actually carries a
+position, that ETC's `{{ET_*}}` placeholders survived, that no backslash
+continuations crept in -- and it runs the template through `direwolf` to confirm
+it genuinely parses. A final section flags leftovers from v1 that should be
+removed.
+
 ### Changed — one implementation, two paths
 
 Customizations moved into `lib/`, operating on `$ET_ROOT`:

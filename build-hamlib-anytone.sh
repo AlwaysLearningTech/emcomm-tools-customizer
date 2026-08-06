@@ -38,6 +38,60 @@ warn() { echo "${YEL}[WARN]${NC} $*"; }
 err()  { echo "${RED}[FAIL]${NC} $*" >&2; }
 step() { echo; echo "=== $* ==="; }
 
+# Record every /usr/local path that ETC symlinked into its Hamlib install, so
+# --revert can put them back after `make install --prefix=/usr/local` replaces
+# them with real files.
+#
+# NOTE: /opt/hamlib is ITSELF a symlink (-> /opt/hamlib-4.5 on ETC v6), so
+# `readlink -f` canonicalises all the way through and a `case` test against
+# "/opt/hamlib/*" never matches. That bug produced a silently EMPTY manifest and
+# a --revert that restored nothing. Canonicalise the reference path too.
+build_manifest() {
+  local hl_root hl_real link target rel n=0
+  hl_root=/opt/hamlib
+  if [ ! -d "$hl_root" ]; then
+    err "$hl_root not found -- cannot record a manifest"
+    return 1
+  fi
+  hl_real=$(readlink -f "$hl_root")
+  info "ETC Hamlib root: $hl_root -> $hl_real"
+
+  : > "$MANIFEST"
+  while IFS= read -r link; do
+    case "$(readlink -f "$link")" in
+      "$hl_real"/*|"$hl_root"/*)
+        target=$(readlink "$link")
+        printf '%s|%s\n' "$link" "$target" >> "$MANIFEST"
+        n=$((n+1))
+        ;;
+    esac
+  done < <(find /usr/local -maxdepth 4 -type l 2>/dev/null)
+
+  # If the build already ran, most links are now real files. Reconstruct those
+  # from the contents of the Hamlib tree: ETC created one relative symlink per
+  # file, so the mapping is deterministic.
+  while IFS= read -r rel; do
+    link="/usr/local/${rel}"
+    [ -e "$link" ] || [ -L "$link" ] || continue
+    [ -L "$link" ] && continue                      # already captured above
+    grep -q "^${link}|" "$MANIFEST" 2>/dev/null && continue
+    # -s so the target keeps ETC's /opt/hamlib indirection rather than being
+    # canonicalised to /opt/hamlib-4.5, which would pin the restored links to
+    # one Hamlib version. This matches how ETC wrote them originally.
+    target=$(realpath --relative-to="$(dirname "$link")" -s "${hl_root}/${rel}" 2>/dev/null) || continue
+    printf '%s|%s\n' "$link" "$target" >> "$MANIFEST"
+    n=$((n+1))
+  done < <(cd "$hl_root" && find . -mindepth 1 \( -type f -o -type l \) -printf '%P\n' 2>/dev/null)
+
+  if [ "$n" -eq 0 ]; then
+    err "Recorded 0 entries -- refusing to continue with an unusable revert path"
+    return 1
+  fi
+  info "Recorded $n entries -> $MANIFEST"
+  echo "       Revert any time with: sudo $0 --revert"
+  return 0
+}
+
 verify() {
   step "Current Hamlib"
   echo "rigctl:  $(command -v rigctl)"
@@ -54,9 +108,21 @@ verify() {
 
 case "${1:-}" in
   --verify) verify; exit 0 ;;
+  --rebuild-manifest)
+    [ "$(id -u)" -eq 0 ] || { err "Must run as root"; exit 1; }
+    step "Rebuilding the Hamlib revert manifest"
+    build_manifest || exit 1
+    echo
+    head -5 "$MANIFEST" | sed 's/^/  /'
+    echo "  ..."
+    exit 0 ;;
   --revert)
     [ "$(id -u)" -eq 0 ] || { err "Must run as root"; exit 1; }
-    [ -f "$MANIFEST" ] || { err "No manifest at $MANIFEST -- nothing to revert"; exit 1; }
+    if [ ! -s "$MANIFEST" ]; then
+      err "Manifest at $MANIFEST is missing or EMPTY -- nothing to revert."
+      err "Rebuild it from /opt/hamlib first:  sudo $0 --rebuild-manifest"
+      exit 1
+    fi
     step "Restoring ETC's original Hamlib symlinks"
     restored=0
     while IFS='|' read -r link target; do
@@ -94,20 +160,11 @@ rigctl --version 2>/dev/null | head -1 | sed 's/^/       /'
 # ---------------------------------------------------------------------------
 step "Recording ETC's existing Hamlib symlink manifest"
 mkdir -p "$(dirname "$MANIFEST")"
-if [ -f "$MANIFEST" ]; then
+if [ -s "$MANIFEST" ]; then
   info "Manifest already exists (from an earlier run) -- keeping the original"
   echo "       $(wc -l < "$MANIFEST") entries at $MANIFEST"
 else
-  : > "$MANIFEST"
-  # Capture every /usr/local symlink that points into /opt/hamlib
-  find /usr/local -maxdepth 3 -type l 2>/dev/null | while read -r l; do
-    t=$(readlink "$l")
-    case "$(readlink -f "$l")" in
-      /opt/hamlib/*) printf '%s|%s\n' "$l" "$t" >> "$MANIFEST" ;;
-    esac
-  done
-  info "Recorded $(wc -l < "$MANIFEST") symlinks -> $MANIFEST"
-  echo "       Revert any time with: sudo $0 --revert"
+  build_manifest || { err "Could not record the symlink manifest"; exit 1; }
 fi
 
 # ---------------------------------------------------------------------------

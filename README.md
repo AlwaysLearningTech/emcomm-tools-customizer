@@ -14,7 +14,8 @@ no GUI. Applies the same customizations to an **already-installed** system too.
 
 | Script | What it does | Touches disks? |
 |---|---|---|
-| `apply-to-live-system.sh` | Applies APRS, radio and addon config to a running ETC system. Backs up everything, `--dry-run` and `--uninstall` supported. | No |
+| `apply-to-live-system.sh` | **root** — applies APRS, radio and addon config to a running ETC system. Backs up everything; `--dry-run`, `--verify`, `--uninstall`. | No |
+| `post-install.sh` | **your user** — home-directory work: restores `etc-user-backup` / Wine archives, installs CHIRP, verifies the system. Refuses to run under sudo. | No |
 | `build-etc-iso.sh` | Builds a customized ISO. Boots to the normal installer. | No |
 | `build-hamlib-anytone.sh` | Builds the CowboyPilot Hamlib fork for AnyTone D578UVIII CAT (model 37001). `--revert` restores ETC's Hamlib. | No |
 | `build-direwolf-gpsd.sh` | Rebuilds Dire Wolf with `ENABLE_GPSD` for GPS-tracked beaconing. `--revert` supported. | No |

@@ -3,8 +3,35 @@
 Two ways to move an EmComm Tools machine forward. Pick based on what you're
 actually trying to do.
 
+## Which script does what
+
+| Script | Runs as | Scope |
+| --- | --- | --- |
+| `apply-to-live-system.sh` | **root** (`sudo`) | System paths: APRS template, radio profiles, addon launchers |
+| `post-install.sh` | **your user** (never sudo) | Your home directory: backup restore, CHIRP, python tooling |
+
+They do not overlap. `post-install.sh` refuses to run under sudo — under it,
+`$HOME` is `/root` and your restored archives would land there owned by root.
+Verification is shared: both offer `--verify`, backed by `lib/verify.sh`.
+
+```bash
+sudo ./apply-to-live-system.sh --verify   # or
+./post-install.sh --verify
+```
+
+### Restoring your backups
+
+`post-install.sh` searches `$HOME` first, then the repo's `cache/`:
+
+```bash
+./post-install.sh --restore        # user config only
+./post-install.sh --restore-wine   # also the Wine/VARA prefix (asks first)
+```
+
+---
+
 | | **Apply to a live system** | **Build a new ISO** |
-|---|---|---|
+| --- | --- | --- |
 | Command | `sudo ./apply-to-live-system.sh` | `sudo ./build-etc-iso.sh` |
 | Time | seconds | ~30–60 min |
 | Keeps your data | yes | no — it's a fresh install |
@@ -73,13 +100,30 @@ sudo ./build-hamlib-anytone.sh --verify
 sudo ./build-hamlib-anytone.sh --revert # back to ETC's Hamlib
 ```
 
-Note that ETC installs Hamlib to `/opt/hamlib` and symlinks ~24 entries into
-`/usr/local`. The fork's README build (`--prefix=/usr/local`) replaces those
-symlinks with real files. The script records the symlink manifest first so
-`--revert` can restore it. `/usr/local/lib` precedes `/usr/lib` in the linker
-path and `direwolf`, `fldigi`, `js8call` and `wsjtx` all resolve
-`libhamlib.so.4` through it — same soname, so this is normally fine, but
-`--revert` is the first thing to try if a hamlib app misbehaves afterward.
+Note that ETC installs Hamlib into `/opt/hamlib` (itself a symlink to
+`/opt/hamlib-4.5`) and symlinks entries into `/usr/local`. The fork's README
+build (`--prefix=/usr/local`) replaces those with real files, so the script
+records a manifest first and `--revert` restores it. If the manifest is ever
+empty, rebuild it from `/opt/hamlib`:
+
+```bash
+sudo ./build-hamlib-anytone.sh --rebuild-manifest
+```
+
+**The fork bumps the soname to `libhamlib.so.5`**, while ETC's Hamlib 4.5 is
+`libhamlib.so.4`. That matters more than it sounds: installing to `/usr/local`
+leaves `libhamlib.so.4` untouched, so `direwolf`, `fldigi`, `js8call` and
+`wsjtx` keep loading ETC's original library, and only `rigctld` picks up the
+fork. Since those apps reach the radio over NET rigctl (`localhost:4532`) rather
+than driving it directly, that is exactly the split you want — the AnyTone
+backend only has to exist in `rigctld`.
+
+Confirm it on your own machine:
+
+```bash
+ldd "$(command -v direwolf)" | grep hamlib   # expect libhamlib.so.4
+ldd /usr/local/bin/rigctld   | grep hamlib   # expect libhamlib.so.5
+```
 
 Then pick a profile with `et-radio`:
 
@@ -166,7 +210,7 @@ disk unattended; v2 does not, and neither does the Ventoy path.
 
 If you have a v1 `secrets.env`, these variables no longer exist and are ignored:
 
-```
+```text
 PARTITION_STRATEGY  INSTALL_DISK  SWAP_SIZE_MB  EXT4_SIZE_MB
 CONFIRM_ENTIRE_DISK  ENABLE_ETOSADDONS_WSJTX  ENABLE_D578UV_CAT
 DIREWOLF_ADEVICE  DIREWOLF_PTT  APRS_BEACON_DIR

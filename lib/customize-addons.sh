@@ -16,9 +16,20 @@
 
 ADDONS_REPO="${ADDONS_REPO:-https://github.com/clifjones/et-os-addons.git}"
 
-# Fetch (or refresh) the addons source. Prints the overlay path on stdout.
+# Fetch (or refresh) the addons source, setting ADDONS_OVERLAY_PATH on success.
+#
+# NOTE: this deliberately does NOT print the path on stdout for the caller to
+# capture. log() writes to stdout, so `ov=$(fetch_addons ...)` swallowed the
+# "Cloning..." line into the result and produced a path like
+#   "[INFO] Cloning https://...\n/var/cache/.../overlay"
+# Every subsequent source lookup then missed and the whole addon step silently
+# installed nothing -- but only on a FIRST run, since a warm cache never logs.
+# A global cannot be polluted this way.
+ADDONS_OVERLAY_PATH=""
+
 fetch_addons() {
     local cache="$1"
+    ADDONS_OVERLAY_PATH=""
     if [ -d "${cache}/.git" ]; then
         git -C "$cache" pull -q --ff-only 2>/dev/null || \
             log "WARN" "Could not refresh addons cache -- using existing copy"
@@ -28,7 +39,8 @@ fetch_addons() {
         git clone --depth 1 -q "$ADDONS_REPO" "$cache" || return 1
     fi
     [ -d "${cache}/overlay" ] || return 1
-    printf '%s\n' "${cache}/overlay"
+    ADDONS_OVERLAY_PATH="${cache}/overlay"
+    return 0
 }
 
 integrate_etosaddons_features() {
@@ -36,10 +48,18 @@ integrate_etosaddons_features() {
 
     log "INFO" "Integrating et-os-addons features..."
 
-    local ov
-    if ! ov=$(fetch_addons "$cache"); then
+    if ! fetch_addons "$cache"; then
         log "WARN" "et-os-addons unavailable (network?) -- skipping"
         return 0
+    fi
+    local ov="$ADDONS_OVERLAY_PATH"
+    log "DEBUG" "addons overlay: $ov"
+
+    # Guard against a malformed overlay path ever silently no-op'ing the whole
+    # step again: fail loudly instead of emitting a warning per file.
+    if [ ! -d "$ov" ] || [ ! -d "${ov}/opt/emcomm-tools/bin" ]; then
+        log "ERROR" "addons overlay looks wrong: '$ov' -- skipping addons"
+        return 1
     fi
 
     local BIN TPL APPS PIX

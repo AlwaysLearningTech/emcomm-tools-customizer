@@ -21,6 +21,17 @@ sudo ./apply-to-live-system.sh --uninstall # undo
 `secrets.env` is optional here — `CALLSIGN` and `GRID_SQUARE` are read from
 `~/.config/emcomm-tools/user.json` if ETC is already configured.
 
+Then the user-level half, **without sudo** (it writes to your home directory and
+will refuse to run as root):
+
+```bash
+./post-install.sh --verify         # check everything
+./post-install.sh --restore        # restore etc-user-backup into $HOME
+./post-install.sh --restore-wine   # also the Wine/VARA prefix
+./post-install.sh --chirp          # install CHIRP
+./post-install.sh                  # interactive menu
+```
+
 ### One-time, for full radio support
 
 Stock Hamlib 4.5 has **no AnyTone backend**, so the D578UV can't be driven by

@@ -12,8 +12,13 @@
 # Usage:
 #   sudo ./apply-to-live-system.sh                 # apply everything
 #   sudo ./apply-to-live-system.sh --dry-run       # show what would change
+#   sudo ./apply-to-live-system.sh --verify        # check the system, change nothing
 #   sudo ./apply-to-live-system.sh --uninstall     # restore from newest backup
 #   sudo ./apply-to-live-system.sh --list-backups
+#
+# This is the ROOT-level script. Its companion post-install.sh runs as YOUR user
+# and handles home-directory work (backup restore, CHIRP). They do not overlap;
+# verification is shared via lib/verify.sh.
 #
 # Sections: --no-aprs  --no-radio  --no-addons
 #
@@ -35,18 +40,19 @@ ET_DRY_RUN=0
 SECRETS_FILE="${SECRETS_FILE:-${SCRIPT_DIR}/secrets.env}"
 ADDONS_CACHE="${ADDONS_CACHE:-/var/cache/emcomm-tools-customizer/et-os-addons}"
 
-DO_APRS=1; DO_RADIO=1; DO_ADDONS=1; UNINSTALL=0; LIST_BACKUPS=0
+DO_APRS=1; DO_RADIO=1; DO_ADDONS=1; UNINSTALL=0; LIST_BACKUPS=0; VERIFY_ONLY=0
 
 for arg in "$@"; do
   case "$arg" in
     --dry-run)      ET_DRY_RUN=1 ;;
+    --verify)       VERIFY_ONLY=1 ;;
     --uninstall)    UNINSTALL=1 ;;
     --list-backups) LIST_BACKUPS=1 ;;
     --no-aprs)      DO_APRS=0 ;;
     --no-radio)     DO_RADIO=0 ;;
     --no-addons)    DO_ADDONS=0 ;;
     -V|--version)   echo "apply-to-live-system.sh ${VERSION}"; exit 0 ;;
-    -h|--help)      sed -n '3,24p' "$0"; exit 0 ;;
+    -h|--help)      sed -n '3,27p' "$0"; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; exit 1 ;;
   esac
 done
@@ -101,6 +107,20 @@ do_uninstall() {
 
 [ "$LIST_BACKUPS" -eq 1 ] && { list_backups; exit 0; }
 [ "$UNINSTALL" -eq 1 ]    && { do_uninstall; exit 0; }
+
+if [ "$VERIFY_ONLY" -eq 1 ]; then
+  # Shared with post-install.sh --verify. Resolve the invoking user's home so
+  # the user.json check looks at your account, not root's.
+  if [ -n "${SUDO_USER:-}" ]; then
+    VERIFY_USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+    export VERIFY_USER_HOME
+  fi
+  # shellcheck source=lib/verify.sh
+  source "${SCRIPT_DIR}/lib/verify.sh"
+  echo "EmComm Tools Customizer ${VERSION} -- verification"
+  verify_system
+  exit $?
+fi
 
 echo "EmComm Tools Customizer ${VERSION} -- live system apply"
 [ "$ET_DRY_RUN" -eq 1 ] && log "WARN" "DRY RUN -- nothing will be written"
