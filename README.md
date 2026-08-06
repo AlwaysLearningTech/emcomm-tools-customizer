@@ -1,6 +1,26 @@
 # EmComm Tools Customizer
 
-Fully automated customization of EmComm Tools Community (ETC) ISO images using xorriso/squashfs. No GUI required.
+Customizes EmComm Tools Community (ETC) images using xorriso/squashfs — no Cubic,
+no GUI. Applies the same customizations to an **already-installed** system too.
+
+> **v2.0.0 is a breaking release.** Installer automation is gone: a built ISO now
+> boots to the standard Ubuntu / ETC installer walkthrough and you choose the
+> disk and partition layout yourself. The `dd` USB writer is gone as well —
+> nothing in this repository writes to a block device. The Anytone D578UV CAT
+> control was rewritten because it never worked.
+> See [CHANGELOG.md](CHANGELOG.md) and [UPGRADING.md](UPGRADING.md).
+
+## Scripts
+
+| Script | What it does | Touches disks? |
+|---|---|---|
+| `apply-to-live-system.sh` | Applies APRS, radio and addon config to a running ETC system. Backs up everything, `--dry-run` and `--uninstall` supported. | No |
+| `build-etc-iso.sh` | Builds a customized ISO. Boots to the normal installer. | No |
+| `build-hamlib-anytone.sh` | Builds the CowboyPilot Hamlib fork for AnyTone D578UVIII CAT (model 37001). `--revert` restores ETC's Hamlib. | No |
+| `build-direwolf-gpsd.sh` | Rebuilds Dire Wolf with `ENABLE_GPSD` for GPS-tracked beaconing. `--revert` supported. | No |
+
+Customizations live in `lib/` and operate on `$ET_ROOT`, so the ISO build and the
+live-system path run **the same code** and cannot drift apart.
 
 ## Overview
 
@@ -22,8 +42,9 @@ ETC already includes all ham radio tools (Winlink, VARA, JS8Call, fldigi, etc.).
 - ✅ **VARA license pre-registration** (manual registry edit → backup → auto-restore on builds)
 - ✅ **VS Code workspace setup** (standard project location included in et-user-backup)
 - ✅ **Automatic user config restoration** (from `etc-user-backup-*.tar.gz` if present)
-- ✅ **APRS configuration** (iGate, beacon, digipeater with smart beaconing)
-- ✅ **Ham radio CAT control** (Anytone D578UV with DigiRig Mobile, rigctld auto-start)
+- ✅ **APRS configuration** (receive-only iGate, position beacon, digipeater)
+- ✅ **Ham radio CAT control** (Anytone AT-D578UVIII via DigiRig, Hamlib model 37001)
+- ✅ **Live-system apply** — same customizations without rebuilding an ISO
 - ✅ **Optional et-os-addons features** (individually configurable):
   - VR-N76 radio config, GridTracker, WSJT-X Improved, QSSTV, XYGrib, Kiwix, JS8Spotter, NetControl, WiFi hotspot, user backup tool
   - Control via `ENABLE_ETOSADDONS_*` variables in `secrets.env` (all enabled by default)
@@ -39,7 +60,11 @@ This customizer **respects upstream ETC architecture**. We:
 - Don't change package selections or install additional software
 - Don't pre-install VARA or Wine prefix (these require a desktop session post-install)
 
-## Release Status: v1.0 (First Working Build)
+## Release Status: v2.0.0
+
+**Breaking release.** Installer automation and the `dd` USB writer were removed,
+and the Anytone D578UV CAT control was rewritten because it never worked. Read
+[CHANGELOG.md](CHANGELOG.md) before upgrading from v1.
 
 ### ✅ What's Working
 
@@ -55,9 +80,11 @@ This customizer **respects upstream ETC architecture**. We:
   - Smart beaconing with configurable interval
   - Digipeater WIDE path support
   - Separate from Packet/Winlink (no conflicts)
-- **Ham radio CAT control**: Anytone D578UV with DigiRig Mobile
-  - Rigctld daemon auto-starts at boot (localhost:4532)
-  - Active radio config automatically created
+- **Ham radio CAT control**: Anytone AT-D578UVIII with DigiRig Mobile
+  - Hamlib model 37001 via the CowboyPilot/Hamlib AnyTone backend
+    (`./build-hamlib-anytone.sh` — stock Hamlib 4.5 has no AnyTone backend)
+  - Two profiles: PTT-only (`commode=0`) and full COM mode (`commode=1`)
+  - Uses ETC's existing udev rules and rigctld unit — no patching
   - udev rules for /dev/et-cat symlink (CP2102/CH340/PL2303/FTDI)
   - Users can select different radio via `et-radio` after boot
 - **D578 CAT Control**: DigiRig Mobile configuration for CAT control (et-mode packet/Winlink compatible)
@@ -68,10 +95,11 @@ This customizer **respects upstream ETC architecture**. We:
 - **VS Code workspace**: Pre-configured workspace with Projects directory in ~/.config/emcomm-tools/
 - **Additional packages**: Development tools (VS Code, git, nodejs, npm, CHIRP via pipx) installable via configuration
 - **Cache system**: Downloaded ISOs cached for faster rebuilds
-- **Preseed automation**: Ubuntu 22.10 installer fully automated with debian-installer (d-i)
-  - No interactive prompts: keyboard, locale, hostname, username, password, timezone, partitioning all preseed-driven
-  - Text-based installer (d-i) respects all preseed directives including partitioning
-- **Anytone D578UV radio**: Radio configuration added to et-radio menu (rigctrl ID 301)
+- **Standard installer walkthrough**: the ISO boots to the normal Ubuntu / ETC
+  installer. You pick the disk and partition layout yourself. No preseed, no
+  automated partitioning, and nothing here writes to a block device.
+- **Anytone AT-D578UVIII radio**: two profiles in the et-radio menu, Hamlib model
+  37001 (v1 used `301`, which does not exist in Hamlib)
 - **Release info persistence**: Custom release name (`ETC_R5_FINAL (CUSTOMIZED)`) persists after installation
   - Uses dpkg conffile MD5 update to prevent installer from reverting `/etc/lsb-release`
   - `et-system-info release` correctly shows custom build name
@@ -84,7 +112,6 @@ The `et-os-addons` repository provides optional application launchers and config
 |---------|----------|-------------|
 | VR-N76 Radio | `ENABLE_ETOSADDONS_VR_N76` | VR-N76 old radio utility and preset config |
 | QSSTV | `ENABLE_ETOSADDONS_QSSTV` | QSSTV slow-scan TV launcher and config template |
-| WSJT-X | `ENABLE_ETOSADDONS_WSJTX` | WSJT-X launcher and config template |
 | JS8 Spotter | `ENABLE_ETOSADDONS_JS8SPOTTER` | JS8Call spotting utility and launcher |
 | NetControl | `ENABLE_ETOSADDONS_NETCONTROL` | Network control utility with launcher |
 | WiFi Hotspot | `ENABLE_ETOSADDONS_HOTSPOT` | WiFi hotspot launcher utility |
@@ -95,69 +122,42 @@ The `et-os-addons` repository provides optional application launchers and config
 **To disable a feature**, set the variable to `"no"` in `secrets.env`:
 ```bash
 ENABLE_ETOSADDONS_QSSTV="no"        # Disable QSSTV
-ENABLE_ETOSADDONS_WSJTX="no"        # Disable WSJT-X
 ```
 
 All features default to `"yes"` and are integrated explicitly into the build process with no overwrites.
 
-## Fully Automated Installation
+## Installing a Built ISO
 
-The ISO uses **Ubiquity** (Ubuntu's GUI installer) with preseed for zero-interaction installation. The `only-ubiquity` boot parameter triggers the installer immediately instead of booting to a live session.
+**The ISO does not install itself.** It boots to the standard Ubuntu / EmComm
+Tools installer walkthrough, and you choose the target disk and partition layout
+yourself, every time.
 
-**Automated Installation Workflow**:
-1. Boot custom ISO from Ventoy
-2. GRUB menu shows "Try or Install Ubuntu" (default selection)
-3. `only-ubiquity` parameter launches installer directly (skips live desktop)
-4. GRUB loads preseed from `file=/cdrom/preseed.cfg`
-5. **Ubiquity runs with preseed answers** for:
-   - Keyboard layout
-   - Locale / language
-   - Hostname (set to `ETC-{CALLSIGN}`)
-   - Username (set from config)
-   - Password (hashed in preseed)
-   - Timezone
-   - Partitioning (strategy-aware)
-   - Package selection (ubuntu-desktop task)
-6. System boots directly to desktop (or login prompt if autologin disabled)
-7. All customizations apply automatically (WiFi, APRS, desktop settings, CAT control, etc.)
+This changed in v2.0.0. v1 shipped a preseed that drove the installer unattended
+and partitioned automatically — see [CHANGELOG.md](CHANGELOG.md) for exactly what
+it did and why it was removed.
 
-**Boot Parameters Explained**:
+### Steps
 
-The GRUB configuration is automatically updated to:
-```bash
-linux /casper/vmlinuz file=/cdrom/preseed.cfg only-ubiquity quiet splash ---
-```
+1. **Put the ISO on a USB stick.** No script here writes to a block device.
+   - **Ventoy** — safest, since it is a plain file copy onto an already-prepared
+     stick with no device path to get wrong:
+     `sudo ./build-etc-iso.sh --ventoy /media/$USER/Ventoy`
+   - **A GUI writer** — balenaEtcher, GNOME Disks, Rufus. They show the target
+     drive by name and size before writing.
+   - **`dd`**, run by you, after checking the device twice:
+     ```bash
+     lsblk -o NAME,SIZE,MODEL,TRAN,MOUNTPOINT
+     sudo dd if=output/<iso> of=/dev/sdX bs=4M status=progress conv=fsync
+     ```
+2. **Boot it** and run the installer as normal.
+3. **Apply customizations** after first boot:
+   ```bash
+   sudo ./apply-to-live-system.sh
+   ```
 
-This tells the system to:
-- `file=/cdrom/preseed.cfg` - Load preseed answers for installer questions
-- `only-ubiquity` - **Boot directly to installer** (skip live desktop "Try Ubuntu" mode)
-- `quiet splash` - Normal boot appearance
+See [UPGRADING.md](UPGRADING.md) for the full upgrade path, including tracking
+ETC beta releases.
 
-**Note**: Without `only-ubiquity`, the ISO boots to a live session where you'd have to click "Install Ubuntu" manually.
-
-**Partitioning Behavior**:
-
-The preseed adapts based on `INSTALL_DISK` and `PARTITION_STRATEGY` configuration:
-
-- **Partition Mode** (`PARTITION_STRATEGY="force-partition"`, `INSTALL_DISK="/dev/sda5"`):
-  - Uses `d-i partman-auto/method string regular` (non-destructive)
-  - Debian-installer targets specified partition only
-  - Safe for dual-boot systems
-  - Respects existing Windows/other OS partitions
-  
-- **Auto-Detect Mode** (`PARTITION_STRATEGY="auto-detect"`, `INSTALL_DISK=""`) — **Default, Recommended**:
-  - Script analyzes disk layout before building ISO
-  - Automatically chooses safest strategy (usually partition mode)
-  - Embedded in preseed so installer knows partitioning approach
-  - Prevents destructive mistakes on multi-partition systems
-
-- **Entire-Disk Mode** (`PARTITION_STRATEGY="force-entire-disk"`, `CONFIRM_ENTIRE_DISK="yes"`):
-  - Uses `d-i partman-auto/method string lvm` (auto-partition with LVM)
-  - **DESTRUCTIVE**: Erases entire disk and creates new partitions
-  - Requires explicit confirmation in `secrets.env`
-  - Only use for single-disk systems with no existing data
-
-**Reference**: [Debian Preseed Documentation](https://www.debian.org/releases/stable/amd64/apbs02.en.html)
 
 ### Future Work (Tracked in GitHub Issues)
 
@@ -243,15 +243,25 @@ cd emcomm-tools-customizer
 cp secrets.env.template secrets.env
 nano secrets.env  # Fill in your values
 
-# Build from stable release and write to USB (RECOMMENDED)
-sudo ./build-etc-iso.sh -r stable --write-to
-# Script auto-detects USB drives and prompts you to select
+# Build from the newest stable release
+sudo ./build-etc-iso.sh -r stable
 
-# Or specify USB device directly (skip menu)
-sudo ./build-etc-iso.sh -r stable --write-to /dev/sdb
-
-# Output: Custom ISO written to USB, ready to boot!
+# Output: output/<name>.iso
+# Put it on a USB stick yourself (Ventoy / balenaEtcher / dd) and boot it.
 ```
+
+### Already running ETC? Skip the ISO entirely
+
+To apply these customizations to an installed system — no Cubic, no rebuild, no
+disk operations:
+
+```bash
+sudo ./apply-to-live-system.sh --dry-run   # preview
+sudo ./apply-to-live-system.sh             # apply
+sudo ./apply-to-live-system.sh --uninstall # undo
+```
+
+See [UPGRADING.md](UPGRADING.md).
 
 ### Skip ISO Download
 
@@ -263,7 +273,7 @@ mkdir -p cache
 cp ~/Downloads/ubuntu-22.10-desktop-amd64.iso cache/
 
 # Now build - ISO download will be skipped!
-sudo ./build-etc-iso.sh -r stable --write-to
+sudo ./build-etc-iso.sh -r stable
 ```
 
 The script checks `cache/ubuntu-22.10-desktop-amd64.iso` before downloading.
@@ -271,26 +281,23 @@ The script checks `cache/ubuntu-22.10-desktop-amd64.iso` before downloading.
 ## Build Options
 
 ```bash
-# List available releases and tags from GitHub
+# List available releases and tags from GitHub (betas included)
 ./build-etc-iso.sh -l
 
-# Build from stable release and write to USB (RECOMMENDED)
-sudo ./build-etc-iso.sh -r stable --write-to
-
-# Build from latest development tag with USB auto-detect
-sudo ./build-etc-iso.sh -r latest --write-to
-
-# Build a specific tag and write to specific USB device
-sudo ./build-etc-iso.sh -r tag -t emcomm-tools-os-community-20251113-r5-build17 --write-to /dev/sdb
-
-# Minimal build (smaller ISO, no embedded cache files) with USB write
-sudo ./build-etc-iso.sh -r stable -m --write-to
-
-# Debug mode with USB write
-sudo ./build-etc-iso.sh -r stable -d --write-to
-
-# Build only (no USB write) - manual copy later
+# Build from the newest stable release
 sudo ./build-etc-iso.sh -r stable
+
+# Build from the newest tag (development / beta)
+sudo ./build-etc-iso.sh -r latest
+
+# Build a specific tag
+sudo ./build-etc-iso.sh -r tag -t emcomm-tools-os-community-20251113-r5-build17
+
+# Minimal build (smaller ISO, no embedded cache files)
+sudo ./build-etc-iso.sh -r stable -m
+
+# Build and copy to a mounted Ventoy stick
+sudo ./build-etc-iso.sh -r stable --ventoy /media/$USER/Ventoy
 ```
 
 ### Option Reference
@@ -300,37 +307,32 @@ sudo ./build-etc-iso.sh -r stable
 | `-r <stable\|latest\|tag>` | Release mode |
 | `-t <tag>` | Specific tag name (required with `-r tag`) |
 | `-l` | List available releases and tags |
-| `--write-to [/dev/sdX]` | **Auto-detect and write to USB** (no device = interactive selection) |
-| `--ventoy <mount-path>` | Copy ISO to mounted Ventoy USB |
+| `--ventoy <mount-path>` | Copy ISO + helper files to a mounted Ventoy USB (file copy only) |
 | `-m` | Minimal build (exclude cache files, saves ~4GB) |
 | `-d` | Debug mode (show DEBUG log messages) |
+| `-k` | Keep the work directory for debugging |
 | `-v` | Verbose mode (bash -x tracing) |
 | `-h` | Show help |
 
-**Note**: Optional et-os-addons features are enabled by default via `ENABLE_ETOSADDONS_*` variables. Disable individual features by setting them to `"no"` in `secrets.env`.
+**Note**: et-os-addons features are controlled by `ENABLE_ETOSADDONS_*` in
+`secrets.env`. Most install only a launcher and depend on an application ETC does
+not ship — the template says which.
 
-### USB Writing (Auto-Detection)
+### Getting the ISO onto a USB stick
 
-The `--write-to` option includes built-in USB auto-detection:
+Removed in v2.0.0: `--write-to`, which `dd`'d the ISO to a block device and, used
+bare, auto-detected which device to write. **No script in this repository writes
+to a block device any more.** Use whichever tool you trust:
 
-```bash
-# Interactive device selection (RECOMMENDED)
-# Script lists USB devices and you choose from menu
-sudo ./build-etc-iso.sh -r stable --write-to
-
-# Specific device (skip menu)
-# Write directly to /dev/sdb without prompting
-sudo ./build-etc-iso.sh -r stable --write-to /dev/sdb
-```
-
-**Auto-Detection Features**:
-- Queries `lsblk` for removable or usb-transport devices
-- Filters out nvme devices (system drives) automatically
-- Displays device size and model for confirmation
-- Auto-unmounts any mounted partitions
-- Requires explicit "YES" confirmation before writing
-- Shows real-time `dd` progress during write
-- Auto-ejects device when complete
+- **Ventoy** — `--ventoy` copies the ISO onto an already-prepared stick. A plain
+  file copy to a mounted filesystem, so there is no device path to get wrong.
+- **A GUI writer** — balenaEtcher, GNOME Disks, Rufus. They show the target drive
+  by name and size before writing.
+- **`dd`** — run it yourself, and check the device twice:
+  ```bash
+  lsblk -o NAME,SIZE,MODEL,TRAN,MOUNTPOINT
+  sudo dd if=output/<iso> of=/dev/sdX bs=4M status=progress conv=fsync
+  ```
 
 ### Release Modes
 
@@ -367,7 +369,6 @@ Optional features from [et-os-addons](https://github.com/clifjones/et-os-addons)
 **Configuration:**
 Features default to enabled. To disable specific features, edit `secrets.env`:
 ```bash
-ENABLE_ETOSADDONS_WSJTX="yes"        # Keep WSJT-X
 ENABLE_ETOSADDONS_GRIDTRACKER="yes"  # Keep GridTracker
 ENABLE_ETOSADDONS_QSSTV="no"         # Exclude QSSTV
 ENABLE_ETOSADDONS_KIWIX="no"         # Exclude offline Wikipedia
@@ -441,25 +442,28 @@ WINLINK_PASSWORD=""            # Your Winlink password
 
 # === APRS Configuration ===
 APRS_SSID="10"                 # SSID (0-15, 10=iGate)
-APRS_PASSCODE="-1"             # APRS-IS passcode (-1=RX only)
-APRS_SYMBOL="/r"               # Symbol: table+code (/r=antenna)
+APRS_PASSCODE=""               # Empty = computed from CALLSIGN
+APRS_SYMBOL="digi"             # Dire Wolf symbol name or 2-char code
 APRS_COMMENT="EmComm iGate"    # Beacon comment
 
 # APRS Beacon (position beaconing)
-ENABLE_APRS_BEACON="no"        # Enable position beaconing
-APRS_BEACON_INTERVAL="300"     # Seconds between beacons
+ENABLE_APRS_BEACON="yes"       # Enable position beaconing
+APRS_BEACON_MODE="fixed"       # fixed | gps (gps needs build-direwolf-gpsd.sh)
+APRS_LAT=""                    # Empty = center of GRID_SQUARE (~3km)
+APRS_LON=""
+APRS_BEACON_INTERVAL="30:00"   # "30:00"=30 min. A bare "30" means 30 SECONDS.
 APRS_BEACON_VIA="WIDE1-1"      # Digipeater path
 APRS_BEACON_POWER="10"         # PHG: Power in watts
 APRS_BEACON_HEIGHT="20"        # PHG: Antenna height (feet)
 APRS_BEACON_GAIN="3"           # PHG: Antenna gain (dBi)
 
-# APRS iGate (RF to Internet gateway)
+# APRS iGate (RF to Internet gateway, receive-only)
 ENABLE_APRS_IGATE="yes"        # Enable iGate
 APRS_SERVER="noam.aprs2.net"   # APRS-IS server
 
-# Direwolf Audio
-DIREWOLF_ADEVICE="plughw:1,0"  # Audio device (Digirig)
-DIREWOLF_PTT="CM108"           # PTT method
+# === Anytone AT-D578UVIII ===
+ENABLE_ANYTONE_D578="yes"      # Write the D578UVIII radio profiles
+ANYTONE_DEFAULT_MODE="ptt"     # ptt (commode=0) | com (commode=1)
 
 # === VARA License (Optional) ===
 VARA_FM_CALLSIGN=""            # Callsign registered with VARA FM license
@@ -480,108 +484,26 @@ POWER_IDLE_BATTERY="suspend"      # Idle action on battery
 POWER_IDLE_TIMEOUT="900"          # Idle timeout (seconds)
 ```
 
-### Partition & Installation Modes
+### Installation Modes
 
-The build script automatically detects your disk layout and chooses the safest partitioning strategy. This feature was redesigned to handle three common scenarios:
+**Removed in v2.0.0.** v1 documented four partition strategies here
+(`auto-detect`, `force-partition`, `force-entire-disk`, `force-free-space`)
+driven by `PARTITION_STRATEGY`, `INSTALL_DISK`, `SWAP_SIZE_MB`, `EXT4_SIZE_MB`
+and `CONFIRM_ENTIRE_DISK`.
 
-**Partition Strategy Options:**
+All of it is gone. The generated preseed set
+`partman-auto/choose_recipe select atomic` together with
+`partman/confirm_write_new_label boolean true` — the whole-disk recipe plus a
+pre-answered "yes, destroy the partition table" — against an auto-detected disk,
+while its own comments conceded that Ubiquity "ignores most partman preseeds".
+The result was unpredictable and destroyed a partition in practice.
 
-```bash
-# === AUTO-DETECT (Default - Recommended) ===
-# Script analyzes disk layout and chooses the best strategy automatically
-PARTITION_STRATEGY="auto-detect"    # Analyze and decide
-INSTALL_DISK=""                     # Leave empty (auto-detect) or specify disk
-CONFIRM_ENTIRE_DISK="no"            # No confirmation needed for auto-detect
+**You now choose the disk and the partition layout in the installer**, the same
+way you would with stock Ubuntu or stock ETC. Those five variables are ignored if
+left in an old `secrets.env`.
 
-# === FORCE PARTITION MODE (Dual-Boot) ===
-# Use existing partition - safe for dual-boot systems
-PARTITION_STRATEGY="force-partition"
-INSTALL_DISK="/dev/sda5"            # Target partition (ends with digit)
-CONFIRM_ENTIRE_DISK="no"
-
-# === FORCE ENTIRE-DISK MODE (Dedicated System) ===
-# WARNING: DESTRUCTIVE - erases entire disk and creates new partitions with LVM
-# Only use for fresh installs with no data on the target disk
-PARTITION_STRATEGY="force-entire-disk"
-INSTALL_DISK="/dev/sda"             # Entire disk (no partition number)
-CONFIRM_ENTIRE_DISK="yes"           # MUST be "yes" to proceed
-
-# === FORCE FREE-SPACE MODE (Windows Dual-Boot with Space) ===
-# Create partitions in available free space on Windows partition
-PARTITION_STRATEGY="force-free-space"
-INSTALL_DISK="/dev/sda"             # Disk with Windows partition + free space
-CONFIRM_ENTIRE_DISK="no"            # No confirmation needed
-```
-
-**How Auto-Detect Works:**
-
-When `PARTITION_STRATEGY="auto-detect"` (default), the script:
-
-1. **Checks if `INSTALL_DISK` is a specific partition** (e.g., `/dev/sda5`):
-   - → Uses **partition mode** (safe for dual-boot)
-
-2. **If disk is blank or only has Linux partitions**:
-   - → Uses **entire-disk mode** (LVM auto-partitioning)
-
-3. **If Windows partition detected with free space**:
-   - → Uses **free-space mode** (create partitions in gap)
-
-4. **If Windows partition detected with NO free space**:
-   - → Requires **CONFIRM_ENTIRE_DISK="yes"** to proceed with entire-disk
-
-**Strategy Behavior Comparison:**
-
-| Strategy | INSTALL_DISK | Behavior | Preseed Config | Best For |
-|----------|--------------|----------|----------------|----------|
-| **auto-detect** | empty or disk | Analyze and decide | Dynamic based on disk | Most users |
-| **partition** | `/dev/sda5` | Use manual partitioning for single partition | `partman-auto/method regular` | Dual-boot (Windows+ETC) |
-| **entire-disk** | `/dev/sda` | Auto-partition entire disk with LVM | `partman-auto/method lvm` | Fresh install, single disk |
-| **free-space** | `/dev/sda` | Create partitions in available free space | `partman-auto/method regular` + free space | Windows with 50GB+ free |
-
-**Preseed Partitioning Details:**
-
-- **Partition Mode** (`partman-auto/method string regular`):
-  - Uses standard ext4 filesystem (no LVM)
-  - Requires you to have pre-partitioned the disk
-  - Safe for dual-boot: only modifies target partition
-  - Swap configured at next partition number (e.g., sda6 if using sda5)
-
-- **Entire-Disk Mode** (`partman-auto/method string lvm`):
-  - **DESTRUCTIVE**: Erases all partitions on target disk
-  - Uses LVM for flexible partition management
-  - Automatic partition sizing with swap
-  - Only use if you're certain about target disk
-
-- **Free-Space Mode** (`partman-auto/method string regular`):
-  - Creates new partitions in unallocated space
-  - Preserves Windows partition
-  - Ideal for upgrading Windows system to dual-boot
-
-**Size Calculation:**
-
-The script calculates optimal partition sizes:
-
-```
-Available Space = Total Disk Size
-Swap Size = MIN(25% of available, MAX(2GB, MIN(4GB)))
-EXT4 Size = Remaining space
-```
-
-Override calculated sizes (optional):
-
-```bash
-SWAP_SIZE_MB="4096"        # Force 4GB swap (in MB)
-EXT4_SIZE_MB="51200"       # Force 50GB ext4 (in MB)
-```
-
-**Safety Features:**
-
-- ✅ Partition mode is always safe (targets one partition only)
-- ✅ Entire-disk mode requires `CONFIRM_ENTIRE_DISK="yes"` to proceed
-- ✅ Auto-detect chooses safest option based on current disk layout
-- ✅ Script validates partition paths before generating preseed
-- ✅ Detailed logging shows detected strategy and proposed partitioning
-
+See [CHANGELOG.md](CHANGELOG.md) for the full detail and [UPGRADING.md](UPGRADING.md)
+for migration.
 
 ### VARA License Setup
 
@@ -798,29 +720,19 @@ APRS configuration is automatically applied during ISO build by modifying ETC's 
 
 **Features:**
 - **iGate Mode** - Upload position/weather to APRS-IS internet server (requires login)
-- **Smart Beaconing** - Automatic position updates based on movement/time
+- **Position beacon** - fixed (from grid square or explicit lat/lon), or GPS-tracked
+  once Dire Wolf is rebuilt with gpsd
 - **Digipeater Support** - WIDE path relaying for packet radio network
 - **ETC Template System** - Respects ETC's `{{ET_*}}` runtime placeholders
 
-**Configuration Variables:**
+Two constraints the generator handles, both of which v1 got wrong:
 
-```bash
-# === APRS Configuration ===
-APRS_SSID="10"                       # Station SSID (10=iGate, 11-15 for specific roles)
-APRS_PASSCODE=""                    # APRS-IS passcode (-1 for RX only)
-APRS_SYMBOL="r/"                    # Two-character symbol: r/=portable, a/=digipeater, etc.
-APRS_COMMENT="EmComm Tools - ETC"   # Station comment/info string
+- Dire Wolf's config parser is **line-oriented** — no backslash continuations.
+  Every directive is emitted on one line.
+- `every=30` means 30 **seconds**. Use `30:00` for 30 minutes.
 
-ENABLE_APRS_IGATE="yes"              # yes/no - enable APRS-IS internet gateway
-ENABLE_APRS_BEACON="yes"             # yes/no - enable position beaconing
-
-APRS_SERVER="noam.aprs2.net"        # APRS-IS server (noam=N.America, euro=Europe, etc.)
-APRS_BEACON_INTERVAL="30"           # Beacon interval in minutes (smart beaconing)
-APRS_BEACON_DISTANCE="1"            # Distance in miles before beacon (movement trigger)
-
-DIREWOLF_ADEVICE="plughw:1,0"       # Audio device for direwolf
-DIREWOLF_PTT="CM108"                # PTT method: CM108 (USB audio) or GPIO
-```
+**Configuration Variables:** see [secrets.env.template](secrets.env.template),
+which is the authoritative list.
 
 **How It Works:**
 
