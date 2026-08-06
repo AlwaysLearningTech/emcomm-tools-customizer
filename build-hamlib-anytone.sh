@@ -14,10 +14,12 @@
 #   /opt/hamlib itself is left untouched, so this script records the symlink
 #   manifest beforehand and --revert restores it.
 #
-#   /usr/local/lib precedes /usr/lib in the linker path, and direwolf, fldigi,
-#   js8call and wsjtx all resolve libhamlib.so.4 through it. They will pick up
-#   the new library. Same .so.4 soname, so this is normally fine -- but if a
-#   hamlib app misbehaves afterwards, --revert is the first thing to try.
+#   The fork bumps the SONAME to libhamlib.so.5, while ETC's Hamlib 4.5 is
+#   libhamlib.so.4. So installing here does NOT hijack the other ham apps:
+#   direwolf, fldigi, js8call and wsjtx keep resolving libhamlib.so.4 to ETC's
+#   original library, and only rigctld picks up the fork. That is the desired
+#   split, since those apps reach the radio over NET rigctl (localhost:4532).
+#   If a hamlib app does misbehave afterwards, --revert is the first thing to try.
 #
 # Usage:
 #   sudo ./build-hamlib-anytone.sh            # build + install
@@ -31,6 +33,10 @@ SRC="${SRC:-/usr/local/src/hamlib-anytone}"
 PREFIX=/usr/local
 MANIFEST=/opt/emcomm-tools/.customizer-backup/hamlib-symlinks.manifest
 EXPECT_MODEL=37001
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"   # for check_eol_apt_sources()
 
 RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YEL=$'\033[1;33m'; NC=$'\033[0m'
 info() { echo "${GRN}[ OK ]${NC} $*"; }
@@ -150,7 +156,11 @@ done
 if [ -n "$missing" ]; then
   warn "Missing build deps:$missing"
   echo "Installing..."
-  apt-get update -qq && apt-get install -y $missing || { err "apt install failed"; exit 1; }
+  apt-get update -qq 2>/dev/null || { warn "apt-get update failed"; check_eol_apt_sources || exit 1; }
+  # shellcheck disable=SC2086 -- $missing is an intentional word-split list
+  apt-get install -y $missing || {
+    check_eol_apt_sources || exit 1
+    err "apt install failed"; exit 1; }
 fi
 info "Build dependencies present"
 

@@ -199,6 +199,44 @@ continuations crept in -- and it runs the template through `direwolf` to confirm
 it genuinely parses. A final section flags leftovers from v1 that should be
 removed.
 
+### Fixed - EOL apt sources produced a useless error
+
+ETC v6 is Ubuntu 22.10 "kinetic", which reached end of life in July 2023. Its
+packages moved to old-releases.ubuntu.com, so a stock `sources.list` yields
+"does not have a Release file" and then "Unable to locate package libgps-dev" --
+and `build-direwolf-gpsd.sh` reported only a generic "Failed to install build
+dependencies".
+
+`lib/common.sh` gains `check_eol_apt_sources()`, used by both build scripts. It
+detects an EOL codename still pointing at the live mirrors and prints the exact
+`sed` command to repoint them. `build-direwolf-gpsd.sh` additionally checks for
+`gps.h` up front, skips the install when headers are already present, verifies
+`libgps-dev` is actually obtainable before attempting it, and warns if
+`libgps-dev` and the runtime `libgps28` versions disagree.
+
+### Fixed - the post-build GPSD gate rejected good builds
+
+Two more instances of the pipefail trap, in `build-direwolf-gpsd.sh`. The second
+was serious: after a fully successful compile,
+
+```bash
+if "$NEW" 2>&1 </dev/null | grep -qi 'optional support for.*gpsd'; then
+```
+
+always evaluated false -- direwolf exits non-zero after printing its banner, so
+under `set -o pipefail` the pipeline fails even when grep matches. The script
+would build correctly and then refuse to install, claiming the new binary lacked
+GPSD support. Both sites now use a shared `binary_has_gpsd()` helper.
+
+### Corrected - the Hamlib soname claim
+
+Earlier notes said the fork keeps the `.so.4` soname and would therefore be
+picked up by every hamlib app. Verified on a real install: the fork is
+`libhamlib.so.5` and ETC's is `libhamlib.so.4`, so `direwolf`, `fldigi`,
+`js8call` and `wsjtx` keep loading ETC's original library and only `rigctld`
+uses the fork. Since those apps talk to the radio over NET rigctl, that is the
+split you want.
+
 ### Changed — one implementation, two paths
 
 Customizations moved into `lib/`, operating on `$ET_ROOT`:

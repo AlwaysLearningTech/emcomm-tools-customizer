@@ -28,6 +28,10 @@ SRC="${SRC:-/usr/local/src/direwolf-gpsd}"
 PREFIX="/opt/direwolf-${DW_VERSION}-gpsd"
 STATE=/opt/emcomm-tools/.customizer-backup/direwolf-original
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"   # for check_eol_apt_sources()
+
 RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YEL=$'\033[1;33m'; NC=$'\033[0m'
 info() { echo "${GRN}[ OK ]${NC} $*"; }
 warn() { echo "${YEL}[WARN]${NC} $*"; }
@@ -90,20 +94,52 @@ current=$(command -v direwolf) || { err "direwolf not found -- is this an ETC sy
 current_real=$(readlink -f "$current")
 info "Current direwolf: $current_real"
 
-if direwolf 2>&1 </dev/null | grep -qi 'optional support for.*gpsd'; then
+if direwolf_has_gpsd; then
   info "This Dire Wolf ALREADY has GPSD support -- nothing to do."
   verify
   exit 0
 fi
 
 step "Installing build dependencies"
-apt-get update -qq || warn "apt-get update failed -- continuing with cached lists"
-apt-get install -y git build-essential cmake gpsd libgps-dev \
-    libasound2-dev libudev-dev pkg-config libhamlib-dev 2>/dev/null \
-  || apt-get install -y git build-essential cmake gpsd libgps-dev \
-       libasound2-dev libudev-dev pkg-config \
-  || { err "Failed to install build dependencies"; exit 1; }
-info "Build dependencies installed"
+
+# libgps-dev must match the installed libgps runtime, or direwolf will build
+# against headers that do not correspond to the library it loads.
+if [ -f /usr/include/gps.h ]; then
+    info "libgps headers already present"
+else
+    if ! apt-get update -qq 2>/dev/null; then
+        warn "apt-get update failed"
+        check_eol_apt_sources || exit 1
+        warn "Continuing with cached package lists"
+    fi
+
+    if ! apt-cache show libgps-dev >/dev/null 2>&1; then
+        err "libgps-dev is not available from any configured repository."
+        check_eol_apt_sources || exit 1
+        err "Cannot continue without libgps-dev."
+        exit 1
+    fi
+
+    apt-get install -y git build-essential cmake gpsd libgps-dev \
+        libasound2-dev libudev-dev pkg-config \
+      || { err "Failed to install build dependencies"; exit 1; }
+fi
+
+# Everything else is usually already present on ETC; install quietly if not.
+apt-get install -y git build-essential cmake libasound2-dev libudev-dev pkg-config \
+    >/dev/null 2>&1 || warn "Some optional build tools could not be installed"
+
+if [ ! -f /usr/include/gps.h ]; then
+    err "gps.h still missing after install -- cmake will not enable GPSD."
+    exit 1
+fi
+
+local_gps=$(dpkg -s libgps-dev 2>/dev/null | awk '/^Version:/{print $2}')
+runtime_gps=$(dpkg -s libgps28 2>/dev/null | awk '/^Version:/{print $2}')
+if [ -n "$local_gps" ] && [ -n "$runtime_gps" ] && [ "$local_gps" != "$runtime_gps" ]; then
+    warn "libgps-dev ($local_gps) differs from the runtime libgps28 ($runtime_gps)"
+fi
+info "Build dependencies installed (libgps-dev ${local_gps:-present})"
 
 # ---------------------------------------------------------------------------
 step "Fetching Dire Wolf ${DW_VERSION} source"
@@ -138,7 +174,10 @@ step "Switching /usr/local/bin/direwolf"
 NEW="${PREFIX}/bin/direwolf"
 [ -x "$NEW" ] || { err "Built binary not found at $NEW"; exit 1; }
 
-if "$NEW" 2>&1 </dev/null | grep -qi 'optional support for.*gpsd'; then
+# binary_has_gpsd(), not an inline pipeline: direwolf exits non-zero after
+# printing its banner, so under `set -o pipefail` a `"$NEW" | grep -q` test
+# reports failure even on a match -- which would reject a perfectly good build.
+if binary_has_gpsd "$NEW"; then
   info "New build reports GPSD support"
 else
   err "New build does NOT report GPSD support -- refusing to switch."

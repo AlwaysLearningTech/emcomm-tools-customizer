@@ -147,14 +147,62 @@ grid_to_latlon() {
 # `set -o pipefail`, so `direwolf | grep -q ...` would report failure even when
 # grep matches. Capture the output first and let grep alone decide.
 
+# True if the given direwolf binary was built with GPSD support.
+#   binary_has_gpsd /opt/direwolf-1.7-gpsd/bin/direwolf
+# Always use this rather than an inline `"$bin" | grep -q` pipeline: direwolf
+# exits non-zero after printing its banner, so under `set -o pipefail` the
+# pipeline reports failure even when grep matches.
+binary_has_gpsd() {
+    local bin="$1" out
+    [ -x "$bin" ] || return 1
+    out=$("$bin" 2>&1 </dev/null || true)
+    printf '%s' "$out" | grep -qi 'optional support for.*gpsd'
+}
+
 # True if the direwolf that will run on the target was built with GPSD support.
 # Only meaningful for the live path; ISO builds cannot exec the target binary.
 direwolf_has_gpsd() {
     [ "$ET_ROOT" = "/" ] || return 1
-    command -v direwolf >/dev/null 2>&1 || return 1
-    local out
-    out=$(direwolf 2>&1 </dev/null || true)
-    printf '%s' "$out" | grep -qi 'optional support for.*gpsd'
+    local bin
+    bin=$(command -v direwolf 2>/dev/null) || return 1
+    binary_has_gpsd "$bin"
+}
+
+# ETC v6 is Ubuntu 22.10 "kinetic", which reached end of life in July 2023. Its
+# packages moved off archive.ubuntu.com / security.ubuntu.com to
+# old-releases.ubuntu.com, so a stock sources.list produces
+#   "The repository ... does not have a Release file"
+# followed by "Unable to locate package <anything>". Detect that specifically so
+# the build scripts can say what is actually wrong instead of reporting a
+# generic dependency failure.
+#
+# Returns 0 if sources look fine, 1 after printing the fix if they do not.
+check_eol_apt_sources() {
+    local codename
+    codename=$(lsb_release -cs 2>/dev/null || echo "")
+    case "$codename" in
+        kinetic|lunar|mantic|groovy|hirsute|impish|artful|cosmic|disco|eoan) ;;
+        *) return 0 ;;
+    esac
+    grep -qE '^[[:space:]]*deb .*(archive|security)\.ubuntu\.com' \
+        /etc/apt/sources.list 2>/dev/null || return 0
+
+    log "ERROR" "This system is Ubuntu ${codename}, which is end-of-life."
+    cat >&2 <<EOF
+
+Its packages moved to old-releases.ubuntu.com, so apt cannot find them.
+Repoint the sources (sed -i.bak keeps your original):
+
+  sudo sed -i.bak \\
+    -e 's|http://us.archive.ubuntu.com|http://old-releases.ubuntu.com|g' \\
+    -e 's|http://archive.ubuntu.com|http://old-releases.ubuntu.com|g' \\
+    -e 's|http://security.ubuntu.com|http://old-releases.ubuntu.com|g' \\
+    /etc/apt/sources.list
+  sudo apt-get update
+
+Then re-run this script.
+EOF
+    return 1
 }
 
 # True if this Hamlib knows the AnyTone backend (model 37001).
