@@ -19,6 +19,7 @@ no GUI. Applies the same customizations to an **already-installed** system too.
 | `build-etc-iso.sh` | Builds a customized ISO. Boots to the normal installer. | No |
 | `build-hamlib-anytone.sh` | Builds the CowboyPilot Hamlib fork for AnyTone D578UVIII CAT (model 37001). `--revert` restores ETC's Hamlib. | No |
 | `build-direwolf-gpsd.sh` | Rebuilds Dire Wolf with `ENABLE_GPSD` for GPS-tracked beaconing. `--revert` supported. | No |
+| `fix-apt-sources.sh` | Repoints apt at `old-releases.ubuntu.com` for EOL Ubuntu (ETC v6 is 22.10 "kinetic", EOL since 2023). Needed before installing anything. `--check`, `--dry-run`, `--revert`. | No |
 
 Customizations live in `lib/` and operate on `$ET_ROOT`, so the ISO build and the
 live-system path run **the same code** and cannot drift apart.

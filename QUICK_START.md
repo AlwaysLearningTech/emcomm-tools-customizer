@@ -32,6 +32,18 @@ will refuse to run as root):
 ./post-install.sh                  # interactive menu
 ```
 
+### First: make apt work again
+
+ETC v6 is Ubuntu 22.10 "kinetic", EOL since July 2023. Its packages moved to
+`old-releases.ubuntu.com`, so until you repoint apt, every install fails with
+"Unable to locate package". This blocks CHIRP, `build-direwolf-gpsd.sh`, and
+anything else.
+
+```bash
+./fix-apt-sources.sh --check     # is it broken? (no root needed)
+sudo ./fix-apt-sources.sh        # back up, repoint, apt-get update
+```
+
 ### One-time, for full radio support
 
 Stock Hamlib 4.5 has **no AnyTone backend**, so the D578UV can't be driven by
@@ -60,10 +72,8 @@ sudo ./build-direwolf-gpsd.sh
 ## B. Building a fresh ISO
 
 ```bash
-# Fix apt sources for EOL Ubuntu 22.10
-sudo sed -i 's/archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
-sudo sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
-sudo apt update
+# Fix apt sources for EOL Ubuntu 22.10 (kinetic)
+sudo ./fix-apt-sources.sh
 
 # Install dependencies
 sudo apt install -y xorriso squashfs-tools wget curl jq git

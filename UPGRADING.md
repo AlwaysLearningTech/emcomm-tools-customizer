@@ -83,6 +83,23 @@ secret worth storing.
 
 ---
 
+## Prerequisite: working apt
+
+ETC v6 is Ubuntu 22.10 "kinetic", end-of-life since July 2023. Its packages were
+moved to `old-releases.ubuntu.com`, so a stock `sources.list` yields "does not
+have a Release file" and then "Unable to locate package" for everything.
+
+```bash
+./fix-apt-sources.sh --check     # no root needed
+sudo ./fix-apt-sources.sh        # backs up, repoints, updates, verifies
+sudo ./fix-apt-sources.sh --revert
+```
+
+It only touches `/etc/apt/sources.list`; entries in `sources.list.d/` (Brave,
+VS Code, the Cubic PPA) are still live and are deliberately left alone.
+
+---
+
 ## One-time setup for full radio support
 
 Two capabilities need a compile. Both install alongside the stock build rather
