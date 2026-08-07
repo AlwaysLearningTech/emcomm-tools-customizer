@@ -266,6 +266,39 @@ grep -qi anytone <<< "$out"                # correct
 Verified: 300/300 consistent afterwards, and 15 consecutive full verification
 runs produce byte-identical summaries.
 
+### Fixed - Dire Wolf could not build after installing the Hamlib fork
+
+Building Dire Wolf failed with:
+
+```
+src/ptt.c:1000:35: error: storage size of 'hport' isn't known
+    hamlib_port_t hport;
+```
+
+`src/ptt.c` declares a `hamlib_port_t` on the stack. Hamlib 4.x defines that as
+a complete struct; **Hamlib 5 made it opaque** (`typedef struct hamlib_port
+hamlib_port_t;` with no body). Checked upstream: Dire Wolf 1.7, 1.8, `dev` and
+`master` all still declare it this way, so there is no newer Dire Wolf that
+fixes it. The only option is to compile against Hamlib 4.x headers.
+
+This is collateral damage from `build-hamlib-anytone.sh`, and the script's own
+comments were wrong about it. They claimed `/opt/hamlib` was "left untouched".
+In fact `/usr/local/include/hamlib` is a **symlink into `/opt/hamlib`**, so
+`make install --prefix=/usr/local` wrote *through* it and replaced ETC's Hamlib
+4.5 headers and `lib/pkgconfig/hamlib.pc` in place. The 4.0.5 runtime libraries
+survived (the fork uses a different soname), so everything kept *running* --
+only *compiling* against Hamlib broke, which is why it went unnoticed until a
+build was attempted.
+
+`build-direwolf-gpsd.sh` now compile-probes the system headers with the exact
+failing construct, and when they are Hamlib 5 it stages a private copy of the
+Hamlib 4.5 headers and passes `HAMLIB_INCLUDE_DIR` / `HAMLIB_LIBRARY` directly
+to CMake -- bypassing `Findhamlib.cmake`'s search. It links ETC's original
+`libhamlib.so.4`, not the fork's `.so.5`, so the rebuilt Dire Wolf sits on the
+same library stack as the one it replaces. Nothing installed on the system is
+modified to achieve this. After building it reports which `libhamlib` and
+`libgps` the new binary actually links.
+
 ### Changed — one implementation, two paths
 
 Customizations moved into `lib/`, operating on `$ET_ROOT`:

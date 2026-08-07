@@ -28,6 +28,13 @@ SRC="${SRC:-/usr/local/src/direwolf-gpsd}"
 PREFIX="/opt/direwolf-${DW_VERSION}-gpsd"
 STATE=/opt/emcomm-tools/.customizer-backup/direwolf-original
 
+# Fallback Hamlib headers, used only when the system ones are Hamlib 5 (where
+# hamlib_port_t is opaque and no Dire Wolf release will compile). Staged
+# privately; nothing installed on the system is modified.
+HAMLIB_45_VER="${HAMLIB_45_VER:-4.5}"
+HAMLIB_45_URL="https://github.com/Hamlib/Hamlib/releases/download/${HAMLIB_45_VER}/hamlib-${HAMLIB_45_VER}.tar.gz"
+HDR_STAGE="${HDR_STAGE:-/usr/local/src/hamlib-${HAMLIB_45_VER}-headers}"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"   # for check_eol_apt_sources()
@@ -156,10 +163,80 @@ git checkout -q "$DW_VERSION" 2>/dev/null || warn "Tag ${DW_VERSION} not found -
 info "Source at $SRC ($(git describe --tags --always 2>/dev/null))"
 
 # ---------------------------------------------------------------------------
+# Dire Wolf vs Hamlib 5 headers
+#
+# src/ptt.c declares `hamlib_port_t hport;` on the stack. In Hamlib 4.x that is
+# a complete type; Hamlib 5 made it OPAQUE (`typedef struct hamlib_port
+# hamlib_port_t;` with no struct body), so the build dies with:
+#     error: storage size of 'hport' isn't known
+# Every Dire Wolf release -- 1.7, 1.8, dev, master -- still declares it this
+# way, so there is no newer Dire Wolf that fixes this. The only option is to
+# compile against Hamlib 4.x headers.
+#
+# This matters here because build-hamlib-anytone.sh installs the CowboyPilot
+# fork (Hamlib 5) to /usr/local, and /usr/local/include/hamlib is a SYMLINK into
+# /opt/hamlib -- so that install replaces ETC's Hamlib 4.5 headers in place.
+# The 4.0.5 runtime library survives (different soname), which is what we link.
+step "Checking Hamlib headers"
+
+hamlib_headers_usable() {
+    local inc="$1" t rc
+    t=$(mktemp --suffix=.c) || return 1
+    printf '#include <hamlib/rig.h>\nint main(void){hamlib_port_t h;(void)h;return 0;}\n' > "$t"
+    gcc -c "$t" -I "$inc" -o /dev/null 2>/dev/null
+    rc=$?
+    rm -f "$t"
+    return $rc
+}
+
+HAMLIB_INC=""
+HAMLIB_LIB=""
+
+if hamlib_headers_usable /usr/local/include; then
+    info "System Hamlib headers are compatible with Dire Wolf"
+else
+    warn "Hamlib headers at /usr/local/include are INCOMPATIBLE with Dire Wolf"
+    warn "(hamlib_port_t is opaque -- this is Hamlib 5)"
+
+    # Stage a private copy of the 4.5 headers. Nothing on the system is touched.
+    if ! hamlib_headers_usable "${HDR_STAGE}/include"; then
+        info "Staging Hamlib ${HAMLIB_45_VER} headers into ${HDR_STAGE}"
+        rm -rf "$HDR_STAGE"; mkdir -p "$HDR_STAGE"
+        tmp=$(mktemp -d)
+        if ! curl -sL --max-time 300 -o "${tmp}/hl.tar.gz" "$HAMLIB_45_URL"; then
+            err "Could not download Hamlib ${HAMLIB_45_VER} headers"; rm -rf "$tmp"; exit 1
+        fi
+        tar xzf "${tmp}/hl.tar.gz" -C "$tmp" --strip-components=1 || {
+            err "Could not unpack Hamlib source"; rm -rf "$tmp"; exit 1; }
+        mkdir -p "${HDR_STAGE}/include"
+        cp -a "${tmp}/include/hamlib" "${HDR_STAGE}/include/" || {
+            err "Could not stage headers"; rm -rf "$tmp"; exit 1; }
+        rm -rf "$tmp"
+    fi
+
+    hamlib_headers_usable "${HDR_STAGE}/include" || {
+        err "Staged headers still do not compile -- aborting"; exit 1; }
+    info "Using Hamlib ${HAMLIB_45_VER} headers from ${HDR_STAGE}/include"
+    HAMLIB_INC="${HDR_STAGE}/include"
+
+    # Link against ETC's original 4.0.5 library (soname libhamlib.so.4), which
+    # is what the rest of ETC uses. NOT /usr/local/lib/libhamlib.so, which now
+    # resolves to the fork's .so.5.
+    for cand in /opt/hamlib/lib/libhamlib.so /usr/local/lib/libhamlib.so.4; do
+        if [ -e "$cand" ]; then HAMLIB_LIB="$cand"; break; fi
+    done
+    [ -n "$HAMLIB_LIB" ] || { err "No Hamlib 4.x library found to link against"; exit 1; }
+    info "Linking against $HAMLIB_LIB -> $(readlink -f "$HAMLIB_LIB" | xargs basename)"
+fi
+
 step "Building with ENABLE_GPSD into ${PREFIX}"
 rm -rf build && mkdir -p build && cd build || exit 1
 
+# HAMLIB_INCLUDE_DIR / HAMLIB_LIBRARY are the cache variables Findhamlib.cmake
+# populates; setting them explicitly bypasses its search entirely.
 cmake .. -DCMAKE_INSTALL_PREFIX="$PREFIX" -DENABLE_GPSD=1 \
+  ${HAMLIB_INC:+-DHAMLIB_INCLUDE_DIR="$HAMLIB_INC"} \
+  ${HAMLIB_LIB:+-DHAMLIB_LIBRARY="$HAMLIB_LIB"} \
   || { err "cmake failed"; exit 1; }
 
 # Confirm cmake actually found libgps before spending a full build on it.
@@ -186,6 +263,18 @@ else
   err "libgps-dev was probably not picked up. Not changing anything."
   exit 1
 fi
+
+# The rest of ETC uses libhamlib.so.4. If this binary picked up the fork's
+# .so.5 instead, say so -- it will still run, but it is not the same library
+# stack as the Dire Wolf it replaces.
+NEW_HAMLIB=$(ldd "$NEW" 2>/dev/null | grep -o 'libhamlib\.so\.[0-9]*' | head -1)
+case "$NEW_HAMLIB" in
+  libhamlib.so.4) info "Links $NEW_HAMLIB (same as ETC's stock Dire Wolf)" ;;
+  "")             warn "Links no libhamlib -- 'PTT RIG' will not work" ;;
+  *)              warn "Links $NEW_HAMLIB, but the rest of ETC uses libhamlib.so.4" ;;
+esac
+NEW_GPS=$(ldd "$NEW" 2>/dev/null | grep -o 'libgps\.so\.[0-9]*' | head -1)
+info "Links ${NEW_GPS:-<no libgps>}"
 
 # Record the original exactly once so --revert always finds the stock build.
 mkdir -p "$(dirname "$STATE")"

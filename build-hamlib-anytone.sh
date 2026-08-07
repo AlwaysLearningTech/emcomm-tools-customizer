@@ -9,10 +9,20 @@
 #
 # IMPORTANT -- what this does to your existing install:
 #   ETC does not use a packaged Hamlib. It builds Hamlib into /opt/hamlib and
-#   symlinks ~24 entries from /usr/local/{bin,lib,include,share} into it.
-#   Installing to --prefix=/usr/local REPLACES those symlinks with real files.
-#   /opt/hamlib itself is left untouched, so this script records the symlink
-#   manifest beforehand and --revert restores it.
+#   symlinks entries from /usr/local/{bin,lib,include,share} into it.
+#   Installing to --prefix=/usr/local replaces those symlinks with real files,
+#   so this script records the symlink manifest beforehand and --revert
+#   restores it.
+#
+#   /opt/hamlib is NOT fully insulated, contrary to what earlier versions of
+#   this comment claimed. /usr/local/include/hamlib is a SYMLINK INTO
+#   /opt/hamlib, so `make install` writes THROUGH it and replaces ETC's Hamlib
+#   4.5 headers (and lib/pkgconfig/hamlib.pc) in place with the fork's.
+#   The 4.0.5 runtime libraries survive, because the fork uses a different
+#   soname -- so everything keeps RUNNING. What breaks is COMPILING against
+#   Hamlib afterwards: Hamlib 5 makes hamlib_port_t opaque, and no Dire Wolf
+#   release can build against it. build-direwolf-gpsd.sh handles that by
+#   staging its own Hamlib 4.5 headers.
 #
 #   The fork bumps the SONAME to libhamlib.so.5, while ETC's Hamlib 4.5 is
 #   libhamlib.so.4. So installing here does NOT hijack the other ham apps:
