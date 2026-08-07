@@ -24,7 +24,7 @@ _v_head() { echo; echo -e "\033[0;34m$1\033[0m"; }
 _v_direwolf_banner() {
     local out
     out=$(direwolf 2>&1 </dev/null || true)
-    printf '%s' "$out" | grep -m1 -i 'Dire Wolf version'
+    grep -m1 -i 'Dire Wolf version' <<< "$out"
 }
 
 verify_system() {
@@ -132,7 +132,13 @@ verify_system() {
     # ----------------------------------------------------------------- radio
     _v_head "4. Radio / CAT control"
     if hamlib_has_anytone; then
-        _v_pass "Hamlib AnyTone backend: $(rigctl -l 2>/dev/null | grep -i anytone | head -1 | tr -s ' ')"
+        # Capture once, then match with herestrings. `rigctl -l | grep | head -1`
+        # chains two early-exiting readers over 322 lines of output; each can
+        # SIGPIPE its writer, which under pipefail yields an empty string here.
+        local rigs anyline
+        rigs=$(rigctl -l 2>/dev/null || true)
+        anyline=$(grep -i -m1 anytone <<< "$rigs" | tr -s ' ')
+        _v_pass "Hamlib AnyTone backend:${anyline}"
     else
         _v_warn "No AnyTone backend in Hamlib -- run ./build-hamlib-anytone.sh"
     fi

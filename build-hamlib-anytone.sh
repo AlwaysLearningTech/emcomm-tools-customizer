@@ -104,9 +104,12 @@ verify() {
   rigctl --version 2>/dev/null | head -1
   echo "libhamlib resolves to: $(ldconfig -p | awk '/libhamlib.so.4/{print $NF; exit}')"
   echo
-  if rigctl -l 2>/dev/null | grep -qi anytone; then
+  # Capture once: `rigctl -l | grep -q` is a double trap under pipefail --
+  # rigctl's exit status, plus grep -q short-circuiting and SIGPIPE-ing it.
+  local rigs; rigs=$(rigctl -l 2>/dev/null || true)
+  if grep -qi anytone <<< "$rigs"; then
     info "AnyTone backend present:"
-    rigctl -l 2>/dev/null | grep -i anytone | sed 's/^/       /'
+    grep -i anytone <<< "$rigs" | sed 's/^/       /'
   else
     warn "No AnyTone backend -- model ${EXPECT_MODEL} will be rejected."
   fi

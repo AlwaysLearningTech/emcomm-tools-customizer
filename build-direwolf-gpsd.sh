@@ -48,12 +48,14 @@ verify() {
   # once, then grep the captured text.
   local out caps ver
   out=$(direwolf 2>&1 </dev/null || true)
-  ver=$(printf '%s' "$out" | grep -m1 -i 'Dire Wolf version')
-  caps=$(printf '%s' "$out" | grep -m1 -i 'optional support for')
+  # Herestrings, not pipes: grep -m1 exits early and can SIGPIPE the writer,
+  # which pipefail would then report as failure. See lib/common.sh.
+  ver=$(grep -m1 -i 'Dire Wolf version' <<< "$out")
+  caps=$(grep -m1 -i 'optional support for' <<< "$out")
   echo "  version : ${ver:-<unknown>}"
   echo "  caps    : ${caps:-<none reported>}"
   echo
-  if echo "$caps" | grep -qi gpsd; then
+  if grep -qi gpsd <<< "$caps"; then
     info "GPSD support present -- GPSD/TBEACON directives will work"
   else
     warn "No GPSD support -- GPSD/TBEACON would be a config error"

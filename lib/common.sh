@@ -142,10 +142,20 @@ grid_to_latlon() {
     fi
 }
 
-# NOTE for both probes below: direwolf and rigctl are invoked with no useful
-# arguments and exit NON-ZERO (they print usage). Callers run with
-# `set -o pipefail`, so `direwolf | grep -q ...` would report failure even when
-# grep matches. Capture the output first and let grep alone decide.
+# NOTE for both probes below, two separate traps -- both bit us in practice:
+#
+# 1. direwolf and rigctl exit NON-ZERO when invoked with no useful arguments
+#    (they print usage). Callers run with `set -o pipefail`, so a
+#    `direwolf | grep -q ...` pipeline reports failure even when grep matches.
+#    So: capture the output first.
+#
+# 2. Do NOT then write that capture back into a pipe. `grep -q` exits the moment
+#    it matches, and on a large stream the writer can still be mid-write -- it
+#    dies on SIGPIPE and pipefail turns that into a false negative. `rigctl -l`
+#    emits 322 lines and this failed ~5% of runs, producing an intermittent
+#    "No AnyTone backend" warning on a system that plainly had one. Use a
+#    HERESTRING: it is a redirection, not a pipeline, so pipefail cannot apply
+#    and there is no writer process to signal.
 
 # True if the given direwolf binary was built with GPSD support.
 #   binary_has_gpsd /opt/direwolf-1.7-gpsd/bin/direwolf
@@ -156,7 +166,7 @@ binary_has_gpsd() {
     local bin="$1" out
     [ -x "$bin" ] || return 1
     out=$("$bin" 2>&1 </dev/null || true)
-    printf '%s' "$out" | grep -qi 'optional support for.*gpsd'
+    grep -qi 'optional support for.*gpsd' <<< "$out"
 }
 
 # True if the direwolf that will run on the target was built with GPSD support.
@@ -210,5 +220,5 @@ hamlib_has_anytone() {
     command -v rigctl >/dev/null 2>&1 || return 1
     local out
     out=$(rigctl -l 2>/dev/null || true)
-    printf '%s' "$out" | grep -qi anytone
+    grep -qi anytone <<< "$out"
 }

@@ -237,6 +237,35 @@ picked up by every hamlib app. Verified on a real install: the fork is
 uses the fork. Since those apps talk to the radio over NET rigctl, that is the
 split you want.
 
+### Fixed - an intermittent false "No AnyTone backend" warning
+
+A second, distinct pipe hazard, and the subtler of the two. Having learned to
+capture command output before grepping it, the probes then wrote that capture
+back into a pipe:
+
+```bash
+out=$(rigctl -l 2>/dev/null || true)
+printf '%s' "$out" | grep -qi anytone      # WRONG
+```
+
+`grep -q` exits the instant it matches. On a large stream the writer may still
+be mid-write, so it dies on SIGPIPE, and `pipefail` turns that into a false
+negative. `rigctl -l` emits 322 lines and this failed roughly **5% of runs**
+(measured: 190 TRUE / 10 FALSE over 200 calls), producing an intermittent
+"No AnyTone backend in Hamlib" warning on a system that plainly had one. The
+direwolf probe never showed it because its banner fits in the pipe buffer.
+
+All early-exiting greps (`-q`, `-m1`) now read from a **herestring**, which is a
+redirection rather than a pipeline: `pipefail` cannot apply and there is no
+writer process to signal.
+
+```bash
+grep -qi anytone <<< "$out"                # correct
+```
+
+Verified: 300/300 consistent afterwards, and 15 consecutive full verification
+runs produce byte-identical summaries.
+
 ### Changed — one implementation, two paths
 
 Customizations moved into `lib/`, operating on `$ET_ROOT`:
