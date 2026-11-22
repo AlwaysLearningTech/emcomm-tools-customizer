@@ -215,6 +215,34 @@ EOF
     return 1
 }
 
+# Normalize a yes/no-ish value to the true/false literal dconf requires.
+#
+# This exists because dconf does NOT report bad values. `dconf update` compiles
+# a keyfile containing `idle-dim=no` without complaint and simply drops the
+# key, so a value in the wrong vocabulary is indistinguishable from success.
+# secrets.env uses yes/no throughout; dconf accepts only true/false.
+dconf_bool() {
+    case "${1,,}" in
+        yes|true|on|1)  echo "true" ;;
+        no|false|off|0) echo "false" ;;
+        *)
+            log "WARN" "Unrecognized boolean '$1' -- treating as false"
+            echo "false"
+            ;;
+    esac
+}
+
+# Normalize a number to a dconf double literal. `text-scaling-factor=1` is
+# rejected as a type mismatch where `1.0` is accepted.
+dconf_double() {
+    local v="$1"
+    case "$v" in
+        *.*) printf '%s\n' "$v" ;;
+        ''|*[!0-9]*) log "WARN" "Unrecognized number '$v' -- using 1.0"; echo "1.0" ;;
+        *) printf '%s.0\n' "$v" ;;
+    esac
+}
+
 # True if this Hamlib knows the AnyTone backend (model 37001).
 hamlib_has_anytone() {
     command -v rigctl >/dev/null 2>&1 || return 1

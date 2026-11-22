@@ -1,5 +1,250 @@
 # Changelog
 
+## v2.1.0 — Target ETC R7; fix the applications that were never installed
+
+Retargets the build at **EmComm Tools Community R7 (7.0.2)** and fixes a set of
+customizations that reported success on every build while doing nothing at all.
+`-r stable` now resolves to R7; Ubuntu 22.10 remains the base.
+
+### Fixed — AnyTone CAT control was absent from every ISO
+
+`lib/customize-radio.sh` writes D578UVIII profiles pinned to Hamlib model
+**37001** (`RIG_MODEL_ATD578UVIII`). Stock Hamlib 4.5, which ETC ships, has no
+AnyTone backend at all — and `build-etc-iso.sh` never called
+`build-hamlib-anytone.sh`. There was not a single reference to it in the build.
+
+So every ISO produced by this project booted with correct-looking radio
+profiles, a `rigctld` that rejected model 37001 outright, and therefore **no CAT
+control and no PTT**. The live system worked only if you had run
+`build-hamlib-anytone.sh` by hand.
+
+`install_hamlib_anytone()` now runs that same script inside the chroot — not a
+reimplementation, so the ISO and the live system get identical treatment,
+including the symlink manifest that `--revert` depends on. It then independently
+confirms `rigctl -l` reports an AnyTone model, and fails the build if not.
+
+### Fixed — VS Code was never installed
+
+`customize_additional_packages()` ran `apt-get install -y -qq code`. Ubuntu
+22.10 has no `code` package, and the same function deletes the Microsoft apt
+repos 25 lines earlier, so this could never succeed. The failure was absorbed
+by a `|| log WARN`. `setup_vscode_workspace()` then wrote a `.code-workspace`
+for an editor that was not present.
+
+VS Code now installs from a `.deb` (`VSCODE_DEB`, or downloaded), and a failure
+fails the build.
+
+### Fixed — CHIRP was never installed, on any of three paths
+
+All three install paths used the name `chirp` from PyPI, which belongs to an
+unrelated 2013 package for analyzing **bioacoustic recordings**:
+
+- `python3 -m pip install chirp` in the first-boot script
+- `pipx install chirp` in `post-install.sh`, falling back to `pip3 install --user chirp`
+- `apt-get install chirp` in the `profile.d` fallback — real, but CHIRP 20200227
+
+Anyone who ran these ended up with a working `chirp` command that cannot
+program a radio. CHIRP now builds from `github.com/kk7ds/chirp` into a venv with
+`--system-site-packages` (the distro `python3-wxgtk4.0` must be visible).
+`archive.chirpmyradio.com` is not usable from a script — it serves HTTP 403 to
+every non-browser request.
+
+### Fixed — three dconf keys that do not exist
+
+dconf compiles a keyfile containing an unknown key or a mistyped value and
+**silently drops it**, so these looked exactly like success:
+
+| Written | Reality |
+| --- | --- |
+| `power-profile-daemon` | Not a dconf key. The power profile is owned by power-profiles-daemon over D-Bus. `POWER_MODE` never did anything and has been removed. |
+| `.../power/battery-saver` → `enable-battery-saver` | No such schema path. The real key is `power-saver-profile-on-low-battery`. |
+| `org/gnome/desktop/session` → `auto-save-session-timeout` | No such key. The idle key there is `idle-delay`, a uint32. |
+
+Also fixed in the same area:
+
+- `sleep-display-ac` / `sleep-display-battery` were written **quoted**. They are
+  integer keys, so screen blanking was never configured.
+- The accessibility block re-declared `text-scaling-factor=1.0`, silently
+  overriding `DESKTOP_SCALING_FACTOR` for anyone who changed it.
+- `DISABLE_ACCESSIBILITY=yes` set `always-show-universal-access-status=true`,
+  pinning the accessibility menu into the top bar — the opposite of the intent.
+- `yes`/`no` from `secrets.env` are now normalized to dconf's `true`/`false`
+  via `dconf_bool()`, and numbers to doubles via `dconf_double()`.
+
+### Fixed — `customize_power` and `customize_timezone` were dead code
+
+Neither was ever called from `main()`. Every `POWER_*` setting and `TIMEZONE`
+in `secrets.env` was ignored. Both are now steps in the sequence.
+`AUTOMATIC_SUSPEND="no"` additionally forces the `sleep-inactive-*-type` keys
+to `nothing`, since a timeout alone does not prevent suspend.
+
+### Fixed — verification checked for things the build deliberately no longer does
+
+`verify_customizations()` tested for a `wrapper-rigctld.sh` "Anytone
+preservation" patch, a `99-install-chirp-edge.sh` profile script, and a
+`99-emcomm-tools-cat.rules` udev rule. All three were removed on purpose in
+v2.0.0 (the first guarded a function that is never called; the last let an
+unrelated USB serial device steal `/dev/et-cat`). They failed on every run,
+which trained the reader to ignore the whole section.
+
+Verification now covers what the build actually produces — including the
+AnyTone backend, VS Code, CHIRP and the active-radio symlink being *relative* —
+and **aborts before** the 20–40 minute squashfs step instead of printing
+"Build will continue but ISO may not work correctly".
+
+### Changed — ETC R7 redundancies removed
+
+- `install_kiwix()` **removed**. Kiwix has been native since R4; installing
+  `kiwix-tools` over the top risked a version ETC's own integration does not
+  expect. `setup_wikipedia_tools()` is unaffected — it builds small targeted
+  ZIM files, which is a different thing.
+- Screen dimming, blanking and automatic brightness are now hardcoded **off**,
+  matching R7. The old `DIM_SCREEN` default of `true` was re-enabling, on every
+  build, the dimming R7 had just turned off. These are no longer settings — see
+  "`secrets.env` holds only real decisions" below.
+- `ENABLE_ETOSADDONS_KIWIX` now defaults to `no` (duplicate launcher).
+- The hardcoded package list is documented with what **not** to add: R7 ships
+  Thunderbird, VLC, Python 3.11.17 and Rust natively.
+
+The R5 release tag hardcoded in the generated `download-et-maps.sh` is
+**correct and intentional** — R7 ships no release assets, so the offline map
+tilesets still live on the R5 release.
+
+### Removed — Microsoft Edge, and the duplicate first-boot machinery
+
+Edge was never a requirement, ETC ships the Min browser, and it was installed
+by two competing code paths, one of them using `apt-key` (deprecated and
+removed). Both are gone.
+
+First-boot work had collapsed into three overlapping mechanisms: two systemd
+units (`emcomm-first-boot.service`, `emcomm-first-boot-apps.service`) and an
+`/etc/profile.d/99-install-chirp-edge.sh` written twice — once at build time,
+then overwritten at runtime by one of the services. They raced and duplicated
+each other. Now that applications install at build time, one small idempotent
+service remains, re-asserting the active-radio symlink only if it is missing.
+
+### Added — AnyTone AT-D890UV Bluetooth KISS TNC
+
+New `lib/customize-anytone-dmr.sh` writes an `anytone-d890.bt.json` profile and
+an `et-anytone-d890` helper (`pair` / `connect` / `unpair`), following ETC's own
+`et-uv-pro` pattern so `et-mode` and `et-kill-all` keep working. The D890UV is
+a DMR handheld, so packet runs over Bluetooth KISS rather than serial CAT.
+
+Two deliberate deviations from the R6 original it is modelled on:
+
+- `get_mac_or_exit()` rejects an **empty** MAC, not just a missing key. R6's
+  `jq -e -r .bluetooth.mac` succeeds on `""` and hands an empty MAC to
+  `rfcomm`. R7 fixed this upstream; this carries the fix for R6 hosts.
+- Pairing writes the MAC back with `jq` instead of
+  `sed -i 's|.*mac.*|...|g'`, which matches every line containing "mac" —
+  including `deviceName` — and corrupts the JSON.
+
+Radio firmware 1.05 (May 2026) or newer is recommended; earlier firmware has
+known Bluetooth KISS TNC and APRS beacon defects.
+
+### Added — GitHub CLI
+
+`install_gh()` bakes `gh` into the ISO from the official `.deb`, falling back to
+apt if the download fails. Kinetic's apt version is gh **2.14.4+dfsg1-1** from
+mid-2022, which is old for a tool whose entire job is a remote API — but the
+fallback means an offline or rate-limited build still gets a working `gh`.
+
+This is also the answer to git credentials on the installed system. `gh auth
+login && gh auth setup-git` registers gh as git's credential helper, so
+`git push` works from a plain terminal. Deliberately *not* run at build time —
+that would bake a personal token into the image.
+
+Context: VS Code's GitHub extension keeps its token in VS Code's own encrypted
+secret store and bridges it to git only via `GIT_ASKPASS` in the **integrated
+terminal**. Any other shell on the box — a plain terminal, a script, an agent —
+has no credential helper at all, and `git-credential-libsecret` is not even
+compiled on a stock ETC install (only the `.c` and Makefile ship under
+`/usr/share/doc/git/contrib/`).
+
+### Added — anytone-cps
+
+Builds `github.com/xbenkozx/anytone-cps` in the chroot with a desktop launcher.
+This fills a real gap: **CHIRP does not support AnyTone DMR radios at all**, so
+there was previously no Linux path to program the D578UVIII or D890UV. Alpha
+upstream (D878UVII tested, D890UV listed but untested), so a build failure here
+warns and continues rather than failing the ISO.
+
+### Changed — build sequence and logging
+
+`main()` now drives customizations from a single `"label|mode|function"` table
+with derived step numbers, and each step is marked `fatal` or `best-effort`.
+The hand-written numbering had drifted into "Step 15/14", two different
+"Step 15"s, and a "Step 22/22" that was a no-op log line. Optional failures are
+collected and reported together at the end.
+
+Per the project's own rule against `tee` in sudo'd build commands, the new
+installers append to the log directly.
+
+### Added — CLAUDE.md, and curated Claude Code settings
+
+`CLAUDE.md` documents the one-implementation rule, the hardware specifics, and
+the traps above. `.claude/settings.json` is now committed with curated
+permissions, including `deny` rules for `dd`, `mkfs`, `parted`, `wipefs` and
+friends — this project must never write to a block device.
+`.claude/settings.local.json` is gitignored.
+
+### Removed — the commode=0 "PTT only" D578UVIII profile
+
+Two profiles were written; now there is one, `anytone-d578uv.json`, with
+`commode=1`. The PTT-only variant duplicated stock ETC's
+`digirig-mobile-no-cat` profile, which keys the radio over the DigiRig's serial
+RTS line using Hamlib model **6** (`RIG_MODEL_DUMMY_NOVFO`) and never talks to
+the radio at all. Both gave you nothing but PTT — except the commode=0 version
+*also* required the custom Hamlib build to do it.
+
+For PTT with the radio's front panel left usable, select **"DigiRig Mobile (No
+CAT)"** in `et-radio`. `ANYTONE_DEFAULT_MODE` is gone.
+
+### Added — battery-percentage power action, via UPower
+
+`POWER_BATTERY_ACTION_PERCENT` (default 10) and `POWER_BATTERY_ACTION`
+(default `Suspend`) are written to `/etc/UPower/UPower.conf`.
+
+This is a separate mechanism on purpose. `sleep-inactive-battery-type` is a
+GNOME **enum** driven by an idle timer, so a percentage put into it would be
+silently discarded — the exact failure mode this release exists to remove.
+`customize_upower()` also sets `UsePercentageForPolicy=true` explicitly, lifts
+`PercentageLow`/`PercentageCritical` above the action point so UPower's required
+ordering stays valid, and greps the file afterward to confirm the edits landed
+rather than trusting `sed`'s exit status.
+
+### Changed — `secrets.env` holds only real decisions
+
+Removed as derived, computed, or build-tooling detail, and hardcoded instead:
+
+| Removed | Now |
+| --- | --- |
+| `APRS_PASSCODE`, `APRS_LAT`, `APRS_LON` | computed from `CALLSIGN` / `GRID_SQUARE` |
+| `ANYTONE_D890_MAC` | discovered by `et-anytone-d890 pair` |
+| `ADDITIONAL_PACKAGES` | `nodejs npm` hardcoded — they are build deps |
+| `SQUASHFS_COMPRESSION` | `zstd` hardcoded |
+| all `DESKTOP_*` / `DIM_SCREEN` / `SCREEN_BLANK*` / `DISABLE_ACCESSIBILITY` / `AUTOMATIC_SCREEN_BRIGHTNESS` | hardcoded to match R7 |
+| `POWER_MODE` | not a dconf key at all; never worked |
+| `ET_EXPERT`, `WIKIPEDIA_*`, `PAT_EMCOMM_GATEWAY` | commented examples only |
+
+`customize_desktop()` is retained despite now mostly agreeing with R7, because
+it creates `/etc/dconf/profile/user` — the database cascade that
+`customize_power()`'s keyfile depends on. Deleting it would quietly break the
+power settings.
+
+`secrets.env.template` was rewritten: the stale notes about Edge, pipx-installed
+CHIRP, and `ENABLE_ETOSADDONS_WSJTX` are gone, and every `ENABLE_ETOSADDONS_*`
+flag now states why it is on or off.
+
+### Note on `secrets.env`
+
+`secrets.env` is gitignored and has always been. `embed_cache_files()` copies it
+into the ISO at `/opt/emcomm-customizer-cache/secrets.env`, so it reappears on a
+system **installed from a custom ISO** — it does not survive on a stock ETC
+install, and it is not in `et-user-backup`. Verification now warns once per
+build that a non-minimal ISO contains your WiFi PSK and Winlink password, so
+don't share it; use `-m` for one you can.
+
 ## v2.0.0 — Remove install automation, share one implementation
 
 Breaking release. The headline change is that **this project no longer automates

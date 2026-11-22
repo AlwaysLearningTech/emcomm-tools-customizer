@@ -143,23 +143,24 @@ verify_system() {
         _v_warn "No AnyTone backend in Hamlib -- run ./build-hamlib-anytone.sh"
     fi
 
-    local found=0 p
-    for p in "$RADIOS"/anytone-d578uv.json "$RADIOS"/anytone-d578uv-com.json; do
-        [ -f "$p" ] || continue
-        found=1
-        if jq -e . "$p" >/dev/null 2>&1; then
-            local id; id=$(jq -r .rigctrl.id "$p")
-            if [ "$id" = "37001" ]; then
-                _v_pass "$(basename "$p"): model $id$(jq -r '.rigctrl.conf // "" | if .=="" then "" else " ("+.+")" end' "$p")"
-            else
-                # v1 shipped 301, which does not exist in Hamlib.
-                _v_fail "$(basename "$p"): model $id is not a valid Hamlib model (expected 37001)"
-            fi
+    # One profile since v2.1.0. The commode=0 "-com" counterpart was removed as
+    # a duplicate of stock ETC's digirig-mobile-no-cat, which keys the radio
+    # over the DigiRig's RTS line using Hamlib model 6 and needs no custom
+    # Hamlib at all.
+    local p="$RADIOS/anytone-d578uv.json"
+    if [ ! -f "$p" ]; then
+        _v_warn "No D578UVIII profile -- run ./apply-to-live-system.sh"
+    elif ! jq -e . "$p" >/dev/null 2>&1; then
+        _v_fail "$(basename "$p"): invalid JSON"
+    else
+        local id; id=$(jq -r .rigctrl.id "$p")
+        if [ "$id" = "37001" ]; then
+            _v_pass "$(basename "$p"): model $id$(jq -r '.rigctrl.conf // "" | if .=="" then "" else " ("+.+")" end' "$p")"
         else
-            _v_fail "$(basename "$p"): invalid JSON"
+            # v1 shipped 301, which does not exist in Hamlib.
+            _v_fail "$(basename "$p"): model $id is not a valid Hamlib model (expected 37001)"
         fi
-    done
-    [ "$found" -eq 1 ] || _v_warn "No D578UVIII profiles -- run ./apply-to-live-system.sh"
+    fi
 
     if [ -L "$RADIOS/active-radio.json" ]; then
         if [ -e "$RADIOS/active-radio.json" ]; then

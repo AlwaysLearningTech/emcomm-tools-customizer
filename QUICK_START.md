@@ -53,6 +53,27 @@ Stock Hamlib 4.5 has **no AnyTone backend**, so the D578UV can't be driven by
 sudo ./build-hamlib-anytone.sh      # adds Hamlib model 37001
 ```
 
+For the **AnyTone AT-D890UV**, packet runs over its Bluetooth KISS TNC rather
+than serial CAT. Pair once, then connect whenever you need it:
+
+```bash
+et-anytone-d890 pair       # discovers and records the radio's MAC
+et-anytone-d890 connect    # then pick axcall / QtTermTCP / Winlink / YAAC
+```
+
+Firmware 1.05 (May 2026) or newer is strongly recommended — earlier firmware
+has known Bluetooth KISS TNC and APRS beacon defects.
+
+### Programming your radios
+
+**CHIRP does not support AnyTone DMR radios.** Use `anytone-cps` for the
+D578UVIII and D890UV, and CHIRP for everything else.
+
+```bash
+./post-install.sh --chirp   # builds CHIRP from the official git repo
+anytone-cps                 # baked into the ISO; alpha upstream
+```
+
 Then pick a profile with `et-radio` and **verify PTT before trusting it on air**:
 
 ```bash
@@ -116,6 +137,19 @@ boot, run `sudo ./apply-to-live-system.sh`.
 
 ---
 
+### Skip re-downloading VS Code
+
+Ubuntu 22.10 has no `code` package and the build removes the Microsoft apt
+repos, so VS Code can only come from a `.deb`. Point at one you already have:
+
+```bash
+VSCODE_DEB="/home/you/Downloads/code_1.132.0-1785860022_amd64.deb"
+```
+
+Leave it empty to download the current stable build instead.
+
+---
+
 ## Essential Configuration
 
 Minimum `secrets.env`:
@@ -123,12 +157,19 @@ Minimum `secrets.env`:
 ```bash
 CALLSIGN="N0CALL"
 GRID_SQUARE="CN87uo"      # used for the APRS beacon position
-USER_USERNAME="emcomm"
+USER_USERNAME="emcomm"    # match the account you'll create in the installer
 WIFI_SSID_HOME="network"
 WIFI_PASSWORD_HOME="password"
 ```
 
 Leave `APRS_PASSCODE` empty — it's computed from your callsign.
+
+`secrets.env` is gitignored, so it does **not** travel with a `git clone` and
+is **not** part of `et-user-backup`. The build copies it into the ISO at
+`/opt/emcomm-customizer-cache/secrets.env`, which means it reappears only on a
+machine installed *from* one of your custom ISOs — and that a non-minimal ISO
+contains your WiFi PSK and Winlink password. Keep a copy off-machine, and build
+with `-m` if you intend to share the ISO.
 
 ## Release Modes
 

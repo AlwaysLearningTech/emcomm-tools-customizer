@@ -7,7 +7,6 @@
 #
 # Reads (optional, from secrets.env):
 #   ENABLE_ANYTONE_D578    yes|no  (default yes)
-#   ANYTONE_DEFAULT_MODE   ptt|com (default ptt)
 
 # ---------------------------------------------------------------------------
 # Hamlib model number: 37001 = RIG_MODEL_ATD578UVIII
@@ -18,9 +17,17 @@
 # CowboyPilot/Hamlib -- run ./build-hamlib-anytone.sh first, or rigctld will
 # reject model 37001 outright.
 #
-# Two operating modes, selected via the backend's commode setting. ETC's
-# wrapper-rigctld.sh already reads .rigctrl.conf and passes it through as
-# --set-conf=<value>, so commode=1 needs no wrapper changes whatsoever.
+# ONE profile, commode=1 (full rig control). ETC's wrapper-rigctld.sh already
+# reads .rigctrl.conf and passes it through as --set-conf=<value>, so this
+# needs no wrapper changes whatsoever.
+#
+# A second commode=0 "PTT only" profile used to be written here as the default.
+# It was removed: it duplicated stock ETC's digirig-mobile-no-cat profile, which
+# keys the radio via the DigiRig's serial RTS line using Hamlib model 6
+# (RIG_MODEL_DUMMY_NOVFO) and never talks to the radio at all. Both gave you
+# nothing but PTT -- except the commode=0 version also required this custom
+# Hamlib build to do it. If you want PTT-only operation, select
+# "DigiRig Mobile (No CAT)" with et-radio; it needs no custom Hamlib.
 #
 # Wiring assumed: the AT-D578 DigiRig cable (CAT-control variant), which carries
 # the DigiRig Mobile's CP2102 serial and audio to the radio's RJ-45 mic jack.
@@ -42,7 +49,6 @@ customize_radio_configs() {
     local radios_dir
     radios_dir="$(etpath "${ET_PREFIX}/conf/radios.d")"
     local profile="${radios_dir}/anytone-d578uv.json"
-    local profile_com="${radios_dir}/anytone-d578uv-com.json"
 
     # Warn early on the live path; an ISO build can't exec the target's rigctl.
     if [ "$ET_ROOT" = "/" ]; then
@@ -54,22 +60,27 @@ customize_radio_configs() {
         fi
     fi
 
-    # --- commode=0: PTT only, radio display stays usable (default) ---------
+    # --- commode=1: full rig control. The radio front panel locks out. ------
+    # et-radio resolves a selection by .id, which must match the filename stem.
     write_file "$profile" 644 <<EOF
 {
   "id": "anytone-d578uv",
   "vendor": "Anytone",
-  "model": "D578UVIII (DigiRig, PTT only)",
+  "model": "D578UVIII (COM mode)",
   "rigctrl": {
     "id": "${ANYTONE_MODEL_ID}",
     "baud": "${ANYTONE_BAUD}",
-    "ptt": "RIG"
+    "ptt": "RIG",
+    "conf": "commode=1"
   },
   "notes": [
-    "PTT-only mode (commode=0) - the radio display stays usable",
-    "Set your VFO, power level and squelch manually on the radio",
-    "PTT keys whichever VFO is selected, exactly like the physical mic PTT",
-    "For frequency/VFO control instead, select 'D578UVIII (COM mode)'"
+    "COM mode (commode=1) - get/set frequency, VFO A/B, clock, and PTT",
+    "The radio displays EXTERNAL CABLE MODE and its front panel locks out",
+    "set_freq only works with Channel A selected AND VFO A in VFO mode",
+    "If VFO A is in MR (memory) mode the radio will refuse frequency changes",
+    "If VFO B is selected, get_freq returns VFO A and set_freq is refused",
+    "PTT works regardless of the above, on whichever VFO is selected",
+    "For PTT without the front panel locking, select 'DigiRig Mobile (No CAT)'"
   ],
   "fieldNotes": [
     "Requires the AnyTone Hamlib backend - see build-hamlib-anytone.sh",
@@ -81,50 +92,15 @@ customize_radio_configs() {
   ]
 }
 EOF
-    log "SUCCESS" "Wrote $(basename "$profile")  (model ${ANYTONE_MODEL_ID}, commode=0, ptt=RIG)"
-
-    # --- commode=1: full rig control, radio front panel locks out ----------
-    write_file "$profile_com" 644 <<EOF
-{
-  "id": "anytone-d578uv-com",
-  "vendor": "Anytone",
-  "model": "D578UVIII (COM mode)",
-  "rigctrl": {
-    "id": "${ANYTONE_MODEL_ID}",
-    "baud": "${ANYTONE_BAUD}",
-    "ptt": "RIG",
-    "conf": "commode=1"
-  },
-  "notes": [
-    "COM mode (commode=1) - adds get/set frequency, VFO A/B and clock",
-    "The radio displays EXTERNAL CABLE MODE and its front panel locks out",
-    "set_freq only works with Channel A selected AND VFO A in VFO mode",
-    "If VFO A is in MR (memory) mode the radio will refuse frequency changes",
-    "If VFO B is selected, get_freq returns VFO A and set_freq is refused",
-    "PTT works regardless of the above, on whichever VFO is selected"
-  ],
-  "fieldNotes": [
-    "Requires the AnyTone Hamlib backend - see build-hamlib-anytone.sh",
-    "Uses the AT-D578 DigiRig cable (CAT variant) into the radio RJ-45 mic jack",
-    "Prefer the PTT-only profile unless you specifically need rig control",
-    "Run 'et-mode' to select the desired mode of operation"
-  ]
-}
-EOF
-    log "SUCCESS" "Wrote $(basename "$profile_com")  (model ${ANYTONE_MODEL_ID}, commode=1, ptt=RIG)"
-
-    # Default active radio. et-radio resolves the selection by .id, which must
-    # match the filename stem -- both profiles satisfy that.
-    local default_target="$profile"
-    [ "${ANYTONE_DEFAULT_MODE:-ptt}" = "com" ] && default_target="$profile_com"
+    log "SUCCESS" "Wrote $(basename "$profile")  (model ${ANYTONE_MODEL_ID}, commode=1, ptt=RIG)"
 
     backup "${radios_dir}/active-radio.json"
     if [ "$ET_DRY_RUN" -eq 0 ]; then
         # RELATIVE symlink, deliberately. An absolute one would embed the build
-        # machine's squashfs path and dangle on the installed system. Both
-        # profiles live in this directory, so the basename always resolves.
-        ln -sfn "$(basename "$default_target")" "${radios_dir}/active-radio.json"
-        log "SUCCESS" "Active radio -> $(basename "$default_target" .json). Switch with 'et-radio'."
+        # machine's squashfs path and dangle on the installed system. The
+        # profile lives in this directory, so the basename always resolves.
+        ln -sfn "$(basename "$profile")" "${radios_dir}/active-radio.json"
+        log "SUCCESS" "Active radio -> $(basename "$profile" .json). Switch with 'et-radio'."
     fi
 
     # -----------------------------------------------------------------------

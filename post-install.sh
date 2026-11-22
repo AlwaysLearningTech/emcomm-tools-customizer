@@ -177,31 +177,72 @@ install_python_tools() {
 install_chirp() {
     log_info "=== Installing CHIRP ==="
 
-    if command -v chirp >/dev/null 2>&1; then
-        log_success "CHIRP already installed: $(chirp --version 2>/dev/null || echo present)"
+    # Check for OUR venv, not just a `chirp` on PATH. A previous version of
+    # this script installed PyPI's unrelated "chirp" package, so a bare
+    # `command -v chirp` can succeed while CHIRP is not actually present.
+    if [ -x "${HOME}/.local/share/chirp-venv/bin/chirp" ]; then
+        log_success "CHIRP already installed at ~/.local/share/chirp-venv"
         return 0
+    fi
+
+    if command -v chirp >/dev/null 2>&1; then
+        log_warn "A 'chirp' command exists at $(command -v chirp) but not from this script."
+        log_warn "If it was installed by an older version, it is PyPI's unrelated"
+        log_warn "bioacoustics package. Remove it with: pipx uninstall chirp"
+        log_warn "or: pip3 uninstall chirp    -- then re-run this."
     fi
 
     [[ ":$PATH:" != *":$HOME/.local/bin:"* ]] && export PATH="$HOME/.local/bin:$PATH"
 
-    if ! command -v pipx >/dev/null 2>&1; then
-        log_warn "pipx not found -- installing it (needs sudo)"
-        sudo apt-get update -qq 2>/dev/null || true
-        sudo apt-get install -y pipx >/dev/null 2>&1 || {
-            log_error "Could not install pipx"; return 1; }
+    # Install from the OFFICIAL GIT REPO, not from PyPI.
+    #
+    # This used to run `pipx install chirp`, falling back to
+    # `pip3 install --user chirp`. Both "succeeded" and neither installed
+    # CHIRP: the name "chirp" on PyPI belongs to an unrelated 2013 package for
+    # analyzing bioacoustic recordings. Anyone who ran this got a working
+    # `chirp` command that could not program a radio.
+    #
+    # The two other obvious sources do not work either:
+    #   - archive.chirpmyradio.com serves HTTP 403 to non-browser clients, so
+    #     the official wheel cannot be fetched by a script.
+    #   - apt's chirp on Ubuntu 22.10 is version 20200227, six years stale.
+    #
+    # wxPython must come from the distro (python3-wxgtk4.0); building it from
+    # source via pip is not viable. Hence --system-site-packages.
+    local venv="${HOME}/.local/share/chirp-venv"
+    local git_ref="${CHIRP_GIT_REF:-master}"
+
+    log_info "Installing build prerequisites (needs sudo)..."
+    sudo apt-get update -qq 2>/dev/null || true
+    if ! sudo apt-get install -y python3-wxgtk4.0 python3-venv git >/dev/null 2>&1; then
+        log_error "Could not install python3-wxgtk4.0 / python3-venv / git"
+        log_error "If apt could not find them, run: sudo ./fix-apt-sources.sh"
+        return 1
     fi
 
-    log_info "Installing CHIRP via pipx..."
-    if ! pipx install chirp 2>/dev/null; then
-        log_warn "pipx install failed, trying pip3 --user"
-        pip3 install --user chirp || { log_error "CHIRP installation failed"; return 1; }
+    log_info "Building CHIRP from git (ref: ${git_ref}) into ${venv}..."
+    rm -rf "$venv"
+    python3 -m venv --system-site-packages "$venv" || {
+        log_error "Could not create venv at $venv"; return 1; }
+
+    "$venv/bin/pip" install --upgrade pip wheel setuptools >/dev/null 2>&1 || {
+        log_error "Could not upgrade pip in the venv"; return 1; }
+
+    if ! "$venv/bin/pip" install "git+https://github.com/kk7ds/chirp.git@${git_ref}"; then
+        log_error "CHIRP install failed"
+        return 1
     fi
 
-    if command -v chirp >/dev/null 2>&1; then
-        log_success "CHIRP installed: $(chirp --version 2>/dev/null || echo present)"
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$venv/bin/chirp" "$HOME/.local/bin/chirp"
+
+    if "$venv/bin/chirp" --help >/dev/null 2>&1; then
+        log_success "CHIRP installed: $venv (linked to ~/.local/bin/chirp)"
+        log_info "NOTE: CHIRP does not support AnyTone DMR radios."
+        log_info "      Use anytone-cps for the D578UVIII and D890UV."
         touch "$HOME/.post-install-completed"
     else
-        log_error "CHIRP not on PATH after install -- open a new shell and retry"
+        log_error "CHIRP installed but will not run -- check the output above"
         return 1
     fi
 }

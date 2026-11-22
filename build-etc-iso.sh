@@ -51,6 +51,11 @@ MINIMAL_BUILD=0                           # When 1, omit cache files from ISO to
 KEEP_WORK=0                               # When 1, preserve .work directory for iterative debugging
 VENTOY_MOUNT=""                           # Path to mounted Ventoy USB
 
+# Optional (best-effort) steps that returned non-zero, reported together at the
+# end of the customization sequence so a long build's warnings aren't lost in
+# scrollback.
+declare -a FAILED_OPTIONAL_STEPS=()
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -116,6 +121,8 @@ source "${SCRIPT_DIR}/lib/customize-aprs.sh"
 source "${SCRIPT_DIR}/lib/customize-radio.sh"
 # shellcheck source=lib/customize-addons.sh
 source "${SCRIPT_DIR}/lib/customize-addons.sh"
+# shellcheck source=lib/customize-anytone-dmr.sh
+source "${SCRIPT_DIR}/lib/customize-anytone-dmr.sh"
 
 # ============================================================================
 # Usage
@@ -1324,16 +1331,30 @@ customize_desktop() {
     source "$SECRETS_FILE"
     log "DEBUG" "Sourced secrets file for desktop config"
     
-    local color_scheme="${DESKTOP_COLOR_SCHEME:-prefer-dark}"
-    local scaling="${DESKTOP_SCALING_FACTOR:-1.0}"
-    local disable_a11y="${DISABLE_ACCESSIBILITY:-yes}"
-    local auto_brightness="${AUTOMATIC_SCREEN_BRIGHTNESS:-false}"
-    local dim_screen="${DIM_SCREEN:-true}"
-    local screen_blank="${SCREEN_BLANK:-true}"
-    local screen_blank_timeout="${SCREEN_BLANK_TIMEOUT:-300}"
-    
+    # All hardcoded as of v2.1.0 -- these are no longer secrets.env settings.
+    #
+    # Every value here now MATCHES ETC R7 rather than fighting it. R7 natively
+    # sets brightness to 100% on login, disables automatic brightness, disables
+    # dimming, and enables dark mode. The old DIM_SCREEN default of "true" was
+    # re-enabling, on every build, the dimming R7 had just turned off.
+    #
+    # This function is still required even though it mostly agrees with R7: it
+    # creates /etc/dconf/profile/user, the database cascade that
+    # customize_power()'s keyfile depends on. Deleting it would silently break
+    # the power settings.
+    local color_scheme="prefer-dark"
+    local scaling disable_a11y auto_brightness dim_screen
+    scaling=$(dconf_double "1.0")
+    disable_a11y="yes"
+    auto_brightness=$(dconf_bool "no")
+    dim_screen=$(dconf_bool "no")
+
+    # 0 disables blanking. GNOME treats these as seconds. A field laptop
+    # running a net should not blank its display.
+    local screen_blank_timeout=0
+
     log "DEBUG" "Desktop config: color_scheme=$color_scheme, scaling=$scaling"
-    log "DEBUG" "Display config: auto_brightness=$auto_brightness, dim=$dim_screen, blank=$screen_blank"
+    log "DEBUG" "Display config: auto_brightness=$auto_brightness, dim=$dim_screen, blank_timeout=$screen_blank_timeout"
     
     # GNOME dconf uses a binary database, not plain text files in user.d
     # To set system-wide defaults, we use:
@@ -1374,13 +1395,21 @@ icon-theme='${icon_theme}'
 text-scaling-factor=${scaling}
 EOF
 
-    # Add accessibility settings if disabled
+    # Add accessibility settings if disabled.
+    #
+    # Two fixes here. The block used to set
+    # always-show-universal-access-status=true, which pins the accessibility
+    # menu INTO the top bar -- the opposite of what DISABLE_ACCESSIBILITY=yes
+    # asks for. And it re-declared [org/gnome/desktop/interface]
+    # text-scaling-factor=1.0, which silently overrode the
+    # DESKTOP_SCALING_FACTOR written above it, so that setting never worked
+    # for anyone who changed it.
     if [[ "$disable_a11y" == "yes" ]]; then
         cat >> "$dconf_file" <<'EOF'
 
 # Disable accessibility features
 [org/gnome/desktop/a11y]
-always-show-universal-access-status=true
+always-show-universal-access-status=false
 
 [org/gnome/desktop/a11y/applications]
 screen-keyboard-enabled=false
@@ -1393,23 +1422,25 @@ large-text=false
 [org/gnome/terminal/legacy]
 menu-accelerator-enabled=true
 
-[org/gnome/desktop/interface]
-text-scaling-factor=1.0
-
 [org/gnome/settings-daemon/peripherals/keyboard]
 remember-numlock-state=true
 EOF
     fi
 
-    # Add display/brightness settings
+    # Add display/brightness settings.
+    #
+    # sleep-display-ac / sleep-display-battery are INTEGER keys. They used to
+    # be written quoted ('300'), which dconf parses as a string, rejects as a
+    # type mismatch, and drops -- so screen blanking was never actually
+    # configured by any previous build. Unquoted here.
     cat >> "$dconf_file" <<EOF
 
 # Display and brightness settings
 [org/gnome/settings-daemon/plugins/power]
 ambient-enabled=${auto_brightness}
 idle-dim=${dim_screen}
-sleep-display-ac='${screen_blank_timeout}'
-sleep-display-battery='${screen_blank_timeout}'
+sleep-display-ac=${screen_blank_timeout}
+sleep-display-battery=${screen_blank_timeout}
 EOF
 
     # Compile dconf database so GNOME recognizes the settings on first boot
@@ -1608,35 +1639,61 @@ customize_power() {
     log "DEBUG" "Sourced secrets file for power config"
     
     # Read power settings with defaults
-    local power_mode="${POWER_MODE:-balanced}"
     local lid_close_ac="${POWER_LID_CLOSE_AC:-suspend}"
     local lid_close_battery="${POWER_LID_CLOSE_BATTERY:-suspend}"
     local power_button="${POWER_BUTTON_ACTION:-interactive}"
     local idle_ac="${POWER_IDLE_AC:-nothing}"
     local idle_battery="${POWER_IDLE_BATTERY:-suspend}"
     local idle_timeout="${POWER_IDLE_TIMEOUT:-900}"
-    local auto_power_saver="${AUTOMATIC_POWER_SAVER:-true}"
-    local auto_suspend="${AUTOMATIC_SUSPEND:-true}"
-    
-    log "DEBUG" "Power settings: mode=$power_mode, lid_ac=$lid_close_ac, lid_battery=$lid_close_battery, button=$power_button"
-    log "DEBUG" "Idle settings: ac=$idle_ac, battery=$idle_battery, timeout=$idle_timeout"
-    log "DEBUG" "Auto settings: power_saver=$auto_power_saver, suspend=$auto_suspend"
-    
+    local auto_power_saver auto_suspend
+    auto_power_saver=$(dconf_bool "${AUTOMATIC_POWER_SAVER:-true}")
+    auto_suspend=$(dconf_bool "${AUTOMATIC_SUSPEND:-true}")
+
+    # AUTOMATIC_SUSPEND=no must actually prevent suspend, which means forcing
+    # both sleep-inactive types to 'nothing' and the session idle-delay to 0.
+    # Setting a timeout alone does nothing if the type is still 'suspend'.
+    local idle_delay="$idle_timeout"
+    if [ "$auto_suspend" = "false" ]; then
+        idle_ac="nothing"
+        idle_battery="nothing"
+        idle_delay=0
+        log "DEBUG" "AUTOMATIC_SUSPEND=no -- forcing sleep-inactive types to 'nothing'"
+    fi
+
+    log "DEBUG" "Power: lid_ac=$lid_close_ac, lid_battery=$lid_close_battery, button=$power_button"
+    log "DEBUG" "Idle: ac=$idle_ac, battery=$idle_battery, timeout=$idle_timeout, delay=$idle_delay"
+    log "DEBUG" "Auto: power_saver=$auto_power_saver, suspend=$auto_suspend"
+
     # Power management uses dconf - add to the same system-wide database
     # as the desktop settings (created by customize_desktop)
     local dconf_db_dir="${SQUASHFS_DIR}/etc/dconf/db/local.d"
     local dconf_file="${dconf_db_dir}/01-power-settings"
-    
+
     # Ensure directory exists (should already exist from customize_desktop)
     mkdir -p "$dconf_db_dir"
     log "DEBUG" "Writing power dconf settings: $dconf_file"
-    
+
+    # Every key below was verified to exist in GNOME 43's schemas via
+    # `gsettings list-keys`. Three keys that used to be written here did NOT
+    # exist and were silently discarded on every build:
+    #
+    #   power-profile-daemon            -- not a dconf key at all; the power
+    #                                      profile is set over D-Bus by
+    #                                      power-profiles-daemon. POWER_MODE
+    #                                      is therefore not settable here and
+    #                                      is no longer read.
+    #   .../power/battery-saver
+    #     enable-battery-saver          -- no such schema path. The real key is
+    #                                      power-saver-profile-on-low-battery,
+    #                                      in the power schema itself.
+    #   org/gnome/desktop/session
+    #     auto-save-session-timeout     -- no such key. The idle key in that
+    #                                      schema is idle-delay, a uint32.
     cat > "$dconf_file" <<EOF
 # Power management settings
 # Generated by emcomm-tools-customizer
 
 [org/gnome/settings-daemon/plugins/power]
-power-profile-daemon='${power_mode}'
 lid-close-ac-action='${lid_close_ac}'
 lid-close-battery-action='${lid_close_battery}'
 power-button-action='${power_button}'
@@ -1644,14 +1701,12 @@ sleep-inactive-ac-type='${idle_ac}'
 sleep-inactive-battery-type='${idle_battery}'
 sleep-inactive-ac-timeout=${idle_timeout}
 sleep-inactive-battery-timeout=${idle_timeout}
-
-[org/gnome/settings-daemon/plugins/power/battery-saver]
-enable-battery-saver=${auto_power_saver}
+power-saver-profile-on-low-battery=${auto_power_saver}
 
 [org/gnome/desktop/session]
-auto-save-session-timeout=${auto_suspend}
+idle-delay=uint32 ${idle_delay}
 EOF
-    
+
     # Recompile dconf database
     log "DEBUG" "Recompiling dconf database..."
     setup_chroot_mounts
@@ -1665,6 +1720,74 @@ EOF
     trap - EXIT
     
     log "SUCCESS" "Power management configured"
+}
+
+customize_upower() {
+    log "INFO" "Configuring UPower battery thresholds..."
+
+    # Battery-PERCENTAGE actions live in UPower, not dconf.
+    #
+    # This exists because "suspend at 10% battery" has no dconf representation.
+    # org.gnome.settings-daemon.plugins.power's sleep-inactive-battery-type is
+    # an ENUM (nothing/suspend/hibernate/...) driven by an IDLE TIMER, not a
+    # charge level -- writing "10%" into it would be silently discarded, which
+    # is the exact failure mode this release spent its time removing.
+    #
+    # UPower only consults percentages when UsePercentageForPolicy=true, so set
+    # that explicitly rather than relying on the distro default.
+    local pct="${POWER_BATTERY_ACTION_PERCENT:-10}"
+    local action="${POWER_BATTERY_ACTION:-Suspend}"
+
+    if ! [[ "$pct" =~ ^[0-9]+$ ]] || [ "$pct" -lt 1 ] || [ "$pct" -gt 100 ]; then
+        log "ERROR" "POWER_BATTERY_ACTION_PERCENT must be 1-100, got '$pct'"
+        return 1
+    fi
+
+    case "$action" in
+        PowerOff|Hibernate|HybridSleep|Suspend|Ignore) ;;
+        *)
+            log "ERROR" "POWER_BATTERY_ACTION must be one of PowerOff, Hibernate, HybridSleep, Suspend, Ignore -- got '$action'"
+            return 1
+            ;;
+    esac
+
+    local conf="${SQUASHFS_DIR}/etc/UPower/UPower.conf"
+    if [ ! -f "$conf" ]; then
+        log "WARN" "$conf not found -- skipping battery threshold config"
+        return 0
+    fi
+
+    # UPower requires PercentageLow > PercentageCritical > PercentageAction.
+    # If the requested action point is at or above the stock warning levels,
+    # lift them so the ordering stays valid; UPower rejects the file otherwise
+    # and falls back to its built-in defaults.
+    local low=20 critical=5
+    if [ "$pct" -ge "$critical" ]; then
+        critical=$((pct + 5))
+        low=$((critical + 10))
+    fi
+
+    sed -i \
+        -e "s/^#\?UsePercentageForPolicy=.*/UsePercentageForPolicy=true/" \
+        -e "s/^#\?PercentageLow=.*/PercentageLow=${low}/" \
+        -e "s/^#\?PercentageCritical=.*/PercentageCritical=${critical}/" \
+        -e "s/^#\?PercentageAction=.*/PercentageAction=${pct}/" \
+        -e "s/^#\?CriticalPowerAction=.*/CriticalPowerAction=${action}/" \
+        "$conf"
+
+    # Confirm the writes landed. sed reports success even when nothing matched.
+    local applied=0
+    grep -qE "^PercentageAction=${pct}$" "$conf" && applied=$((applied + 1))
+    grep -qE "^CriticalPowerAction=${action}$" "$conf" && applied=$((applied + 1))
+    grep -qE "^UsePercentageForPolicy=true$" "$conf" && applied=$((applied + 1))
+
+    if [ "$applied" -ne 3 ]; then
+        log "ERROR" "UPower.conf edits did not apply (${applied}/3) -- format may have changed"
+        return 1
+    fi
+
+    log "SUCCESS" "Battery: ${action} at ${pct}% (warn ${low}%, critical ${critical}%)"
+    return 0
 }
 
 customize_timezone() {
@@ -1705,18 +1828,20 @@ customize_additional_packages() {
     source "$SECRETS_FILE"
     log "DEBUG" "Sourced secrets file for package config"
     
-    # Core development packages (always installed)
-    local core_packages="code nodejs npm"
-    
-    # Additional packages from secrets.env
-    local additional_packages="${ADDITIONAL_PACKAGES:-}"
-    
-    # Combine core + additional packages
-    local all_user_packages="$core_packages"
-    if [ -n "$additional_packages" ]; then
-        all_user_packages="$all_user_packages $additional_packages"
-    fi
-    
+    # Hardcoded. These are build dependencies of the toolchain we ship, not a
+    # user preference, so they are no longer read from secrets.env.
+    #
+    # NOTE: "code" is deliberately NOT in this list. Ubuntu 22.10 has no 'code'
+    # package, and this function removes the Microsoft repos a few lines below,
+    # so apt can never satisfy it -- the old `apt-get install code` here failed
+    # on every single build and the failure was swallowed by the `|| log WARN`
+    # on the install line. VS Code is installed from a .deb by install_vscode().
+    #
+    # Do NOT add anything ETC already ships. R7 provides thunderbird, vlc,
+    # python3.11 and rust natively; kiwix since R4; wsjtx/fldigi with PnP
+    # wiring. Installing over the top risks a version ETC does not expect.
+    local all_user_packages="nodejs npm"
+
     log "DEBUG" "Packages to install: $all_user_packages"
     
     # Install packages in chroot
@@ -1739,344 +1864,119 @@ customize_additional_packages() {
     log "INFO" "Updating package cache..."
     chroot "${SQUASHFS_DIR}" apt-get update 2>&1 | tail -5 | tee -a "$LOG_FILE"
     
-    # Install packages from standard repos (Edge not available in old-releases)
-    local all_packages="${all_user_packages}"
-    log "INFO" "Installing packages: $all_packages"
-    # Use -y to auto-confirm, -qq for less output
-    # Note: DO NOT quote $all_packages - we need word splitting for separate package names
-    if chroot "${SQUASHFS_DIR}" apt-get install -y -qq $all_packages 2>&1 | tail -10 | tee -a "$LOG_FILE"; then
-        log "SUCCESS" "Packages installed successfully"
+    # Install packages from standard repos.
+    # Guarded: with core_packages now empty and ADDITIONAL_PACKAGES unset, an
+    # unguarded `apt-get install` would run with no operands at all.
+    local all_packages="${all_user_packages# }"
+    if [ -n "$all_packages" ]; then
+        log "INFO" "Installing packages: $all_packages"
+        # Use -y to auto-confirm, -qq for less output
+        # Note: DO NOT quote $all_packages - we need word splitting for separate package names
+        if chroot "${SQUASHFS_DIR}" apt-get install -y -qq $all_packages 2>&1 | tail -10 | tee -a "$LOG_FILE"; then
+            log "SUCCESS" "Packages installed successfully"
+        else
+            log "WARN" "Some packages may have failed to install - see log for details"
+        fi
     else
-        log "WARN" "Some packages may have failed to install - see log for details"
+        log "DEBUG" "No additional apt packages requested"
     fi
-    
-    # === CHIRP Installation Setup ===
-    # Can't build CHIRP from source in chroot (numpy wheel build fails with old-releases)
-    # Install via post-install script that runs on first boot instead
-    log "INFO" "Setting up CHIRP installation for first boot..."
-    local chirp_install_script="${SQUASHFS_DIR}/usr/local/bin/install-chirp-first-boot.sh"
-    mkdir -p "$(dirname "$chirp_install_script")"
-    cat > "$chirp_install_script" <<'CHIRP_SCRIPT'
-#!/bin/bash
-# Install CHIRP on first boot - avoids build issues in chroot
-set -e
-MARKER="/var/lib/emcomm-chirp-installed"
-if [ -f "$MARKER" ]; then
-    exit 0
-fi
-apt-get update > /dev/null 2>&1 || true
-apt-get install -y python3-pip > /dev/null 2>&1 || true
-python3 -m pip install --upgrade pip setuptools wheel > /dev/null 2>&1 || true
-python3 -m pip install chirp > /dev/null 2>&1 && touch "$MARKER" || true
-CHIRP_SCRIPT
-    chmod +x "$chirp_install_script"
-    log "DEBUG" "CHIRP first-boot script created"
-    
-    # === Microsoft Edge Installation Setup ===
-    # Edge repo has GPG issues with old-releases, use post-install instead
-    log "INFO" "Setting up Microsoft Edge installation for first boot..."
-    local edge_install_script="${SQUASHFS_DIR}/usr/local/bin/install-edge-first-boot.sh"
-    mkdir -p "$(dirname "$edge_install_script")"
-    cat > "$edge_install_script" <<'EDGE_SCRIPT'
-#!/bin/bash
-# Install Microsoft Edge on first boot
-set -e
-MARKER="/var/lib/emcomm-edge-installed"
-if [ -f "$MARKER" ]; then
-    exit 0
-fi
-apt-get update > /dev/null 2>&1 || true
-# Try to install from Debian packages directly (avoids repo issues)
-wget -q https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_latest_amd64.deb -O /tmp/edge.deb 2>/dev/null && \
-    dpkg -i /tmp/edge.deb > /dev/null 2>&1 && rm -f /tmp/edge.deb && touch "$MARKER" || {
-    # Fallback: use apt with repo
-    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | apt-key add - > /dev/null 2>&1 || true
-    echo 'deb [arch=amd64] https://packages.microsoft.com/repos/edge stable main' > /etc/apt/sources.list.d/microsoft-edge.list
-    apt-get update > /dev/null 2>&1 || true
-    apt-get install -y microsoft-edge-stable > /dev/null 2>&1 && touch "$MARKER" || true
-}
-EDGE_SCRIPT
-    chmod +x "$edge_install_script"
-    log "DEBUG" "Edge first-boot script created"
-    
-    # Create systemd service to run both scripts on first boot
-    local first_boot_service="${SQUASHFS_DIR}/etc/systemd/system/emcomm-first-boot-apps.service"
-    mkdir -p "$(dirname "$first_boot_service")"
-    cat > "$first_boot_service" <<'SERVICE_EOF'
-[Unit]
-Description=EmComm Tools First Boot Application Installation
-After=network-online.target
-Wants=network-online.target
-ConditionPathExists=!/var/lib/emcomm-first-boot-apps-done
 
-[Service]
-Type=oneshot
-ExecStart=/bin/bash -c '/usr/local/bin/install-chirp-first-boot.sh && /usr/local/bin/install-edge-first-boot.sh && touch /var/lib/emcomm-first-boot-apps-done'
-RemainAfterExit=yes
-StandardOutput=journal
-StandardError=journal
+    # CHIRP, VS Code and anytone-cps are installed at BUILD time by their own
+    # functions below, not deferred to first boot. The old first-boot approach
+    # was removed because every path in it was broken:
+    #
+    #   - `pip install chirp` installs an unrelated 2013 BIOACOUSTICS package
+    #     that happens to own the name "chirp" on PyPI. It is not CHIRP the
+    #     radio programmer and never was.
+    #   - Microsoft Edge was installed by two competing code paths, one using
+    #     `apt-key`, which is deprecated and removed. Edge was never asked for;
+    #     ETC ships the Min browser.
+    #   - Every step ended in `|| true`, so all of the above failed silently
+    #     and the build still reported success.
+    #
+    # Installing at build time means a failure breaks the build loudly, here,
+    # instead of 40 minutes into a field deployment with no network.
 
-[Install]
-WantedBy=multi-user.target
-SERVICE_EOF
-    chroot "${SQUASHFS_DIR}" systemctl enable emcomm-first-boot-apps.service 2>/dev/null || log "WARN" "Could not enable systemd service"
-    log "DEBUG" "First-boot systemd service created and enabled"
-    
-    log "SUCCESS" "CHIRP and Microsoft Edge will be installed on first boot"
-    
     cleanup_chroot_mounts
     trap - EXIT
 }
 
 setup_first_login_packages() {
-    log "INFO" "Setting up first-login services (Anytone restoration, CHIRP, Microsoft Edge)..."
-    
-    # CRITICAL: Anytone radio config MUST be restored via systemd service on first boot
-    # (NOT via profile.d because bash profile scripts don't run reliably on GUI logins)
-    # Profile.d script alone was unreliable - replaced with systemd service that runs early
-    
-    local systemd_dir="${SQUASHFS_DIR}/etc/systemd/system"
-    local service_file="${systemd_dir}/emcomm-first-boot.service"
+    # Previously 270 lines that installed CHIRP and Microsoft Edge on first
+    # login via THREE overlapping mechanisms: two systemd services
+    # (emcomm-first-boot.service, emcomm-first-boot-apps.service) and an
+    # /etc/profile.d/99-install-chirp-edge.sh that was written twice -- once at
+    # build time, then overwritten at runtime by the service. They raced, they
+    # duplicated each other's work, and every failure path ended in `|| true`.
+    #
+    # CHIRP, VS Code and anytone-cps are now installed into the squashfs at
+    # build time. All that is left is re-asserting the active radio symlink,
+    # which is cheap, idempotent insurance in case anything downstream of the
+    # squashfs rewrites radios.d.
+    log "INFO" "Setting up first-boot active-radio guard..."
+
+    if [ "${ENABLE_ANYTONE_D578:-yes}" != "yes" ]; then
+        log "DEBUG" "ENABLE_ANYTONE_D578=no -- skipping first-boot radio guard"
+        return 0
+    fi
+
+    # Single profile since v2.1.0 -- the commode=0 "PTT only" variant was
+    # removed as a duplicate of stock ETC's digirig-mobile-no-cat.
+    local default_profile="anytone-d578uv.json"
+
     local service_script="${SQUASHFS_DIR}/usr/local/bin/emcomm-first-boot.sh"
-    local profile_d_script="${SQUASHFS_DIR}/etc/profile.d/99-install-chirp-edge.sh"
-    
-    mkdir -p "$systemd_dir"
-    
-    # === CREATE PROFILE.D SCRIPT AT BUILD TIME (Fallback) ===
-    # Even if systemd service fails, users can still get CHIRP/Edge on login
-    log "DEBUG" "Creating profile.d script for CHIRP/Edge installation (fallback)..."
-    mkdir -p "$(dirname "$profile_d_script")"
-    cat > "$profile_d_script" <<'PROFILE_EOF'
+    local service_file="${SQUASHFS_DIR}/etc/systemd/system/emcomm-first-boot.service"
+    mkdir -p "$(dirname "$service_script")" "$(dirname "$service_file")"
+
+    cat > "$service_script" <<FIRSTBOOT_EOF
 #!/bin/bash
-# Install CHIRP and Microsoft Edge on first user login
-# Fallback script in case systemd service doesn't run
-# Only runs for 'ubuntu' user, only once
-# CRITICAL: Ubuntu 22.10 is EOL - must fix apt sources first!
+# Re-assert the active radio symlink if it is missing or dangling.
+# customize_radio_configs() already set this at build time; this only covers
+# the case where something later replaced radios.d.
+set -uo pipefail
 
-MARKER_FILE="${HOME}/.etc-install-chirp-edge-done"
-if [ -f "$MARKER_FILE" ]; then
-    return 0 2>/dev/null || exit 0
-fi
-
-if [ "$(id -un)" != "ubuntu" ]; then
-    return 0
-fi
-
-# Only run in interactive shells
-[[ $- == *i* ]] || return 0
-
-# Run in background so it doesn't block login
-(
-    sleep 2  # Wait for system to settle after login
-    touch "$MARKER_FILE"
-    
-    echo ""
-    echo "====== EmComm Tools: Installing Packages ======"
-    echo ""
-    
-    # CRITICAL: Fix apt sources for Ubuntu 22.10 (Kinetic) EOL
-    # Archive has moved to old-releases.ubuntu.com
-    echo "Fixing apt sources for Ubuntu 22.10 (EOL)..."
-    if grep -q "archive.ubuntu.com" /etc/apt/sources.list 2>/dev/null; then
-        sudo sed -i 's/archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
-        sudo sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
-        echo "✓ Apt sources updated to old-releases.ubuntu.com"
-    fi
-    
-    echo "Updating package lists (this may take a minute)..."
-    if sudo apt-get update -qq 2>/dev/null; then
-        echo "✓ Package lists updated"
-        
-        # CHIRP
-        echo "Installing CHIRP..."
-        if sudo apt-get install -y -qq chirp 2>/dev/null; then
-            echo "✓ CHIRP installed"
-        else
-            echo "✗ CHIRP failed (can install manually: sudo apt-get install chirp)"
-        fi
-    else
-        echo "✗ apt-get update failed - check network connectivity"
-        echo "  Manual fix: sudo apt-get update && sudo apt-get install chirp"
-    fi
-    
-    # Microsoft Edge (downloaded directly, doesn't need apt sources)
-    echo "Installing Microsoft Edge..."
-    EDGE_DEB="/tmp/microsoft-edge-stable.deb"
-    if wget -q --timeout=30 --tries=3 "https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_latest_amd64.deb" -O "$EDGE_DEB" 2>/dev/null && [ -f "$EDGE_DEB" ] && [ -s "$EDGE_DEB" ]; then
-        if sudo dpkg -i "$EDGE_DEB" >/dev/null 2>&1; then
-            sudo apt-get install -y -f >/dev/null 2>&1
-            echo "✓ Microsoft Edge installed"
-        else
-            echo "✗ Edge dpkg install failed"
-        fi
-        rm -f "$EDGE_DEB"
-    else
-        echo "✗ Edge download failed (install from https://www.microsoft.com/edge)"
-    fi
-    
-    echo ""
-    echo "====== Package Installation Complete ======"
-    echo "Log: /var/log/emcomm-first-boot.log"
-    echo ""
-) &
-disown 2>/dev/null
-
-return 0 2>/dev/null || true
-PROFILE_EOF
-    chmod 755 "$profile_d_script"
-    log "SUCCESS" "Fallback profile.d script created at build time"
-    
-    mkdir -p "$systemd_dir"
-    
-    log "DEBUG" "Creating first-boot systemd service script: $service_script"
-    
-    # Create the executable script that systemd will run
-    cat > "$service_script" <<'FIRSTBOOT_SCRIPT_EOF'
-#!/bin/bash
-# EmComm Tools Customizer - First Boot Service
-# CRITICAL: Restores Anytone radio config BEFORE user login
-# Also installs CHIRP and Edge on first user login
-# Runs as root, early in boot process
-
-set -e
-
+RADIOS_DIR="/opt/emcomm-tools/conf/radios.d"
+PROFILE="${default_profile}"
 LOGFILE="/var/log/emcomm-first-boot.log"
+
 {
-    echo "[$(date)] EmComm first-boot service starting..."
-    
-    # === PHASE 1: Anytone Restoration (runs at boot, root access) ===
-    # This must happen early, before user login or ETC post-install resets it
-    
-    RADIOS_DIR="/opt/emcomm-tools/conf/radios.d"
-    MARKER_FILE="/var/lib/emcomm-first-boot-done"
-    
-    # Only run once
-    if [ -f "$MARKER_FILE" ]; then
-        echo "[$(date)] First-boot already completed (marker file exists)"
+    echo "[\$(date)] active-radio guard starting"
+
+    if [ ! -d "\${RADIOS_DIR}" ]; then
+        echo "[\$(date)] FAIL \${RADIOS_DIR} does not exist -- ETC not installed?"
+        exit 1
+    fi
+
+    if [ ! -e "\${RADIOS_DIR}/\${PROFILE}" ]; then
+        echo "[\$(date)] FAIL \${PROFILE} missing -- cannot set active radio"
+        exit 1
+    fi
+
+    # -e follows symlinks, so this is false for a dangling link too.
+    if [ -e "\${RADIOS_DIR}/active-radio.json" ]; then
+        echo "[\$(date)] OK active-radio.json already resolves; nothing to do"
         exit 0
     fi
-    
-    if [ -f "${RADIOS_DIR}/anytone-d578uv.json" ]; then
-        echo "[$(date)] Restoring Anytone D578UV as active radio..."
-        if ln -sf "${RADIOS_DIR}/anytone-d578uv.json" "${RADIOS_DIR}/active-radio.json" 2>&1; then
-            echo "[$(date)] ✓ Anytone D578UV linked as active-radio.json"
-        else
-            echo "[$(date)] ✗ Failed to link Anytone (may already be correct)"
-        fi
+
+    # Relative, deliberately: an absolute link would embed a build path.
+    if ln -sfn "\${PROFILE}" "\${RADIOS_DIR}/active-radio.json"; then
+        echo "[\$(date)] OK active radio -> \${PROFILE}"
     else
-        echo "[$(date)] ✗ Anytone radio config not found at ${RADIOS_DIR}/anytone-d578uv.json"
+        echo "[\$(date)] FAIL could not link active-radio.json"
+        exit 1
     fi
-    
-    # === PHASE 2: Schedule first-login package install ===
-    # Create profile.d script for CHIRP/Edge that runs on first user login
-    # (This is AFTER Anytone is already restored)
-    
-    mkdir -p /etc/profile.d
-    
-    cat > /etc/profile.d/99-install-chirp-edge.sh <<'PROFILE_EOF'
-#!/bin/bash
-# Install CHIRP and Microsoft Edge on first user login
-# Only runs for 'ubuntu' user, only once
-# CRITICAL: Ubuntu 22.10 is EOL - must fix apt sources first!
-
-MARKER_FILE="${HOME}/.etc-install-chirp-edge-done"
-if [ -f "$MARKER_FILE" ]; then
-    return 0 2>/dev/null || exit 0
-fi
-
-if [ "$(id -un)" != "ubuntu" ]; then
-    return 0
-fi
-
-# Only run in interactive shells
-[[ $- == *i* ]] || return 0
-
-# Run in background so it doesn't block login
-(
-    sleep 2  # Wait for system to settle after login
-    touch "$MARKER_FILE"
-    
-    echo ""
-    echo "====== EmComm Tools: Installing Packages ======"
-    echo ""
-    
-    # CRITICAL: Fix apt sources for Ubuntu 22.10 (Kinetic) EOL
-    # Archive has moved to old-releases.ubuntu.com
-    echo "Fixing apt sources for Ubuntu 22.10 (EOL)..."
-    if grep -q "archive.ubuntu.com" /etc/apt/sources.list 2>/dev/null; then
-        sudo sed -i 's/archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
-        sudo sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
-        echo "✓ Apt sources updated to old-releases.ubuntu.com"
-    fi
-    
-    echo "Updating package lists (this may take a minute)..."
-    if sudo apt-get update -qq 2>/dev/null; then
-        echo "✓ Package lists updated"
-        
-        # CHIRP
-        echo "Installing CHIRP..."
-        if sudo apt-get install -y -qq chirp 2>/dev/null; then
-            echo "✓ CHIRP installed"
-        else
-            echo "✗ CHIRP failed (can install manually: sudo apt-get install chirp)"
-        fi
-    else
-        echo "✗ apt-get update failed - check network connectivity"
-        echo "  Manual fix: sudo apt-get update && sudo apt-get install chirp"
-    fi
-    
-    # Microsoft Edge (downloaded directly, doesn't need apt sources)
-    echo "Installing Microsoft Edge..."
-    EDGE_DEB="/tmp/microsoft-edge-stable.deb"
-    if wget -q --timeout=30 --tries=3 "https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_latest_amd64.deb" -O "$EDGE_DEB" 2>/dev/null && [ -f "$EDGE_DEB" ] && [ -s "$EDGE_DEB" ]; then
-        if sudo dpkg -i "$EDGE_DEB" >/dev/null 2>&1; then
-            sudo apt-get install -y -f >/dev/null 2>&1
-            echo "✓ Microsoft Edge installed"
-        else
-            echo "✗ Edge dpkg install failed"
-        fi
-        rm -f "$EDGE_DEB"
-    else
-        echo "✗ Edge download failed (install from https://www.microsoft.com/edge)"
-    fi
-    
-    echo ""
-    echo "====== Package Installation Complete ======"
-    echo "Log: /var/log/emcomm-first-boot.log"
-    echo ""
-) &
-disown 2>/dev/null
-
-return 0 2>/dev/null || true
-PROFILE_EOF
-    
-    chmod 755 /etc/profile.d/99-install-chirp-edge.sh
-    echo "[$(date)] Created /etc/profile.d/99-install-chirp-edge.sh for CHIRP/Edge installation"
-    
-    # === PHASE 3: Mark first-boot as complete ===
-    touch "$MARKER_FILE"
-    echo "[$(date)] ✓ First-boot service completed successfully"
-    
-} >> "$LOGFILE" 2>&1
-
-exit 0
-FIRSTBOOT_SCRIPT_EOF
-    
+} >> "\${LOGFILE}" 2>&1
+FIRSTBOOT_EOF
     chmod 755 "$service_script"
-    
-    log "DEBUG" "Creating systemd service file: $service_file"
-    
-    # Create the systemd service that calls the script
-    cat > "$service_file" <<'SYSTEMD_SERVICE_EOF'
+
+    cat > "$service_file" <<'SERVICE_EOF'
 [Unit]
-Description=EmComm Tools First Boot Setup
-After=network.target
-Before=getty.target
-DefaultDependencies=no
+Description=EmComm Tools Customizer active-radio guard
+After=local-fs.target
+ConditionPathExists=/opt/emcomm-tools/conf/radios.d
 
 [Service]
 Type=oneshot
-User=root
 ExecStart=/usr/local/bin/emcomm-first-boot.sh
 RemainAfterExit=yes
 StandardOutput=journal
@@ -2084,22 +1984,349 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-SYSTEMD_SERVICE_EOF
-    
-    chmod 644 "$service_file"
-    log "SUCCESS" "First-boot systemd service created"
-    log "DEBUG" "Service will run on first boot with root privileges"
-    log "DEBUG" "Logs available in: /var/log/emcomm-first-boot.log"
-    log "DEBUG" "User packages (CHIRP, Edge) installed on first login via profile.d"
-    
-    # Enable the service so it runs automatically on boot
-    log "DEBUG" "Enabling systemd service for first-boot..."
+SERVICE_EOF
+
     setup_chroot_mounts
     trap 'cleanup_chroot_mounts' EXIT
-    chroot "${SQUASHFS_DIR}" systemctl enable emcomm-first-boot.service 2>&1 | sed 's/^/  [systemctl] /' | tee -a "$LOG_FILE"
+    # No tee here: piping a chrooted command through tee under sudo has hung
+    # this build before. Append to the log directly.
+    if chroot "${SQUASHFS_DIR}" systemctl enable emcomm-first-boot.service 2>&1 | sed 's/^/  [systemctl] /' >> "$LOG_FILE"; then
+        log "SUCCESS" "active-radio guard service enabled (target: ${default_profile})"
+    else
+        log "WARN" "Could not enable emcomm-first-boot.service"
+    fi
     cleanup_chroot_mounts
     trap - EXIT
-    log "DEBUG" "Systemd service enabled"
+}
+
+# ============================================================================
+# Build-time application installs
+# ============================================================================
+# Each of these runs INSIDE the chroot and returns non-zero on real failure, so
+# main() can abort the build rather than shipping an ISO that silently lacks
+# the application. That is the opposite of the old first-boot scripts, which
+# swallowed every error.
+
+install_vscode() {
+    if [ "${ENABLE_VSCODE:-yes}" != "yes" ]; then
+        log "DEBUG" "ENABLE_VSCODE=no -- skipping VS Code"
+        return 0
+    fi
+
+    log "INFO" "Installing Visual Studio Code from .deb..."
+
+    # Ubuntu 22.10 has no 'code' package and this build removes the Microsoft
+    # apt repos, so a .deb is the only way in. Prefer a local file (the user
+    # usually already has one) and fall back to downloading the current stable.
+    local deb_src="${VSCODE_DEB:-}"
+    local staged="${SQUASHFS_DIR}/tmp/code.deb"
+
+    if [ -n "$deb_src" ] && [ -f "$deb_src" ]; then
+        log "INFO" "  Using local .deb: $deb_src"
+        cp "$deb_src" "$staged" || { log "ERROR" "Could not stage $deb_src"; return 1; }
+    else
+        if [ -n "$deb_src" ]; then
+            log "WARN" "VSCODE_DEB set but not found: $deb_src -- falling back to download"
+        fi
+        local url="https://update.code.visualstudio.com/latest/linux-deb-x64/stable"
+        log "INFO" "  Downloading VS Code from $url"
+        if ! wget -q --show-progress --timeout=60 --tries=3 -O "$staged" "$url"; then
+            log "ERROR" "VS Code download failed"
+            rm -f "$staged"
+            return 1
+        fi
+    fi
+
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+
+    # dpkg then `apt-get -f install` to pull the .deb's dependencies, which is
+    # the documented way to install a standalone .deb without a repo.
+    local rc=0
+    chroot "${SQUASHFS_DIR}" /bin/bash -c '
+        set -o pipefail
+        export DEBIAN_FRONTEND=noninteractive
+        dpkg -i /tmp/code.deb || apt-get install -y -f
+        command -v code >/dev/null
+    ' 2>&1 | tail -15 >> "$LOG_FILE" || rc=$?
+
+    rm -f "$staged"
+    cleanup_chroot_mounts
+    trap - EXIT
+
+    if [ "$rc" -ne 0 ]; then
+        log "ERROR" "VS Code install failed (rc=$rc)"
+        return 1
+    fi
+
+    # dpkg-query, not `code --version`: the chroot mounts are already torn down
+    # by this point, and VS Code refuses to run as root without extra flags.
+    local ver
+    ver=$(chroot "${SQUASHFS_DIR}" dpkg-query -W -f='${Version}' code 2>/dev/null || echo "unknown")
+    log "SUCCESS" "VS Code installed (version ${ver})"
+    return 0
+}
+
+install_gh() {
+    if [ "${ENABLE_GH_CLI:-yes}" != "yes" ]; then
+        log "DEBUG" "ENABLE_GH_CLI=no -- skipping GitHub CLI"
+        return 0
+    fi
+
+    log "INFO" "Installing GitHub CLI..."
+
+    # Why the .deb and not apt: kinetic universe has gh 2.14.4+dfsg1-1, from
+    # mid-2022. For a tool whose entire job is talking to a remote API that has
+    # moved on considerably since, the current release is worth 15MB. apt is
+    # the fallback, so an offline or rate-limited build still gets a working gh.
+    #
+    # gh also solves git credentials on the installed system by itself:
+    #   gh auth login && gh auth setup-git
+    # registers gh as git's credential helper, so `git push` works in a plain
+    # terminal. That is deliberately NOT done at build time -- it would bake a
+    # personal token into a shared ISO.
+    local staged="${SQUASHFS_DIR}/tmp/gh.deb"
+    local url="https://github.com/cli/cli/releases/latest/download/gh_${GH_CLI_VERSION:-2.105.0}_linux_amd64.deb"
+
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+
+    local rc=0
+    if wget -q --timeout=60 --tries=3 -O "$staged" "$url"; then
+        chroot "${SQUASHFS_DIR}" /bin/bash -c '
+            set -o pipefail
+            export DEBIAN_FRONTEND=noninteractive
+            dpkg -i /tmp/gh.deb || apt-get install -y -f
+            command -v gh >/dev/null
+        ' >> "$LOG_FILE" 2>&1 || rc=$?
+    else
+        log "WARN" "gh .deb download failed -- falling back to apt (older version)"
+        rc=1
+    fi
+
+    if [ "$rc" -ne 0 ]; then
+        rc=0
+        chroot "${SQUASHFS_DIR}" /bin/bash -c '
+            set -o pipefail
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get install -y -qq gh
+            command -v gh >/dev/null
+        ' >> "$LOG_FILE" 2>&1 || rc=$?
+    fi
+
+    rm -f "$staged"
+    cleanup_chroot_mounts
+    trap - EXIT
+
+    if [ "$rc" -ne 0 ]; then
+        log "WARN" "GitHub CLI install failed -- continuing without it"
+        return 1
+    fi
+
+    local ver
+    ver=$(chroot "${SQUASHFS_DIR}" dpkg-query -W -f='${Version}' gh 2>/dev/null || echo "unknown")
+    log "SUCCESS" "GitHub CLI installed (version ${ver})"
+    log "INFO" "  On the installed system: gh auth login && gh auth setup-git"
+    return 0
+}
+
+install_chirp() {
+    if [ "${ENABLE_CHIRP:-yes}" != "yes" ]; then
+        log "DEBUG" "ENABLE_CHIRP=no -- skipping CHIRP"
+        return 0
+    fi
+
+    local ref="${CHIRP_GIT_REF:-master}"
+    log "INFO" "Installing CHIRP from the official git repo (ref: ${ref})..."
+
+    # Why from git, and not any of the three obvious alternatives:
+    #
+    #   PyPI      -- `pip install chirp` is an unrelated 2013 bioacoustics
+    #                package. This is what the old code did, on all 3 paths.
+    #   chirpmyradio.com archive -- serves HTTP 403 to every non-browser
+    #                request (Cloudflare), so a build cannot fetch the wheel.
+    #   apt       -- kinetic ships CHIRP 20200227, six years stale, and it
+    #                predates support for most current radios.
+    #
+    # A venv with --system-site-packages is used rather than pipx because
+    # kinetic's pipx is 1.0.0 and its --system-site-packages handling is
+    # unreliable. The system wxPython (python3-wxgtk4.0) MUST be visible to the
+    # venv: building wxPython from source via pip is not viable here.
+
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+
+    local rc=0
+    chroot "${SQUASHFS_DIR}" /bin/bash -c "
+        set -euo pipefail
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get install -y -qq python3-wxgtk4.0 python3-venv python3-pip git
+        rm -rf /opt/chirp-venv
+        python3 -m venv --system-site-packages /opt/chirp-venv
+        /opt/chirp-venv/bin/pip install --upgrade pip wheel setuptools
+        /opt/chirp-venv/bin/pip install 'git+https://github.com/kk7ds/chirp.git@${ref}'
+        ln -sf /opt/chirp-venv/bin/chirp /usr/local/bin/chirp
+        /opt/chirp-venv/bin/chirp --help >/dev/null
+    " 2>&1 | tail -20 >> "$LOG_FILE" || rc=$?
+
+    cleanup_chroot_mounts
+    trap - EXIT
+
+    if [ "$rc" -ne 0 ]; then
+        log "ERROR" "CHIRP install failed (rc=$rc) -- see $LOG_FILE"
+        return 1
+    fi
+
+    # Desktop entry: CHIRP's own packaging does not provide one.
+    mkdir -p "${SQUASHFS_DIR}/usr/share/applications"
+    cat > "${SQUASHFS_DIR}/usr/share/applications/chirp.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=CHIRP
+GenericName=Radio programming
+Comment=Program memory channels on amateur radios
+Exec=/usr/local/bin/chirp
+Icon=utilities-terminal
+Terminal=false
+Categories=HamRadio;Utility;
+Keywords=chirp;radio;programming;memory;
+EOF
+
+    log "SUCCESS" "CHIRP installed to /opt/chirp-venv (ref ${ref})"
+    log "INFO" "  NOTE: CHIRP does not support AnyTone DMR radios -- use anytone-cps for the D578/D890"
+    return 0
+}
+
+install_anytone_cps() {
+    if [ "${ENABLE_ANYTONE_CPS:-yes}" != "yes" ]; then
+        log "DEBUG" "ENABLE_ANYTONE_CPS=no -- skipping anytone-cps"
+        return 0
+    fi
+
+    log "INFO" "Building anytone-cps (xbenkozx)..."
+
+    # Open-source CPS for AnyTone DMR radios. This matters because CHIRP does
+    # not support AnyTone DMR radios at all, so without this there is no Linux
+    # path to program the D578UVIII or D890UV.
+    #
+    # ALPHA software: D878UVII is the tested target; D890UV is listed but
+    # untested upstream. A build failure here is therefore NOT fatal to the
+    # ISO -- we warn and continue, because the radio still works for CAT and
+    # packet without its programming software. Every other install in this
+    # section is fatal; this one is deliberately not.
+
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+
+    local rc=0
+    chroot "${SQUASHFS_DIR}" /bin/bash -c '
+        set -euo pipefail
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get install -y -qq git cmake build-essential \
+            qtbase5-dev qttools5-dev-tools libqt5serialport5-dev pkg-config
+        rm -rf /usr/local/src/anytone-cps
+        git clone --depth 1 https://github.com/xbenkozx/anytone-cps.git \
+            /usr/local/src/anytone-cps
+        cd /usr/local/src/anytone-cps
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        cmake --build build -j"$(nproc)"
+        # Upstream has no install target defined at all stages of development,
+        # so fall back to copying whatever executable the build produced.
+        cmake --install build 2>/dev/null || {
+            bin=$(find build -maxdepth 2 -type f -executable \
+                    -name "*anytone*" -o -maxdepth 2 -type f -executable -name "*cps*" \
+                  | head -1)
+            [ -n "$bin" ] || { echo "no executable produced"; exit 1; }
+            install -m 755 "$bin" /usr/local/bin/anytone-cps
+        }
+        command -v anytone-cps >/dev/null || [ -x /usr/local/bin/anytone-cps ]
+    ' 2>&1 | tail -25 >> "$LOG_FILE" || rc=$?
+
+    cleanup_chroot_mounts
+    trap - EXIT
+
+    if [ "$rc" -ne 0 ]; then
+        log "WARN" "anytone-cps build failed (rc=$rc) -- continuing without it."
+        log "WARN" "  It is alpha upstream; the ISO is still fully usable."
+        log "WARN" "  Build it later on the installed system from /usr/local/src/anytone-cps."
+        return 0
+    fi
+
+    ET_ROOT="$SQUASHFS_DIR" customize_anytone_cps_launcher
+
+    log "SUCCESS" "anytone-cps built and installed"
+    return 0
+}
+
+install_hamlib_anytone() {
+    if [ "${ENABLE_HAMLIB_ANYTONE:-yes}" != "yes" ]; then
+        log "WARN" "ENABLE_HAMLIB_ANYTONE=no -- the D578UVIII profiles will NOT work."
+        log "WARN" "  Stock Hamlib has no AnyTone backend, so rigctld rejects model 37001."
+        return 0
+    fi
+
+    log "INFO" "Building the AnyTone Hamlib backend into the ISO (this takes ~10 min)..."
+
+    # THIS IS THE FIX FOR THE HEADLINE BUG. customize_radio_configs() writes
+    # radio profiles pinned to Hamlib model 37001 (RIG_MODEL_ATD578UVIII), but
+    # nothing in this build had ever installed a Hamlib that knows that model.
+    # ETC ships stock Hamlib 4.5, which has no AnyTone backend whatsoever, so
+    # every ISO this script produced had working-looking radio profiles and no
+    # CAT control and no PTT.
+    #
+    # build-hamlib-anytone.sh is run INSIDE the chroot rather than
+    # reimplemented here, so the ISO and the live system get byte-identical
+    # Hamlib treatment -- including the symlink manifest that makes --revert
+    # work on the installed system.
+
+    local staged_repo="${SQUASHFS_DIR}/tmp/customizer"
+    mkdir -p "$staged_repo/lib"
+    cp "${SCRIPT_DIR}/build-hamlib-anytone.sh" "$staged_repo/" \
+        || { log "ERROR" "Could not stage build-hamlib-anytone.sh"; return 1; }
+    cp "${SCRIPT_DIR}/lib/common.sh" "$staged_repo/lib/" \
+        || { log "ERROR" "Could not stage lib/common.sh"; return 1; }
+    chmod +x "$staged_repo/build-hamlib-anytone.sh"
+
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+
+    local rc=0
+    chroot "${SQUASHFS_DIR}" /bin/bash -c '
+        set -uo pipefail
+        export DEBIAN_FRONTEND=noninteractive
+        cd /tmp/customizer
+        ./build-hamlib-anytone.sh
+    ' 2>&1 | tail -30 >> "$LOG_FILE" || rc=$?
+
+    # Confirm the backend is really there. The script self-verifies, but this
+    # build has shipped a broken Hamlib before, so check independently.
+    local models=""
+    if [ "$rc" -eq 0 ]; then
+        models=$(chroot "${SQUASHFS_DIR}" /bin/bash -c 'rigctl -l 2>/dev/null' | grep -i anytone || true)
+    fi
+
+    rm -rf "$staged_repo"
+    cleanup_chroot_mounts
+    trap - EXIT
+
+    if [ "$rc" -ne 0 ]; then
+        log "ERROR" "Hamlib AnyTone build failed (rc=$rc) -- see $LOG_FILE"
+        log "ERROR" "  Without it the D578UVIII has no CAT control and no PTT."
+        log "ERROR" "  Set ENABLE_HAMLIB_ANYTONE=no to build an ISO anyway."
+        return 1
+    fi
+
+    if [ -z "$models" ]; then
+        log "ERROR" "Hamlib built, but no AnyTone model is registered."
+        log "ERROR" "  rigctld would reject model ${ANYTONE_MODEL_ID:-37001}."
+        return 1
+    fi
+
+    log "SUCCESS" "AnyTone Hamlib backend present in ISO:"
+    while IFS= read -r line; do
+        [ -n "$line" ] && log "INFO" "    $(tr -s ' ' <<< "$line")"
+    done <<< "$models"
+    return 0
 }
 
 
@@ -2523,17 +2750,35 @@ install_xygrib() {
     fi
 }
 
-install_kiwix() {
-    log "INFO" "Installing Kiwix (offline Wikipedia/docs)..."
-    
-    # Kiwix is available from snap or repos
-    # Try apt first
-    if chroot "${SQUASHFS_DIR}" apt-get install -y -qq kiwix-tools 2>&1 | tail -3 | tee -a "$LOG_FILE"; then
-        log "SUCCESS" "Kiwix installed via apt"
-    else
-        log "WARN" "Kiwix via apt had issues - skipping"
-    fi
+# install_kiwix() was REMOVED. ETC has shipped kiwix natively since R4, and
+# installing kiwix-tools over the top risked a different version than the one
+# ETC's own launcher and et-index integration expect. setup_wikipedia_tools()
+# is separate and still needed -- it builds small targeted ZIM files, which is
+# not what ETC's bundled kiwix collections do.
+
+# ---------------------------------------------------------------------------
+# chroot-mount wrappers.
+#
+# These four installers assume the chroot is already mounted. main() used to
+# wrap each one in its own setup/cleanup_chroot_mounts + trap, inline, four
+# times over. Wrapping them here keeps main()'s step table uniform -- every
+# entry is just a function name -- and guarantees the mounts are torn down
+# even when the installer returns non-zero.
+# ---------------------------------------------------------------------------
+_with_chroot_mounts() {
+    local fn="$1" rc=0
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+    "$fn" || rc=$?
+    cleanup_chroot_mounts
+    trap - EXIT
+    return "$rc"
 }
+
+install_gridtracker_wrapped()     { _with_chroot_mounts install_gridtracker; }
+install_wsjtx_improved_wrapped()  { _with_chroot_mounts install_wsjtx_improved; }
+install_qsstv_wrapped()           { _with_chroot_mounts install_qsstv; }
+install_xygrib_wrapped()          { _with_chroot_mounts install_xygrib; }
 
 setup_wifi_diagnostics() {
     log "INFO" "Creating WiFi diagnostic tools..."
@@ -2953,115 +3198,164 @@ EOF
 }
 
 verify_customizations() {
-    # Final verification of all critical customizations BEFORE ISO creation
-    # This catches issues that would otherwise only be discovered after booting
+    # Final verification of all critical customizations BEFORE spending 20-40
+    # minutes compressing a squashfs we are going to throw away.
+    #
+    # Three of the old checks tested for things this build DELIBERATELY no
+    # longer does, so they fired on every single run and trained the reader to
+    # ignore the whole section:
+    #
+    #   - a "wrapper-rigctld.sh patched for Anytone preservation" marker.
+    #     lib/customize-radio.sh documents at length why that patch is wrong:
+    #     it guarded do_full_auto(), which is never called. Always ERROR.
+    #   - /etc/profile.d/99-install-chirp-edge.sh, which no longer exists
+    #     because CHIRP is installed at build time and Edge was dropped.
+    #   - /etc/udev/rules.d/99-emcomm-tools-cat.rules, which customize-radio
+    #     deliberately does not create; the stock DigiRig rule already maps
+    #     /dev/et-cat, and the 99- rule let an unrelated USB serial device
+    #     steal it.
     log "INFO" "=== VERIFYING CRITICAL CUSTOMIZATIONS ==="
-    
+
     local errors=0
     local warnings=0
-    
-    # 1. Verify wrapper-rigctld.sh is patched for Anytone preservation
-    log "INFO" "Checking Anytone radio preservation patch..."
-    local wrapper_script="${SQUASHFS_DIR}/opt/emcomm-tools/sbin/wrapper-rigctld.sh"
-    if [ -f "$wrapper_script" ]; then
-        if grep -q "Anytone D578UV is configured - preserving configuration" "$wrapper_script"; then
-            log "SUCCESS" "  ✓ wrapper-rigctld.sh patched for Anytone preservation"
+    local etc_conf="${SQUASHFS_DIR}/opt/emcomm-tools/conf"
+
+    _vc_ok()   { log "SUCCESS" "  [ OK ] $1"; }
+    _vc_err()  { log "ERROR"   "  [FAIL] $1"; errors=$((errors + 1)); }
+    _vc_warn() { log "WARN"    "  [WARN] $1"; warnings=$((warnings + 1)); }
+
+    # --- 1. The AnyTone Hamlib backend ------------------------------------
+    # This is the check that would have caught the headline bug: every ISO
+    # this script built had D578UVIII radio profiles pinned to Hamlib model
+    # 37001 and a Hamlib that had never heard of model 37001.
+    log "INFO" "Checking AnyTone Hamlib backend..."
+    if [ "${ENABLE_HAMLIB_ANYTONE:-yes}" != "yes" ]; then
+        _vc_warn "ENABLE_HAMLIB_ANYTONE=no -- D578UVIII will have no CAT and no PTT"
+    else
+        local anytone_models=""
+        anytone_models=$(chroot "${SQUASHFS_DIR}" /bin/bash -c 'rigctl -l 2>/dev/null' 2>/dev/null \
+                         | grep -i anytone || true)
+        if [ -n "$anytone_models" ]; then
+            _vc_ok "Hamlib knows AnyTone: $(head -1 <<< "$anytone_models" | tr -s ' ')"
         else
-            log "ERROR" "  ✗ wrapper-rigctld.sh NOT patched! Radio will be overwritten on boot!"
-            ((errors++))
+            _vc_err "Hamlib has NO AnyTone backend -- rigctld will reject model 37001"
+        fi
+    fi
+
+    # --- 2. Radio profiles and the active symlink -------------------------
+    log "INFO" "Checking radio profiles..."
+    local anytone_config="${etc_conf}/radios.d/anytone-d578uv.json"
+    if [ -f "$anytone_config" ]; then
+        if command -v jq >/dev/null 2>&1 && ! jq -e . "$anytone_config" >/dev/null 2>&1; then
+            _vc_err "anytone-d578uv.json exists but is not valid JSON"
+        else
+            _vc_ok "anytone-d578uv.json present and parses"
         fi
     else
-        log "WARN" "  ⚠ wrapper-rigctld.sh not found (may be okay if ETC version changed)"
-        ((warnings++))
+        _vc_err "anytone-d578uv.json NOT found"
     fi
-    
-    # 2. Verify active-radio.json symlink points to Anytone
-    log "INFO" "Checking active-radio.json symlink..."
-    local active_radio="${SQUASHFS_DIR}/opt/emcomm-tools/conf/radios.d/active-radio.json"
+
+    local active_radio="${etc_conf}/radios.d/active-radio.json"
     if [ -L "$active_radio" ]; then
         local target
         target=$(readlink "$active_radio")
-        if [[ "$target" =~ anytone ]]; then
-            log "SUCCESS" "  ✓ active-radio.json → $target"
+        # Must be RELATIVE: an absolute link would embed the build machine's
+        # squashfs path and dangle on the installed system.
+        case "$target" in
+            /*) _vc_err "active-radio.json is an ABSOLUTE symlink ($target) -- will dangle once installed" ;;
+            *anytone*)
+                if [ -e "$active_radio" ]; then
+                    _vc_ok "active-radio.json -> $target"
+                else
+                    _vc_err "active-radio.json -> $target, which does not resolve"
+                fi
+                ;;
+            *) _vc_warn "active-radio.json -> $target (not an AnyTone profile)" ;;
+        esac
+    else
+        _vc_err "active-radio.json is not a symlink"
+    fi
+
+    # --- 3. D890UV Bluetooth TNC ------------------------------------------
+    if [ "${ENABLE_ANYTONE_D890_TNC:-yes}" = "yes" ]; then
+        log "INFO" "Checking D890UV Bluetooth TNC..."
+        if [ -f "${etc_conf}/radios.d/anytone-d890.bt.json" ]; then
+            _vc_ok "anytone-d890.bt.json present"
         else
-            log "WARN" "  ⚠ active-radio.json points to: $target (not Anytone)"
-            ((warnings++))
+            _vc_warn "anytone-d890.bt.json missing"
         fi
-    else
-        log "WARN" "  ⚠ active-radio.json is not a symlink"
-        ((warnings++))
+        if [ -x "${SQUASHFS_DIR}/opt/emcomm-tools/bin/et-anytone-d890" ]; then
+            _vc_ok "et-anytone-d890 installed and executable"
+        else
+            _vc_warn "et-anytone-d890 missing or not executable"
+        fi
     fi
-    
-    # 3. Verify anytone-d578uv.json exists
-    log "INFO" "Checking Anytone radio config file..."
-    local anytone_config="${SQUASHFS_DIR}/opt/emcomm-tools/conf/radios.d/anytone-d578uv.json"
-    if [ -f "$anytone_config" ]; then
-        log "SUCCESS" "  ✓ anytone-d578uv.json exists"
-    else
-        log "ERROR" "  ✗ anytone-d578uv.json NOT found!"
-        ((errors++))
+
+    # --- 4. Applications --------------------------------------------------
+    log "INFO" "Checking applications..."
+    if [ "${ENABLE_VSCODE:-yes}" = "yes" ]; then
+        if [ -x "${SQUASHFS_DIR}/usr/bin/code" ] || [ -x "${SQUASHFS_DIR}/usr/share/code/bin/code" ]; then
+            _vc_ok "VS Code installed"
+        else
+            _vc_err "VS Code NOT installed (apt can never supply 'code' on 22.10)"
+        fi
     fi
-    
-    # 4. Verify lsb-release has CUSTOMIZED
+
+    if [ "${ENABLE_CHIRP:-yes}" = "yes" ]; then
+        if [ -x "${SQUASHFS_DIR}/opt/chirp-venv/bin/chirp" ]; then
+            _vc_ok "CHIRP installed in /opt/chirp-venv"
+        else
+            _vc_err "CHIRP NOT installed"
+        fi
+    fi
+
+    if [ "${ENABLE_ANYTONE_CPS:-yes}" = "yes" ]; then
+        # Best-effort upstream, so only a warning.
+        if [ -x "${SQUASHFS_DIR}/usr/local/bin/anytone-cps" ]; then
+            _vc_ok "anytone-cps installed"
+        else
+            _vc_warn "anytone-cps not built (alpha upstream; ISO still usable)"
+        fi
+    fi
+
+    # --- 5. Release branding ----------------------------------------------
     log "INFO" "Checking release info..."
     local lsb_release="${SQUASHFS_DIR}/etc/lsb-release"
     if [ -f "$lsb_release" ]; then
         if grep -q "CUSTOMIZED" "$lsb_release"; then
-            local description
-            description=$(grep "DISTRIB_DESCRIPTION" "$lsb_release" | cut -d= -f2 | tr -d '"')
-            log "SUCCESS" "  ✓ Release: $description"
+            _vc_ok "Release: $(grep DISTRIB_DESCRIPTION "$lsb_release" | cut -d= -f2 | tr -d '"')"
         else
-            log "ERROR" "  ✗ lsb-release does NOT contain 'CUSTOMIZED'!"
-            log "DEBUG" "    Current value: $(grep 'DISTRIB_DESCRIPTION' "$lsb_release")"
-            ((errors++))
+            _vc_err "lsb-release does not contain 'CUSTOMIZED'"
         fi
     else
-        log "ERROR" "  ✗ lsb-release file not found!"
-        ((errors++))
+        _vc_err "lsb-release not found"
     fi
-    
-    # 5. Verify profile.d script for CHIRP/Edge exists
-    log "INFO" "Checking CHIRP/Edge installation script..."
-    local profile_script="${SQUASHFS_DIR}/etc/profile.d/99-install-chirp-edge.sh"
-    if [ -f "$profile_script" ]; then
-        if grep -q "old-releases.ubuntu.com" "$profile_script"; then
-            log "SUCCESS" "  ✓ CHIRP/Edge script exists with apt source fix"
-        else
-            log "WARN" "  ⚠ CHIRP/Edge script exists but missing apt source fix"
-            ((warnings++))
-        fi
+
+    # --- 6. The active-radio guard service --------------------------------
+    log "INFO" "Checking first-boot guard..."
+    if [ -f "${SQUASHFS_DIR}/etc/systemd/system/emcomm-first-boot.service" ]; then
+        _vc_ok "emcomm-first-boot.service present"
     else
-        log "WARN" "  ⚠ CHIRP/Edge profile.d script not found"
-        ((warnings++))
+        _vc_warn "emcomm-first-boot.service not found"
     fi
-    
-    # 6. Verify first-boot systemd service
-    log "INFO" "Checking first-boot systemd service..."
-    local service_file="${SQUASHFS_DIR}/etc/systemd/system/emcomm-first-boot.service"
-    if [ -f "$service_file" ]; then
-        log "SUCCESS" "  ✓ emcomm-first-boot.service exists"
-    else
-        log "WARN" "  ⚠ First-boot service not found"
-        ((warnings++))
+
+    # --- 7. Secrets must NOT leak into a shareable ISO --------------------
+    # embed_cache_files() deliberately copies secrets.env into the ISO so the
+    # installed system can rebuild itself. That is useful and intended, but it
+    # means the ISO contains a Winlink password and WiFi PSKs -- worth saying
+    # out loud once per build rather than discovering it after sharing it.
+    if [ -f "${SQUASHFS_DIR}/opt/emcomm-customizer-cache/secrets.env" ]; then
+        log "WARN" "  [NOTE] This ISO embeds secrets.env (WiFi PSK, Winlink password)."
+        log "WARN" "         Do not share it. Use -m for a minimal ISO without it."
     fi
-    
-    # 7. Verify udev rules for CAT device
-    log "INFO" "Checking CAT udev rules..."
-    local udev_rules="${SQUASHFS_DIR}/etc/udev/rules.d/99-emcomm-tools-cat.rules"
-    if [ -f "$udev_rules" ]; then
-        log "SUCCESS" "  ✓ CAT udev rules exist"
-    else
-        log "WARN" "  ⚠ CAT udev rules not found"
-        ((warnings++))
-    fi
-    
-    # Summary
+
+    # --- Summary ----------------------------------------------------------
     log "INFO" ""
     log "INFO" "=== VERIFICATION SUMMARY ==="
     if [ $errors -gt 0 ]; then
-        log "ERROR" "  ERRORS: $errors (build may produce broken ISO)"
+        log "ERROR" "  ERRORS:   $errors"
     else
-        log "SUCCESS" "  ERRORS: 0"
+        log "SUCCESS" "  ERRORS:   0"
     fi
     if [ $warnings -gt 0 ]; then
         log "WARN" "  WARNINGS: $warnings (review above)"
@@ -3069,14 +3363,21 @@ verify_customizations() {
         log "SUCCESS" "  WARNINGS: 0"
     fi
     log "INFO" ""
-    
-    # Return error code if there were critical failures
+
+    # Fail BEFORE rebuilding the squashfs. The old version returned 0
+    # unconditionally with "Build will continue but ISO may not work
+    # correctly", which is the worst of both worlds: 40 minutes of
+    # compression, then an ISO known to be broken. An error here means
+    # something required for radio operation is missing.
     if [ $errors -gt 0 ]; then
-        log "ERROR" "Critical errors detected! Review logs before proceeding."
-        log "INFO" "Build will continue but ISO may not work correctly."
+        log "ERROR" "Refusing to build an ISO with $errors critical error(s)."
+        log "ERROR" "Fix the above, or re-run with the relevant ENABLE_* set to 'no'"
+        log "ERROR" "if you genuinely want an ISO without that capability."
+        return 1
     fi
-    
-    return 0  # Don't fail the build, just warn
+
+    log "SUCCESS" "All critical customizations verified"
+    return 0
 }
 
 create_build_manifest() {
@@ -3129,32 +3430,15 @@ EOF
 # ============================================================================
 
 rebuild_squashfs() {
-    # Source secrets for compression setting
-    # shellcheck source=/dev/null
-    source "$SECRETS_FILE"
-    
-    # Compression options: zstd (default), xz, gzip, lz4
-    local compression="${SQUASHFS_COMPRESSION:-zstd}"
-    
-    # Validate compression option
-    case "$compression" in
-        xz|zstd|gzip|lz4)
-            ;;
-        *)
-            log "WARN" "Unknown compression '$compression', using zstd"
-            compression="zstd"
-            ;;
-    esac
-    
-    # Estimate build time based on compression
-    local time_estimate
-    case "$compression" in
-        xz)   time_estimate="80-120 minutes" ;;
-        zstd) time_estimate="15-25 minutes" ;;
-        gzip) time_estimate="30-45 minutes" ;;
-        lz4)  time_estimate="5-10 minutes" ;;
-    esac
-    
+    # Hardcoded as of v2.1.0: this is a build-tooling detail, not operator
+    # configuration, so it no longer comes from secrets.env.
+    #
+    # zstd is the right default by a wide margin here. xz saves maybe 10% on an
+    # image that is already mostly incompressible (the embedded Ubuntu ISO and
+    # the offline map tilesets) in exchange for roughly 80 extra minutes.
+    local compression="zstd"
+    local time_estimate="15-25 minutes"
+
     log "INFO" "Rebuilding squashfs filesystem (compression: $compression, estimated: $time_estimate)..."
     
     local new_squashfs="${WORK_DIR}/filesystem.squashfs.new"
@@ -3580,117 +3864,95 @@ main() {
         log "DEBUG" "Loaded settings from $SECRETS_FILE"
     fi
 
-    log "DEBUG" "Step 1/14: customize_hostname"
-    customize_hostname
-    log "DEBUG" "Step 1/14: customize_hostname COMPLETED"
+    # ------------------------------------------------------------------------
+    # Customization sequence. Each entry is "label|mode|function".
+    #
+    # Numbering is derived, not hand-written. The old sequence was labelled by
+    # hand and had drifted into "Step 15/14", two different "Step 15"s and a
+    # "Step 22/22" that was a no-op log line -- which made the build log
+    # actively misleading about where a failure happened.
+    #
+    # fatal       -- a non-zero return aborts the build. Use when shipping the
+    #                ISO without this step would produce a broken radio setup.
+    # best-effort -- a non-zero return is logged and the build continues. Use
+    #                for optional third-party apps whose upstream URLs rot.
+    # ------------------------------------------------------------------------
+    local -a STEPS=(
+        "hostname|fatal|customize_hostname"
+        "user backup restore|best-effort|restore_user_backup"
+        "wifi|best-effort|customize_wifi"
+        "desktop|best-effort|customize_desktop"
+        "release info|best-effort|update_release_info"
+        "power management|best-effort|customize_power"
+        "battery thresholds|best-effort|customize_upower"
+        "timezone|best-effort|customize_timezone"
+        "APRS|fatal|customize_aprs"
+        "D578UVIII radio profiles|fatal|customize_radio_configs"
+        "AnyTone Hamlib backend|fatal|install_hamlib_anytone"
+        "D890UV Bluetooth TNC|best-effort|customize_anytone_d890_tnc"
+        "et-os-addons|best-effort|integrate_etosaddons_features"
+        "user and autologin|fatal|customize_user_and_autologin"
+        "Pat Winlink|best-effort|customize_pat"
+        "Wikipedia tools|best-effort|setup_wikipedia_tools"
+        "wifi diagnostics|best-effort|setup_wifi_diagnostics"
+        "git config|best-effort|customize_git_config"
+        "active-radio guard|best-effort|setup_first_login_packages"
+        "additional apt packages|best-effort|customize_additional_packages"
+        "VS Code|fatal|install_vscode"
+        "CHIRP|fatal|install_chirp"
+        "GitHub CLI|best-effort|install_gh"
+        "anytone-cps|best-effort|install_anytone_cps"
+        "VS Code workspace|best-effort|setup_vscode_workspace"
+        "GridTracker|best-effort|install_gridtracker_wrapped"
+        "WSJT-X Improved|best-effort|install_wsjtx_improved_wrapped"
+        "QSSTV|best-effort|install_qsstv_wrapped"
+        "XyGrib|best-effort|install_xygrib_wrapped"
+        "embed cache files|best-effort|embed_cache_files"
+        "build manifest|best-effort|create_build_manifest"
+    )
+
+    local total=${#STEPS[@]}
+    local n=0 entry label mode fn rc
+    for entry in "${STEPS[@]}"; do
+        n=$((n + 1))
+        IFS='|' read -r label mode fn <<< "$entry"
+
+        log "INFO" "[${n}/${total}] ${label}"
+        rc=0
+        "$fn" || rc=$?
+
+        if [ "$rc" -eq 0 ]; then
+            log "DEBUG" "[${n}/${total}] ${label} -- OK"
+            continue
+        fi
+
+        if [ "$mode" = "fatal" ]; then
+            log "ERROR" "[${n}/${total}] ${label} FAILED (rc=${rc}) -- aborting build."
+            log "ERROR" "  This step is required for a working radio setup."
+            log "ERROR" "  Full log: $LOG_FILE"
+            return 1
+        fi
+
+        log "WARN" "[${n}/${total}] ${label} failed (rc=${rc}) -- continuing."
+        FAILED_OPTIONAL_STEPS+=("$label")
+    done
+
+    if [ ${#FAILED_OPTIONAL_STEPS[@]} -gt 0 ]; then
+        log "WARN" "Optional steps that did not complete: ${FAILED_OPTIONAL_STEPS[*]}"
+        log "WARN" "The ISO is usable; these are non-essential extras."
+    fi
     
-    log "DEBUG" "Step 2/14: restore_user_backup"
-    restore_user_backup        # Restore user configs from backup (user: fast with timeout, wine: deferred to first login)
-    log "DEBUG" "Step 2/14: restore_user_backup COMPLETED"
-    
-    log "DEBUG" "Step 3/14: customize_wifi"
-    customize_wifi
-    log "DEBUG" "Step 3/14: customize_wifi COMPLETED"
-    
-    log "DEBUG" "Step 4/14: customize_desktop"
-    customize_desktop
-    log "DEBUG" "Step 4/14: customize_desktop COMPLETED"
-    
-    log "DEBUG" "Step 4a/14: update_release_info"
-    update_release_info
-    log "DEBUG" "Step 4a/14: update_release_info COMPLETED"
-    
-    log "DEBUG" "Step 5/14: customize_aprs"
-    customize_aprs
-    log "DEBUG" "Step 5/14: customize_aprs COMPLETED"
-    
-    log "DEBUG" "Step 6/14: customize_radio_configs"
-    customize_radio_configs
-    log "DEBUG" "Step 6/14: customize_radio_configs COMPLETED"
-    
-    log "DEBUG" "Step 6a/14: integrate_etosaddons_features"
-    integrate_etosaddons_features
-    log "DEBUG" "Step 6a/14: integrate_etosaddons_features COMPLETED"
-    
-    log "DEBUG" "Step 7/14: customize_user_and_autologin"
-    customize_user_and_autologin
-    log "DEBUG" "Step 7/14: customize_user_and_autologin COMPLETED"
-    
-    log "DEBUG" "Step 10/14: customize_pat"
-    customize_pat
-    log "DEBUG" "Step 10/14: customize_pat COMPLETED"
-    
-    log "DEBUG" "Step 11/14: setup_wikipedia_tools"
-    setup_wikipedia_tools
-    log "DEBUG" "Step 11/14: setup_wikipedia_tools COMPLETED"
-    
-    log "DEBUG" "Step 12/14: setup_wifi_diagnostics"
-    setup_wifi_diagnostics
-    log "DEBUG" "Step 12/14: setup_wifi_diagnostics COMPLETED"
-    
-    log "DEBUG" "Step 13/14: customize_git_config"
-    customize_git_config
-    log "DEBUG" "Step 13/14: customize_git_config COMPLETED"
-    
-    log "DEBUG" "Step 13a/14: setup_first_login_packages"
-    setup_first_login_packages
-    log "DEBUG" "Step 13a/14: setup_first_login_packages COMPLETED"
-    
-    log "DEBUG" "Step 14/14: setup_vscode_workspace"
-    setup_vscode_workspace
-    log "DEBUG" "Step 14/14: setup_vscode_workspace COMPLETED"
-    
-    log "DEBUG" "Step 15/14: customize_additional_packages"
-    customize_additional_packages
-    log "DEBUG" "Step 15/14: customize_additional_packages COMPLETED"
-    
-    log "DEBUG" "Step 15/19: install_gridtracker"
-    setup_chroot_mounts
-    trap 'cleanup_chroot_mounts' EXIT
-    install_gridtracker
-    cleanup_chroot_mounts
-    trap - EXIT
-    log "DEBUG" "Step 15/19: install_gridtracker COMPLETED"
-    
-    log "DEBUG" "Step 16/19: install_wsjtx_improved"
-    setup_chroot_mounts
-    trap 'cleanup_chroot_mounts' EXIT
-    install_wsjtx_improved
-    cleanup_chroot_mounts
-    trap - EXIT
-    log "DEBUG" "Step 16/19: install_wsjtx_improved COMPLETED"
-    
-    log "DEBUG" "Step 17/19: install_qsstv"
-    setup_chroot_mounts
-    trap 'cleanup_chroot_mounts' EXIT
-    install_qsstv
-    cleanup_chroot_mounts
-    trap - EXIT
-    log "DEBUG" "Step 17/19: install_qsstv COMPLETED"
-    
-    log "DEBUG" "Step 18/19: install_xygrib_and_kiwix"
-    setup_chroot_mounts
-    trap 'cleanup_chroot_mounts' EXIT
-    install_xygrib
-    install_kiwix
-    cleanup_chroot_mounts
-    trap - EXIT
-    log "DEBUG" "Step 18/19: install_xygrib_and_kiwix COMPLETED"
-    
-    log "DEBUG" "Step 19/19: embed_cache_files"
-    embed_cache_files
-    log "DEBUG" "Step 19/19: embed_cache_files COMPLETED"
-    
-    log "DEBUG" "Step 20/22: create_build_manifest"
-    create_build_manifest
-    log "DEBUG" "Step 20/22: create_build_manifest COMPLETED"
-    
-    log "DEBUG" "Step 22/22: Final cleanup"
-    log "DEBUG" "Step 22/22: Final cleanup COMPLETED"
-    
-    # VERIFY all customizations before ISO creation
-    verify_customizations
-    
+    # create_build_manifest now runs as the last entry in STEPS above.
+
+    # VERIFY all customizations before spending 20-40 minutes on the squashfs.
+    # Mounts are needed because the Hamlib check execs rigctl inside the chroot.
+    # A non-zero return aborts here, deliberately -- see verify_customizations.
+    if ! _with_chroot_mounts verify_customizations; then
+        log "ERROR" "Verification failed -- no ISO was built."
+        log "INFO"  "The unpacked squashfs is preserved at ${SQUASHFS_DIR} for inspection."
+        exit 1
+    fi
+
     # Rebuild ISO
     log "INFO" ""
     log "INFO" "=== Rebuilding ISO ==="
