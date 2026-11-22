@@ -38,7 +38,8 @@ call it from both paths — never inline it into one.**
 - `lib/customize-radio.sh` — AnyTone D578UVIII CAT profiles
 - `lib/customize-anytone-dmr.sh` — D890UV Bluetooth KISS TNC, anytone-cps launcher
 - `lib/customize-aprs.sh` — Dire Wolf APRS config
-- `lib/customize-addons.sh` — selective et-os-addons integration
+- `lib/customize-addons.sh` — runs et-os-addons' own installers
+- `lib/customize-backup.sh` — manifest-driven `et-user-backup`
 - `lib/verify.sh` — shared verification
 
 `build-etc-iso.sh` runs its customizations from a single step table in
@@ -92,6 +93,21 @@ almost everywhere and hid the fact that VS Code, CHIRP, Edge, the timezone and
 all the power settings were never applied. Build-time installs return non-zero
 on real failure; `verify_customizations` aborts the build *before* the 20–40
 minute squashfs step rather than shipping a known-broken ISO.
+
+**Read a third-party repo's `scripts/`, not just its data directories.**
+`lib/customize-addons.sh` spent a release copying et-os-addons' `overlay/`
+files while ignoring its nine installer scripts — then its own comments
+asserted the repo was "launcher only," and that wrong claim was reused as fact
+for months. It cost us a backwards `ENABLE_ETOSADDONS_KIWIX="no"` (the apt
+`kiwix` package has a broken webserver, which is what breaks `et-hotspot`;
+upstream purges and replaces it) and four hand-rolled installers that went
+stale. **A comment in this repo is not evidence. Go read the upstream source.**
+
+**Check what a vendored dependency pins.** et-os-addons' `.gitmodules` pins
+`branch = release/r6`, and its `scripts/install.sh` runs ETC's installer from
+that submodule — so running it would silently downgrade an R7 build to R6.
+Its `scripts/env.sh` also exports `ET_EXPERT=1`, which turns on ETC's Wikipedia
+dialog and would block an automated build.
 
 **Check ETC's release notes before adding anything.** ETC ships more every
 release, and our customizations can start *fighting* it. R7 enables dark mode

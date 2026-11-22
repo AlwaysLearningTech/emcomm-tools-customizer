@@ -121,6 +121,8 @@ source "${SCRIPT_DIR}/lib/customize-aprs.sh"
 source "${SCRIPT_DIR}/lib/customize-radio.sh"
 # shellcheck source=lib/customize-addons.sh
 source "${SCRIPT_DIR}/lib/customize-addons.sh"
+# shellcheck source=lib/customize-backup.sh
+source "${SCRIPT_DIR}/lib/customize-backup.sh"
 # shellcheck source=lib/customize-anytone-dmr.sh
 source "${SCRIPT_DIR}/lib/customize-anytone-dmr.sh"
 
@@ -2661,94 +2663,9 @@ EOF
     log "INFO" "  Run ~/add-ons/wikipedia/create-my-wikipedia.sh after first boot"
 }
 
-install_gridtracker() {
-    log "INFO" "Installing GridTracker 2..."
-    
-    local gridtracker_url="https://download2.gridtracker.org/GridTracker2-2.250901.0-amd64.deb"
-    local tmp_file="${SQUASHFS_DIR}/tmp/gridtracker-tmp.deb"
-    
-    mkdir -p "${SQUASHFS_DIR}/tmp"
-    
-    # Download GridTracker DEB
-    if ! chroot "${SQUASHFS_DIR}" bash -c "curl -s -L -o /tmp/gridtracker-tmp.deb --fail '$gridtracker_url'"; then
-        log "WARN" "GridTracker download failed - skipping"
-        return 0
-    fi
-    
-    # Install DEB
-    if chroot "${SQUASHFS_DIR}" dpkg -i /tmp/gridtracker-tmp.deb 2>&1 | tee -a "$LOG_FILE"; then
-        log "SUCCESS" "GridTracker 2 installed"
-    else
-        log "WARN" "GridTracker installation had issues"
-    fi
-    
-    rm -f "$tmp_file"
-}
 
-install_wsjtx_improved() {
-    log "INFO" "Installing WSJT-X Improved..."
-    
-    local wsjtx_url="https://downloads.sourceforge.net/project/wsjt-x-improved/WSJT-X_v2.8.0/Linux/wsjtx_2.8.0_improved_PLUS_250501_amd64.deb"
-    local tmp_file="${SQUASHFS_DIR}/tmp/wsjtx-tmp.deb"
-    
-    mkdir -p "${SQUASHFS_DIR}/tmp"
-    
-    # Download WSJT-X DEB
-    if ! chroot "${SQUASHFS_DIR}" bash -c "curl -L -o /tmp/wsjtx-tmp.deb --fail '$wsjtx_url'"; then
-        log "WARN" "WSJT-X Improved download failed - skipping"
-        return 0
-    fi
-    
-    # Remove old docs to avoid conflicts
-    rm -rf "${SQUASHFS_DIR}/usr/share/doc/wsjtx"
-    
-    # Install DEB and fix dependencies
-    chroot "${SQUASHFS_DIR}" bash -c "dpkg -i /tmp/wsjtx-tmp.deb; apt install --fix-broken -y -qq" 2>&1 | tail -5 | tee -a "$LOG_FILE"
-    
-    # Customize desktop file to use et-wsjtx wrapper
-    local desktop_file="${SQUASHFS_DIR}/usr/share/applications/wsjtx.desktop"
-    if [ -f "$desktop_file" ]; then
-        if ! grep -q "Exec=et-wsjtx" "$desktop_file"; then
-            sed -i "s/^Exec=.*$/Exec=et-wsjtx start/" "$desktop_file"
-        fi
-    fi
-    
-    log "SUCCESS" "WSJT-X Improved installed"
-    rm -f "$tmp_file"
-}
 
-install_qsstv() {
-    log "INFO" "Installing QSSTV (SSTV transmission/reception)..."
-    
-    local qsstv_url="https://www.qsl.net/on4qz/qsstv/qsstv109.tgz"
-    local tmp_dir="${SQUASHFS_DIR}/tmp/qsstv-build"
-    
-    mkdir -p "$tmp_dir"
-    
-    # Download QSSTV source
-    if ! chroot "${SQUASHFS_DIR}" bash -c "cd /tmp && curl -L -o qsstv.tgz --fail '$qsstv_url'"; then
-        log "WARN" "QSSTV download failed - skipping"
-        return 0
-    fi
-    
-    # Extract and build (simplified - requires build tools in chroot)
-    if chroot "${SQUASHFS_DIR}" bash -c "cd /tmp && tar -xzf qsstv.tgz && cd qsstv* && ./configure --prefix=/usr && make && make install" 2>&1 | tail -10 | tee -a "$LOG_FILE"; then
-        log "SUCCESS" "QSSTV installed"
-    else
-        log "WARN" "QSSTV build had issues - may need manual setup"
-    fi
-}
 
-install_xygrib() {
-    log "INFO" "Installing XYGrib (weather/GRIB data)..."
-    
-    # XYGrib is available from standard repos
-    if chroot "${SQUASHFS_DIR}" apt-get install -y -qq xygrib 2>&1 | tail -3 | tee -a "$LOG_FILE"; then
-        log "SUCCESS" "XYGrib installed"
-    else
-        log "WARN" "XYGrib installation had issues"
-    fi
-}
 
 # install_kiwix() was REMOVED. ETC has shipped kiwix natively since R4, and
 # installing kiwix-tools over the top risked a different version than the one
@@ -2775,10 +2692,11 @@ _with_chroot_mounts() {
     return "$rc"
 }
 
-install_gridtracker_wrapped()     { _with_chroot_mounts install_gridtracker; }
-install_wsjtx_improved_wrapped()  { _with_chroot_mounts install_wsjtx_improved; }
-install_qsstv_wrapped()           { _with_chroot_mounts install_qsstv; }
-install_xygrib_wrapped()          { _with_chroot_mounts install_xygrib; }
+# et-os-addons now EXECS upstream's installers in the chroot rather than just
+# copying files, so it needs /dev, /proc, /sys and a resolv.conf for the
+# downloads. It did not need mounts when it was a pure file copy.
+integrate_etosaddons_wrapped() { _with_chroot_mounts integrate_etosaddons_features; }
+
 
 setup_wifi_diagnostics() {
     log "INFO" "Creating WiFi diagnostic tools..."
@@ -3890,7 +3808,8 @@ main() {
         "D578UVIII radio profiles|fatal|customize_radio_configs"
         "AnyTone Hamlib backend|fatal|install_hamlib_anytone"
         "D890UV Bluetooth TNC|best-effort|customize_anytone_d890_tnc"
-        "et-os-addons|best-effort|integrate_etosaddons_features"
+        "et-os-addons|best-effort|integrate_etosaddons_wrapped"
+        "backup manifest|best-effort|customize_user_backup_manifest"
         "user and autologin|fatal|customize_user_and_autologin"
         "Pat Winlink|best-effort|customize_pat"
         "Wikipedia tools|best-effort|setup_wikipedia_tools"
@@ -3903,10 +3822,6 @@ main() {
         "GitHub CLI|best-effort|install_gh"
         "anytone-cps|best-effort|install_anytone_cps"
         "VS Code workspace|best-effort|setup_vscode_workspace"
-        "GridTracker|best-effort|install_gridtracker_wrapped"
-        "WSJT-X Improved|best-effort|install_wsjtx_improved_wrapped"
-        "QSSTV|best-effort|install_qsstv_wrapped"
-        "XyGrib|best-effort|install_xygrib_wrapped"
         "embed cache files|best-effort|embed_cache_files"
         "build manifest|best-effort|create_build_manifest"
     )

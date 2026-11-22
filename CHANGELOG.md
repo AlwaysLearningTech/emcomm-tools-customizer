@@ -188,6 +188,86 @@ permissions, including `deny` rules for `dd`, `mkfs`, `parted`, `wipefs` and
 friends — this project must never write to a block device.
 `.claude/settings.local.json` is gitignored.
 
+### Fixed — et-os-addons was never actually installing anything
+
+`lib/customize-addons.sh` copied files out of the repo's `overlay/` directory
+and **never touched `scripts/`**. That was built on a wrong assumption, written
+into its own comments: that et-os-addons ships launchers. It ships **nine real
+installers** plus a test suite. Consequences of the mistake:
+
+- The Kiwix entry pointed at ETC's apt `kiwix`, whose webserver is broken.
+  `install-kiwix.sh` purges that package and installs the official AppImage —
+  and the broken webserver is precisely what stops `et-hotspot` from serving
+  offline content. Our `ENABLE_ETOSADDONS_KIWIX="no"` was exactly backwards.
+- The `et-launcher` `.desktop` pointed at an AppImage nothing had installed.
+  `install-et-launcher.sh` installs it to `/opt/appimages`. The old comment
+  claiming ETC "does not install" it described our own omission.
+- We hand-rolled four installers that were worse than upstream's:
+  GridTracker pinned to `2.250901.0` against upstream's `2.260416.1` (seven
+  months stale); WSJT-X Improved missing the
+  `apt purge wsjtx wsjtx-doc wsjtx-data` that must precede it, since Improved
+  overwrites ETC's binary; QSSTV pulling a stale `qsl.net` tarball instead of
+  the ON4QZ repo. All four are deleted in favour of upstream's.
+
+The integration now invokes upstream's individual scripts, each behind an
+`ENABLE_ETOSADDONS_*` flag. The shim works because every installer opens with
+`[ -z "$ET_ENV_LOADED" ] && . env.sh`, so exporting `ET_ENV_LOADED=1` makes
+them skip that file — which matters, because it sources ETC's `env.sh` and
+`functions.sh` from the r6 submodule and exports `ET_EXPERT=1` (turning on the
+Wikipedia dialog). Verified by grep that the installers need only
+`ET_DIST_DIR`, `ET_SRC_DIR`, `ET_HOME`, `ET_OS_ADDONS_BASE`,
+`ET_LAUNCHER_APP_DL`, `SKEL` and `et-log`; nothing from `functions.sh`.
+
+`scripts/install.sh` is still **not** run, but for the actual reason rather
+than the one previously given: `.gitmodules` pins
+`branch = release/r6`, and that script runs ETC's own installer from the
+submodule first. Using it would build an **R6** image, losing the Reticulum
+stack, `et-wwv`, Mercury, modem73, Pat 1.0.0, VARA 4.4.0/4.9.0, the Nov 2026
+data sets and the CVE-2026-31431 mitigation.
+
+The per-file `HOTSPOT` / `VARAC` / `VARA_EXTRAS` / `VR_N76` flags are replaced
+by a single `ENABLE_ETOSADDONS_OVERLAY`, matching how upstream copies its
+overlay. Splitting it per file is what let our copy drift. `customize-desktop.sh`
+is off by default — it installs a glib schema override that competes with
+`customize_desktop()`'s dconf database.
+
+One ordering hazard handled explicitly: `install-et-os-addons.sh` copies
+`overlay/etc/skel/*` and `overlay/opt/emcomm-tools/*` wholesale, which includes
+its own `BACKUP_ITEMS.lst` **and** its own `et-user-backup`. Both are
+superseded by the backup step below, so that step is sequenced after this one.
+And when `et-launcher` is disabled, the autostart entry the overlay drops in is
+removed — otherwise it errors on every login, which is the original complaint.
+
+### Added — manifest-driven et-user-backup
+
+R7's `et-user-backup` and the et-os-addons fork each had something the other
+needed. R7 filters its list down to paths that exist and logs the skips, so
+`tar` never errors on a missing directory — but the list is hardcoded in a file
+the next ETC release overwrites. The fork is manifest-driven
+(`tar -T ~/BACKUP_ITEMS.lst`) and covers what an operator actually accumulates
+— `.fldigi`, `.nbems`, `YAAC`, `Documents`, `add-ons` — but dropped the
+existence filtering, and carries a bug: its summary loop reads `BACKUP_DIRS`,
+which it never assigns, so "the following were backed up" prints an **empty
+list**.
+
+`lib/customize-backup.sh` takes R7's correctness and the fork's extensibility.
+The manifest is generated at build time by **parsing R7's own `BACKUP_DIRS`
+array** out of the installed script and unioning it with the extras — so when a
+future release adds paths, as R7 did with Reticulum, Partyline, NomadNet and
+the JS8Call files, they are inherited rather than silently missed. The summary
+bug is fixed by construction: it iterates the same filtered list `tar` was
+given.
+
+Measured on a configured machine: 13 paths captured where R7 stock captures 3.
+
+Two things are excluded by default, with `BACKUP_EXTRA_ITEMS` to re-add them:
+
+- `.wine32` (~1.9GB) — ETC backs the Wine prefix up separately via
+  `et-wine-backup`, and `restore_user_backup()` depends on that split.
+- `.navit/maps` and `my-maps` (~633MB) — the ISO seeds both into `/etc/skel`,
+  so including them roughly doubles every backup to re-store bytes the
+  installer just wrote.
+
 ### Removed — the commode=0 "PTT only" D578UVIII profile
 
 Two profiles were written; now there is one, `anytone-d578uv.json`, with
