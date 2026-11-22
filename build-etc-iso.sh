@@ -2052,14 +2052,36 @@ install_gh() {
     # registers gh as git's credential helper, so `git push` works in a plain
     # terminal. That is deliberately NOT done at build time -- it would bake a
     # personal token into a shared ISO.
+    #
+    # ALWAYS the latest release, resolved from the API. There is no pinned
+    # GH_CLI_VERSION, and a pin here was worse than useless: the URL was
+    #   /releases/latest/download/gh_<pinned>_linux_amd64.deb
+    # and GitHub's /latest/download/ path only serves filenames belonging to
+    # the CURRENT release. The pin therefore 404s the moment gh publishes a new
+    # version -- silently falling back to apt's three-year-old build. Verified:
+    # the same URL with any non-current version returns 404.
     local staged="${SQUASHFS_DIR}/tmp/gh.deb"
-    local url="https://github.com/cli/cli/releases/latest/download/gh_${GH_CLI_VERSION:-2.105.0}_linux_amd64.deb"
 
     setup_chroot_mounts
     trap 'cleanup_chroot_mounts' EXIT
 
+    local url="" gh_tag=""
+    local api="https://api.github.com/repos/cli/cli/releases/latest"
+    local meta
+    if meta=$(curl -sf --max-time 30 "$api" 2>/dev/null); then
+        url=$(jq -r '.assets[]? | select(.name | test("linux_amd64\\.deb$")) | .browser_download_url' <<< "$meta" | head -1)
+        gh_tag=$(jq -r '.tag_name // empty' <<< "$meta")
+    fi
+
+    if [ -z "$url" ] || [ "$url" = "null" ]; then
+        log "WARN" "Could not resolve the latest gh .deb from the API -- using apt"
+        url=""
+    else
+        log "INFO" "  Latest gh release: ${gh_tag:-unknown}"
+    fi
+
     local rc=0
-    if wget -q --timeout=60 --tries=3 -O "$staged" "$url"; then
+    if [ -n "$url" ] && wget -q --timeout=60 --tries=3 -O "$staged" "$url"; then
         chroot "${SQUASHFS_DIR}" /bin/bash -c '
             set -o pipefail
             export DEBIAN_FRONTEND=noninteractive
@@ -2067,7 +2089,8 @@ install_gh() {
             command -v gh >/dev/null
         ' >> "$LOG_FILE" 2>&1 || rc=$?
     else
-        log "WARN" "gh .deb download failed -- falling back to apt (older version)"
+        [ -n "$url" ] && log "WARN" "gh .deb download failed"
+        log "WARN" "  Falling back to apt, which on kinetic is gh 2.14.4 (mid-2022)"
         rc=1
     fi
 

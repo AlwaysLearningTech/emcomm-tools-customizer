@@ -158,7 +158,15 @@ known Bluetooth KISS TNC and APRS beacon defects.
 ### Added — GitHub CLI
 
 `install_gh()` bakes `gh` into the ISO from the official `.deb`, falling back to
-apt if the download fails. Kinetic's apt version is gh **2.14.4+dfsg1-1** from
+apt if the download fails. It resolves the **latest** release from GitHub's API
+rather than carrying a pinned version.
+
+A pin was tried first and was worse than useless. The URL was
+`/releases/latest/download/gh_<pinned>_linux_amd64.deb`, and GitHub's
+`/latest/download/` path only serves filenames belonging to the *current*
+release — so the pin would 404 the moment gh published a new version, silently
+falling back to apt's three-year-old build. Verified: that URL with any
+non-current version returns 404. Kinetic's apt version is gh **2.14.4+dfsg1-1** from
 mid-2022, which is old for a tool whose entire job is a remote API — but the
 fallback means an offline or rate-limited build still gets a working `gh`.
 

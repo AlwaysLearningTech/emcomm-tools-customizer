@@ -122,7 +122,7 @@ scripts. We run those individually against our R7 base rather than its
 | XyGrib | `ENABLE_ETOSADDONS_XYGRIB` | yes | GRIB weather map viewer |
 | GridTracker 2 | `ENABLE_ETOSADDONS_GRIDTRACKER` | yes | |
 | JS8Spotter | `ENABLE_ETOSADDONS_JS8SPOTTER` | yes | |
-| QSSTV | `ENABLE_ETOSADDONS_QSSTV` | yes | Builds from source; slow |
+| QSSTV | `ENABLE_ETOSADDONS_QSSTV` | yes | **Slowest build step** — full Qt5 source compile, ~15–30 min |
 | WSJT-X Improved | `ENABLE_ETOSADDONS_WSJTX_IMPROVED` | yes | apt-purges stock wsjtx first |
 | CommStatOne | `ENABLE_ETOSADDONS_COMMSTATONE` | yes | JS8Call group/net dashboard |
 | Kiwix | `ENABLE_ETOSADDONS_KIWIX` | yes | **Replaces** ETC's apt kiwix, whose broken webserver blocks `et-hotspot` |
