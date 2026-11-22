@@ -13,6 +13,20 @@
 #
 # build-etc-iso.sh already defines its own log(); guard so we don't clobber it.
 
+# ---------------------------------------------------------------------------
+# Version, shared by every entry point.
+#
+# Defined here rather than in each script because build-etc-iso.sh and
+# apply-to-live-system.sh previously carried their own literals and had already
+# drifted apart (2.0.0 vs 2.1.0) for the same checkout.
+#
+# Format is "<ETC semver we target>-<our revision>", tracking ETC's own release
+# model so currency is obvious. See CLAUDE.md.
+# ---------------------------------------------------------------------------
+ETC_TARGET_VERSION="7.0.2"
+CUSTOMIZER_REVISION="1"
+CUSTOMIZER_VERSION="${ETC_TARGET_VERSION}-${CUSTOMIZER_REVISION}"
+
 ET_ROOT="${ET_ROOT:-/}"
 ET_DRY_RUN="${ET_DRY_RUN:-0}"
 ET_BACKUP_DIR="${ET_BACKUP_DIR:-}"

@@ -6,7 +6,7 @@ Two paths. Pick the one that matches what you have.
 
 ## A. Already running ETC — no rebuild needed
 
-Fastest way to get APRS, the D578UVIII radio profiles and the addon launchers
+Fastest way to get APRS, the D578UVIII radio profile and the backup manifest
 onto a machine you're already using. No Cubic, no ISO, no disk operations.
 
 ```bash
@@ -17,6 +17,10 @@ sudo ./apply-to-live-system.sh --dry-run   # preview
 sudo ./apply-to-live-system.sh             # apply
 sudo ./apply-to-live-system.sh --uninstall # undo
 ```
+
+The et-os-addons installers are **opt-in** here, via `--addons`. They apt-purge
+and replace system packages (stock WSJT-X, kiwix), which `--uninstall` cannot
+reverse — everything else this script does is file-only and fully reversible.
 
 `secrets.env` is optional here — `CALLSIGN` and `GRID_SQUARE` are read from
 `~/.config/emcomm-tools/user.json` if ETC is already configured.
@@ -34,7 +38,7 @@ will refuse to run as root):
 
 ### First: make apt work again
 
-ETC v6 is Ubuntu 22.10 "kinetic", EOL since July 2023. Its packages moved to
+ETC (through R7) is Ubuntu 22.10 "kinetic", EOL since July 2023. Its packages moved to
 `old-releases.ubuntu.com`, so until you repoint apt, every install fails with
 "Unable to locate package". This blocks CHIRP, `build-direwolf-gpsd.sh`, and
 anything else.
@@ -189,4 +193,4 @@ sudo ./build-etc-iso.sh -r stable -d -v    # + bash tracing
 ## More
 
 - [UPGRADING.md](UPGRADING.md) — upgrade paths, beta tracking, v1 migration
-- [CHANGELOG.md](CHANGELOG.md) — what changed in v2.0.0 and why
+- [CHANGELOG.md](CHANGELOG.md) — what changed in 7.0.2-1 and why

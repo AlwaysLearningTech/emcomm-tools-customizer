@@ -143,7 +143,7 @@ verify_system() {
         _v_warn "No AnyTone backend in Hamlib -- run ./build-hamlib-anytone.sh"
     fi
 
-    # One profile since v2.1.0. The commode=0 "-com" counterpart was removed as
+    # One profile since 7.0.2-1. The commode=0 "-com" counterpart was removed as
     # a duplicate of stock ETC's digirig-mobile-no-cat, which keys the radio
     # over the DigiRig's RTS line using Hamlib model 6 and needs no custom
     # Hamlib at all.

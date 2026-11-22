@@ -1,6 +1,6 @@
 # Changelog
 
-## v2.1.0 — Target ETC R7; fix the applications that were never installed
+## 7.0.2-1 (ETC R7) — Target ETC R7; fix the applications that were never installed
 
 Retargets the build at **EmComm Tools Community R7 (7.0.2)** and fixes a set of
 customizations that reported success on every build while doing nothing at all.
@@ -71,12 +71,23 @@ Also fixed in the same area:
 - `yes`/`no` from `secrets.env` are now normalized to dconf's `true`/`false`
   via `dconf_bool()`, and numbers to doubles via `dconf_double()`.
 
-### Fixed — `customize_power` and `customize_timezone` were dead code
+### Removed — all power and battery management
 
-Neither was ever called from `main()`. Every `POWER_*` setting and `TIMEZONE`
-in `secrets.env` was ignored. Both are now steps in the sequence.
-`AUTOMATIC_SUSPEND="no"` additionally forces the `sleep-inactive-*-type` keys
-to `nothing`, since a timeout alone does not prevent suspend.
+`customize_power()` and `customize_timezone()` were both dead code: neither was
+ever called from `main()`, so every `POWER_*` setting and `TIMEZONE` in
+`secrets.env` was silently ignored.
+
+`customize_timezone()` is now wired in and works. Power management is **gone
+entirely** rather than fixed — the function, the `POWER_*` and
+`AUTOMATIC_SUSPEND` / `AUTOMATIC_POWER_SAVER` settings, and a
+`customize_upower()` that briefly implemented battery-percentage actions. Three
+of the keys the old code wrote did not exist (see above), so nothing it claimed
+to configure had ever taken effect on any build.
+
+**Consequence worth knowing:** the image now inherits GNOME and UPower's stock
+behaviour, which on battery means suspend-on-idle. If a laptop running a net
+must stay awake, set it on the installed system — `gnome-control-center power`,
+or `powerprofilesctl set performance` — rather than in `secrets.env`.
 
 ### Fixed — verification checked for things the build deliberately no longer does
 
@@ -102,7 +113,9 @@ and **aborts before** the 20–40 minute squashfs step instead of printing
   matching R7. The old `DIM_SCREEN` default of `true` was re-enabling, on every
   build, the dimming R7 had just turned off. These are no longer settings — see
   "`secrets.env` holds only real decisions" below.
-- `ENABLE_ETOSADDONS_KIWIX` now defaults to `no` (duplicate launcher).
+- `ENABLE_ETOSADDONS_KIWIX` is **on**. It was briefly set to `no` during this
+  release on the mistaken belief that it duplicated ETC's kiwix; it replaces a
+  broken one. See "et-os-addons was never actually installing anything".
 - The hardcoded package list is documented with what **not** to add: R7 ships
   Thunderbird, VLC, Python 3.11.17 and Rust natively.
 

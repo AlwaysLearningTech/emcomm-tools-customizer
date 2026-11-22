@@ -35,19 +35,27 @@
 #
 # So: run the individual installers against OUR R7 base.
 #
-# HOW THE SHIM WORKS
+# HOW THE SHIM WORKS -- two layers, because one is not enough
 #
-# Every installer opens with
+# MOST installers open with
 #   [ -z "$ET_ENV_LOADED" ] && . $(dirname $(readlink -f $0))/env.sh
-# so exporting ET_ENV_LOADED=1 makes them skip env.sh entirely -- which is what
-# we want, because that env.sh sources ETC's scripts/env.sh and functions.sh
-# out of the r6 submodule, and also exports ET_EXPERT=1 (which would turn on
-# ETC's Wikipedia download dialog).
+# so exporting ET_ENV_LOADED=1 makes them skip env.sh -- which is what we want,
+# because that env.sh sources ETC's scripts/env.sh and functions.sh out of the
+# r6 submodule, and exports ET_EXPERT=1 (which would turn on ETC's interactive
+# Wikipedia download dialog and stall an unattended build).
 #
-# Verified by grep: the installers use only ET_DIST_DIR, ET_SRC_DIR, ET_HOME,
-# ET_OS_ADDONS_BASE, ET_LAUNCHER_APP_DL, SKEL and the et-log command. None of
-# them call exitIfNotRoot or handle_error, so nothing from functions.sh is
-# needed. The values below are ETC R7's own, from its scripts/env.sh.
+# install-qsstv.sh does NOT have that guard. It runs `. ./env.sh`
+# unconditionally, and it is `set -e`, so with an un-initialized submodule it
+# aborts before installing anything. Relying on the guard alone therefore
+# silently loses QSSTV -- and would lose any other script that drops it.
+#
+# So layer two: _addons_write_env_stubs() writes a stub env.sh and functions.sh
+# into the empty submodule directory, exporting ETC R7's values and defining
+# the two helpers upstream's functions.sh provides. Any script that sources the
+# chain now gets our values, ET_EXPERT included (absent, on purpose).
+#
+# Verified by grep that the installers need only ET_DIST_DIR, ET_SRC_DIR,
+# ET_HOME, ET_OS_ADDONS_BASE, ET_LAUNCHER_APP_DL, SKEL and the et-log command.
 # ---------------------------------------------------------------------------
 
 ADDONS_REPO="${ADDONS_REPO:-https://github.com/clifjones/et-os-addons.git}"
@@ -94,7 +102,7 @@ ADDONS_INSTALLERS=(
     "ENABLE_ETOSADDONS_KIWIX|yes|install-kiwix.sh|Kiwix AppImage (replaces the broken apt package)"
     "ENABLE_ETOSADDONS_JS8SPOTTER|yes|install-js8spotter.sh|JS8Spotter"
     "ENABLE_ETOSADDONS_NETCONTROL|no|install-netcontrol.sh|NetControl (needs Wine + the .exe)"
-    "ENABLE_ETOSADDONS_COMMSTATONE|no|install-commstatone.sh|CommStatOne"
+    "ENABLE_ETOSADDONS_COMMSTATONE|yes|install-commstatone.sh|CommStatOne JS8Call dashboard"
     "ENABLE_ETOSADDONS_ET_LAUNCHER|no|install-et-launcher.sh|et-launcher AppImage + autostart"
     "ENABLE_ETOSADDONS_DESKTOP|no|customize-desktop.sh|glib schema override (fights customize_desktop)"
     "ENABLE_ETOSADDONS_OVERLAY|yes|install-et-os-addons.sh|overlay files (et-hotspot, Wine add-ons, grib)"
@@ -117,7 +125,13 @@ _addons_run() {
 
     # ETC R7 scripts/env.sh values, plus SKEL, plus the guard that stops the
     # installers from sourcing the r6-submodule env.sh.
+    #
+    # PATH includes /opt/emcomm-tools/bin defensively. ETC symlinks et-log into
+    # /usr/local/bin, which is on sudo's secure_path, so this is belt-and-braces
+    # rather than required -- but every one of these scripts is `set -e` with
+    # et-log as its first statement, so a missing et-log means a silent no-op.
     env_prefix="
+        export PATH=\"/opt/emcomm-tools/bin:\$PATH\"
         export ET_ENV_LOADED=1
         export ET_HOME=/opt/emcomm-tools
         export ET_GROUP=et-data
@@ -133,11 +147,77 @@ _addons_run() {
         ./${base}
     "
 
+    # stdin from /dev/null: an unexpected apt or unzip prompt must fail rather
+    # than block a two-hour unattended build waiting on a terminal.
     if [ "$ET_ROOT" = "/" ]; then
-        bash -c "$env_prefix"
+        bash -c "$env_prefix" </dev/null
     else
-        chroot "$ET_ROOT" /bin/bash -c "$env_prefix"
+        chroot "$ET_ROOT" /bin/bash -c "$env_prefix" </dev/null
     fi
+}
+
+# Write stub env.sh / functions.sh into the un-initialized submodule directory.
+#
+# Most installers guard with `[ -z "$ET_ENV_LOADED" ] && . env.sh`, so the
+# ET_ENV_LOADED=1 we export is enough. install-qsstv.sh does NOT: it runs
+# `. ./env.sh` unconditionally. That file does
+#
+#     . ${ET_OS_ADDONS_BASE}/emcomm-tools-os-community/scripts/env.sh
+#     . ${ET_OS_ADDONS_BASE}/emcomm-tools-os-community/scripts/functions.sh
+#
+# and we clone --depth 1 WITHOUT the submodule (deliberately -- it is pinned to
+# release/r6). That directory is therefore empty, both sources fail, and under
+# `set -e` QSSTV aborts before installing anything.
+#
+# Rather than depend on every upstream script keeping its guard, satisfy the
+# chain: stubs that export ETC R7's values and define the two helpers the real
+# functions.sh provides. Any script that sources env.sh now gets our values
+# instead of the r6 submodule's -- notably WITHOUT ET_EXPERT=1, which upstream
+# sets and which would switch on ETC's interactive Wikipedia dialog.
+_addons_write_env_stubs() {
+    local repo="$1"
+    local stub_dir="${repo}/emcomm-tools-os-community/scripts"
+    mkdir -p "$stub_dir" || return 1
+
+    cat > "${stub_dir}/env.sh" <<'STUBEOF'
+# Stub written by emcomm-tools-customizer.
+#
+# The real file lives in et-os-addons' submodule, which is pinned to ETC
+# release/r6 and is deliberately not initialized -- we build against R7. These
+# are ETC R7's own scripts/env.sh values.
+#
+# ET_EXPERT is deliberately NOT exported. Upstream's env.sh sets it to 1, which
+# turns on ETC's interactive Wikipedia download dialog and would stall an
+# unattended build.
+export ET_HOME=/opt/emcomm-tools
+export ET_GROUP=et-data
+export ET_TEMP_DIR=/tmp/et
+export ET_LOG_FILE=$ET_TEMP_DIR/et.log
+export ET_DIST_DIR=/opt/dist
+export ET_SRC_DIR=/opt/src
+export SKEL=/etc/skel
+export ET_ENV_LOADED=1
+STUBEOF
+
+    cat > "${stub_dir}/functions.sh" <<'STUBEOF'
+# Stub written by emcomm-tools-customizer. See env.sh in this directory.
+#
+# Only the two helpers upstream's env.sh calls or defines. Verified by grep
+# that none of the install-*.sh scripts use anything else from functions.sh.
+exitIfNotRoot() {
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "This script must be run as root." >&2
+    exit 1
+  fi
+}
+
+handle_error() {
+  echo "Error in ${1:-?} on line ${2:-?}: ${3:-?}" >&2
+  exit 1
+}
+STUBEOF
+
+    return 0
 }
 
 integrate_etosaddons_features() {
@@ -151,12 +231,30 @@ integrate_etosaddons_features() {
     fi
     log "DEBUG" "addons repo: $ADDONS_REPO_PATH"
 
+    local entry var def script label val rc failed=0 ran=0
+
+    # Report and return BEFORE touching anything. The staging below rm -rf's
+    # and untars inside the target root, which a dry run must not do.
+    if [ "$ET_DRY_RUN" -eq 1 ]; then
+        log "INFO" "dry run -- would run these addons installers:"
+        for entry in "${ADDONS_INSTALLERS[@]}"; do
+            IFS='|' read -r var def script label <<< "$entry"
+            val="${!var:-$def}"
+            [ "$val" = "yes" ] || continue
+            [ -f "${ADDONS_REPO_PATH}/scripts/${script}" ] || continue
+            echo "       ${script}  -- ${label}"
+        done
+        return 0
+    fi
+
     # Stage the repo where the scripts will run from. On a live system it can
     # run from the cache in place; for an ISO build it has to be inside the
     # squashfs so chroot can reach it.
     local rel staged
     if [ "$ET_ROOT" = "/" ]; then
         rel="$ADDONS_REPO_PATH"
+        _addons_write_env_stubs "$ADDONS_REPO_PATH" \
+            || { log "ERROR" "Could not write env stubs"; return 1; }
     else
         rel="/tmp/et-os-addons"
         staged="${ET_ROOT%/}${rel}"
@@ -165,13 +263,9 @@ integrate_etosaddons_features() {
         # Exclude .git: it is dead weight inside the image.
         tar -C "$ADDONS_REPO_PATH" --exclude=.git -cf - . | tar -C "$staged" -xf - \
             || { log "ERROR" "Could not stage addons into $staged"; return 1; }
+        _addons_write_env_stubs "$staged" \
+            || { log "ERROR" "Could not write env stubs into $staged"; return 1; }
     fi
-
-    if [ "$ET_DRY_RUN" -eq 1 ]; then
-        log "INFO" "dry run -- would run these addons installers:"
-    fi
-
-    local entry var def script label val rc failed=0 ran=0
     for entry in "${ADDONS_INSTALLERS[@]}"; do
         IFS='|' read -r var def script label <<< "$entry"
         val="${!var:-$def}"
@@ -183,11 +277,6 @@ integrate_etosaddons_features() {
 
         if [ ! -f "${ADDONS_REPO_PATH}/scripts/${script}" ]; then
             log "WARN" "${script} not in this addons revision -- skipping"
-            continue
-        fi
-
-        if [ "$ET_DRY_RUN" -eq 1 ]; then
-            echo "       ${script}  -- ${label}"
             continue
         fi
 
@@ -207,18 +296,10 @@ integrate_etosaddons_features() {
 
     [ "$ET_DRY_RUN" -eq 1 ] && return 0
 
-    # The overlay step copies an et-launcher autostart entry unconditionally.
-    # Without install-et-launcher.sh having run, that entry points at an
-    # AppImage that is not there and errors on every login -- which is exactly
-    # the breakage this module used to be blamed for.
-    if [ "${ENABLE_ETOSADDONS_ET_LAUNCHER:-no}" != "yes" ]; then
-        local autostart
-        autostart="$(etpath /etc/skel/.config/autostart/et-launcher.appimage.desktop)"
-        if [ -e "$autostart" ]; then
-            rm -f "$autostart"
-            log "DEBUG" "Removed et-launcher autostart (et-launcher not installed)"
-        fi
-    fi
+    # NOTE: no et-launcher autostart cleanup here. install-et-os-addons.sh
+    # copies `overlay/etc/skel/*`, and that glob cannot match the `.config`
+    # dot-directory holding et-launcher.appimage.desktop -- so the overlay step
+    # never places it. Only install-et-launcher.sh does, and that is gated.
 
     # Tidy the staged copy out of the image.
     [ -n "${staged:-}" ] && rm -rf "$staged"

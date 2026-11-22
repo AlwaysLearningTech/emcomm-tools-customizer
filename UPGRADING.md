@@ -239,8 +239,17 @@ Worth revisiting:
 - `APRS_BEACON_INTERVAL` — v1's `300` meant 300 **seconds**. The default is now
   `30:00` (30 minutes). Bare numbers are seconds in Dire Wolf's time format.
 - `APRS_SYMBOL` — now a Dire Wolf symbol name (`digi`) or a 2-character code.
-- `ENABLE_ETOSADDONS_USERBACKUP` — now defaults to `no`, since it replaces the
-  `et-user-backup` ETC already ships.
+- `ENABLE_ETOSADDONS_USERBACKUP` — **removed** in 7.0.2-1. Its purpose (a
+  `BACKUP_ITEMS.lst` manifest) is now `ENABLE_MANIFEST_BACKUP`, which keeps
+  R7's behaviour of skipping paths that do not exist — the et-os-addons fork
+  dropped that, and also printed an empty "what was backed up" summary.
+- `POWER_*`, `AUTOMATIC_SUSPEND`, `AUTOMATIC_POWER_SAVER` — **removed**. Three
+  of the dconf keys behind them never existed, so they had no effect on any
+  build. Set power behaviour on the installed system instead.
+- `ANYTONE_DEFAULT_MODE` — **removed**. There is one D578UVIII profile now
+  (commode=1). For PTT-only, select "DigiRig Mobile (No CAT)" in `et-radio`.
+- `ADDITIONAL_PACKAGES`, `SQUASHFS_COMPRESSION`, and the `DESKTOP_*` /
+  screen settings — **removed**, now hardcoded.
 
 If a v1 build put any of the following on your system, remove them — see
 CHANGELOG.md for why each is wrong:

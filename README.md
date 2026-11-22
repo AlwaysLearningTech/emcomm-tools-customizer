@@ -3,7 +3,11 @@
 Customizes EmComm Tools Community (ETC) images using xorriso/squashfs — no Cubic,
 no GUI. Applies the same customizations to an **already-installed** system too.
 
-> **v2.0.0 is a breaking release.** Installer automation is gone: a built ISO now
+> **Versioning tracks ETC**: `<ETC semver targeted>-<our revision>`. This is
+> `7.0.2-1`, built and tested against ETC R7 (7.0.2). The build warns if the
+> ETC release it resolves differs from that.
+>
+> **v2.0.0 was a breaking release.** Installer automation is gone: a built ISO now
 > boots to the standard Ubuntu / ETC installer walkthrough and you choose the
 > disk and partition layout yourself. The `dd` USB writer is gone as well —
 > nothing in this repository writes to a block device. The Anytone D578UV CAT
@@ -62,7 +66,7 @@ This customizer **respects upstream ETC architecture**. We:
 - Don't change package selections or install additional software
 - Don't pre-install VARA or Wine prefix (these require a desktop session post-install)
 
-## Release Status: v2.0.0
+## Release Status: 7.0.2-1 (targets ETC R7)
 
 **Breaking release.** Installer automation and the `dd` USB writer were removed,
 and the Anytone D578UV CAT control was rewritten because it never worked. Read
@@ -108,18 +112,33 @@ and the Anytone D578UV CAT control was rewritten because it never worked. Read
 
 ### Optional et-os-addons Features
 
-The `et-os-addons` repository provides optional application launchers and configurations. These are **enabled by default** but can be disabled via `ENABLE_ETOSADDONS_*` variables in `secrets.env`:
+`et-os-addons` is not a set of launchers — it carries nine real installer
+scripts. We run those individually against our R7 base rather than its
+`scripts/install.sh`, which would build ETC from a submodule pinned to
+`release/r6`.
 
-| Feature | Variable | Description |
-|---------|----------|-------------|
-| VR-N76 Radio | `ENABLE_ETOSADDONS_VR_N76` | VR-N76 old radio utility and preset config |
-| QSSTV | `ENABLE_ETOSADDONS_QSSTV` | QSSTV slow-scan TV launcher and config template |
-| JS8 Spotter | `ENABLE_ETOSADDONS_JS8SPOTTER` | JS8Call spotting utility and launcher |
-| NetControl | `ENABLE_ETOSADDONS_NETCONTROL` | Network control utility with launcher |
-| WiFi Hotspot | `ENABLE_ETOSADDONS_HOTSPOT` | WiFi hotspot launcher utility |
-| User Backup | `ENABLE_ETOSADDONS_USERBACKUP` | User backup/restore manager utility |
-| Kiwix | `ENABLE_ETOSADDONS_KIWIX` | Offline content browser with desktop integration |
-| VGC VR-N76 Radio | Always enabled | VGC VR-N76 radio config for `et-radio` menu |
+| Feature | Variable | Default | Notes |
+| --- | --- | --- | --- |
+| XyGrib | `ENABLE_ETOSADDONS_XYGRIB` | yes | GRIB weather map viewer |
+| GridTracker 2 | `ENABLE_ETOSADDONS_GRIDTRACKER` | yes | |
+| JS8Spotter | `ENABLE_ETOSADDONS_JS8SPOTTER` | yes | |
+| QSSTV | `ENABLE_ETOSADDONS_QSSTV` | yes | Builds from source; slow |
+| WSJT-X Improved | `ENABLE_ETOSADDONS_WSJTX_IMPROVED` | yes | apt-purges stock wsjtx first |
+| CommStatOne | `ENABLE_ETOSADDONS_COMMSTATONE` | yes | JS8Call group/net dashboard |
+| Kiwix | `ENABLE_ETOSADDONS_KIWIX` | yes | **Replaces** ETC's apt kiwix, whose broken webserver blocks `et-hotspot` |
+| Overlay files | `ENABLE_ETOSADDONS_OVERLAY` | yes | et-hotspot, Wine add-on scripts, Saildocs grib |
+| NetControl | `ENABLE_ETOSADDONS_NETCONTROL` | no | Needs Wine + `NetControl.exe` |
+| et-launcher | `ENABLE_ETOSADDONS_ET_LAUNCHER` | no | Autostarts a launcher UI at login |
+| Desktop tweaks | `ENABLE_ETOSADDONS_DESKTOP` | no | glib override; competes with our dconf |
+
+Removed flags: `ENABLE_ETOSADDONS_HOTSPOT`, `_VARAC`, `_VARA_EXTRAS` and
+`_VR_N76` are now covered by `ENABLE_ETOSADDONS_OVERLAY`, matching how upstream
+copies its overlay. `ENABLE_ETOSADDONS_USERBACKUP` is replaced by
+`ENABLE_MANIFEST_BACKUP` (see Backups).
+
+**On a live system** these are opt-in — `sudo ./apply-to-live-system.sh --addons`
+— because they apt-purge and replace system packages, which `--uninstall`
+cannot reverse.
 
 **To disable a feature**, set the variable to `"no"` in `secrets.env`:
 ```bash
@@ -405,30 +424,20 @@ ENABLE_AUTOLOGIN="no"          # "yes" or "no" - default is NO (password prompt)
 MACHINE_NAME=""                 # Hostname (defaults to ETC-{CALLSIGN})
 TIMEZONE="America/Denver"       # System timezone (Linux format, see /usr/share/zoneinfo/)
 
-# === Desktop Preferences ===
-DESKTOP_COLOR_SCHEME="prefer-dark"  # prefer-dark or prefer-light
-DESKTOP_SCALING_FACTOR="1.0"        # 1.0, 1.25, 1.5, or 2.0
-DISABLE_ACCESSIBILITY="yes"         # yes = disable screen reader, on-screen keyboard
-
-# === Display & Screen Management ===
-AUTOMATIC_SCREEN_BRIGHTNESS="false" # true = adaptive brightness, false = manual
-DIM_SCREEN="true"                   # true = dim screen during idle
-SCREEN_BLANK="true"                 # true = blank screen after idle timeout
-SCREEN_BLANK_TIMEOUT="300"          # Seconds before screen blanks (300=5min)
-
-# === Power Management ===
-POWER_MODE="balanced"               # balanced, performance, or power-saver
-POWER_LID_CLOSE_AC="suspend"        # AC lid close: nothing, suspend, hibernate, logout
-POWER_LID_CLOSE_BATTERY="suspend"   # Battery lid close: nothing, suspend, hibernate, logout
-POWER_BUTTON_ACTION="interactive"   # Power button: nothing, suspend, hibernate, interactive
-POWER_IDLE_AC="nothing"             # AC idle action: nothing, suspend, hibernate
-POWER_IDLE_BATTERY="suspend"        # Battery idle action: nothing, suspend, hibernate
-POWER_IDLE_TIMEOUT="900"            # Seconds before idle action (900=15min)
-AUTOMATIC_POWER_SAVER="true"        # true = enable power saver on battery
-AUTOMATIC_SUSPEND="true"            # true = enable automatic suspend
+# === Desktop, display and power ===
+# REMOVED. Desktop and display values are hardcoded to match ETC R7, which
+# natively enables dark mode and disables dimming/auto-brightness.
+#
+# Power and battery settings are gone entirely: three of the dconf keys the old
+# code wrote did not exist, so nothing it claimed to configure ever applied.
+# The image inherits GNOME/UPower defaults, which on battery means
+# suspend-on-idle. Change it on the installed system:
+#   gnome-control-center power      /      powerprofilesctl set performance
 
 # === Additional System Packages ===
-ADDITIONAL_PACKAGES="code git nodejs npm"  # Space-separated apt packages to install
+# REMOVED. nodejs and npm are hardcoded build dependencies. "code" could never
+# work via apt (Ubuntu 22.10 has no such package and the build removes the
+# Microsoft repos) -- VS Code installs from a .deb. "git" comes from ETC.
 
 # === WiFi Networks ===
 WIFI_SSID_HOME="YourHomeNetwork"
@@ -464,8 +473,9 @@ ENABLE_APRS_IGATE="yes"        # Enable iGate
 APRS_SERVER="noam.aprs2.net"   # APRS-IS server
 
 # === Anytone AT-D578UVIII ===
-ENABLE_ANYTONE_D578="yes"      # Write the D578UVIII radio profiles
-ANYTONE_DEFAULT_MODE="ptt"     # ptt (commode=0) | com (commode=1)
+ENABLE_ANYTONE_D578="yes"      # Write the D578UVIII radio profile
+ENABLE_HAMLIB_ANYTONE="yes"    # Build the Hamlib fork providing model 37001
+ENABLE_ANYTONE_D890_TNC="yes"  # D890UV Bluetooth KISS TNC profile + helper
 
 # === VARA License (Optional) ===
 VARA_FM_CALLSIGN=""            # Callsign registered with VARA FM license
@@ -477,13 +487,9 @@ VARA_HF_LICENSE_KEY=""         # Your VARA HF license key
 PAT_EMCOMM_ALIAS="yes"         # Create "emcomm" quick-connect alias
 PAT_EMCOMM_GATEWAY=""          # Gateway callsign (e.g., "W7ACS-10")
 
-# === Power Management ===
-POWER_LID_CLOSE_AC="suspend"      # Lid close on AC power
-POWER_LID_CLOSE_BATTERY="suspend" # Lid close on battery
-POWER_BUTTON_ACTION="interactive" # Power button action
-POWER_IDLE_AC="nothing"           # Idle action on AC
-POWER_IDLE_BATTERY="suspend"      # Idle action on battery
-POWER_IDLE_TIMEOUT="900"          # Idle timeout (seconds)
+# === Backups ===
+ENABLE_MANIFEST_BACKUP="yes"   # Manifest-driven et-user-backup
+BACKUP_EXTRA_ITEMS=""          # Extra $HOME-relative paths, space-separated
 ```
 
 ### Installation Modes
@@ -614,7 +620,7 @@ The build automatically installs:
 - **git** - version control
 - **CHIRP** - Radio programming software (installed via pipx with official wheel from https://archive.chirpmyradio.com/)
 
-Additional packages can be configured in `secrets.env` via `ADDITIONAL_PACKAGES` variable.
+The apt package list is hardcoded in `customize_additional_packages()`; it is a build dependency set, not a preference.
 
 **Note on CHIRP**: Ubuntu 22.10 repos have outdated CHIRP packages. The build uses the official installation method (pipx with downloaded wheel) as documented at https://chirpmyradio.com/projects/chirp/wiki/ChirpOnLinux.
 

@@ -10,7 +10,8 @@
 # ISO get byte-identical configuration.
 #
 # Usage:
-#   sudo ./apply-to-live-system.sh                 # apply everything
+#   sudo ./apply-to-live-system.sh                 # APRS, radio, backup manifest
+#   sudo ./apply-to-live-system.sh --addons        # ALSO run et-os-addons installers
 #   sudo ./apply-to-live-system.sh --dry-run       # show what would change
 #   sudo ./apply-to-live-system.sh --verify        # check the system, change nothing
 #   sudo ./apply-to-live-system.sh --uninstall     # restore from newest backup
@@ -20,7 +21,11 @@
 # and handles home-directory work (backup restore, CHIRP). They do not overlap;
 # verification is shared via lib/verify.sh.
 #
-# Sections: --no-aprs  --no-radio  --no-addons
+# Sections: --no-aprs  --no-radio  --no-backup  --addons
+#
+# --addons is OPT-IN because it runs upstream et-os-addons installers that
+# apt-purge and replace system packages. --uninstall restores files only, so it
+# cannot reverse those; everything else here is file-only and fully reversible.
 #
 # Settings come from secrets.env (see secrets.env.template). Every value has a
 # working default, so secrets.env is optional except for CALLSIGN and GRID_SQUARE
@@ -29,7 +34,6 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VERSION="2.0.0"
 
 ET_ROOT="/"
 ET_PREFIX="/opt/emcomm-tools"
@@ -40,7 +44,21 @@ ET_DRY_RUN=0
 SECRETS_FILE="${SECRETS_FILE:-${SCRIPT_DIR}/secrets.env}"
 ADDONS_CACHE="${ADDONS_CACHE:-/var/cache/emcomm-tools-customizer/et-os-addons}"
 
-DO_APRS=1; DO_RADIO=1; DO_ADDONS=1; UNINSTALL=0; LIST_BACKUPS=0; VERIFY_ONLY=0
+# Sourced BEFORE argument parsing: --version prints CUSTOMIZER_VERSION, which
+# lives in common.sh, and `set -u` would abort on it otherwise.
+# shellcheck source=lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+
+# DO_ADDONS defaults to 0, deliberately.
+#
+# et-os-addons integration used to be a file copy, safe to run by default. It
+# now executes upstream's installers, which `apt purge wsjtx wsjtx-doc
+# wsjtx-data`, `apt purge kiwix`, pip-install into the system, and build QSSTV
+# from source. None of that goes through backup(), so --uninstall cannot
+# reverse it -- and this script's contract is that everything it touches is
+# backed up. Opt in with --addons on a machine you are willing to change.
+DO_APRS=1; DO_RADIO=1; DO_ADDONS=0; DO_BACKUP=1
+UNINSTALL=0; LIST_BACKUPS=0; VERIFY_ONLY=0
 
 for arg in "$@"; do
   case "$arg" in
@@ -50,17 +68,16 @@ for arg in "$@"; do
     --list-backups) LIST_BACKUPS=1 ;;
     --no-aprs)      DO_APRS=0 ;;
     --no-radio)     DO_RADIO=0 ;;
-    --no-addons)    DO_ADDONS=0 ;;
-    -V|--version)   echo "apply-to-live-system.sh ${VERSION}"; exit 0 ;;
-    -h|--help)      sed -n '3,27p' "$0"; exit 0 ;;
+    --addons)       DO_ADDONS=1 ;;
+    --no-addons)    DO_ADDONS=0 ;;   # kept for compatibility; already the default
+    --no-backup)    DO_BACKUP=0 ;;
+    -V|--version)   echo "apply-to-live-system.sh ${CUSTOMIZER_VERSION}"; exit 0 ;;
+    -h|--help)      sed -n '3,30p' "$0"; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; exit 1 ;;
   esac
 done
 
 export ET_ROOT ET_PREFIX ET_BACKUP_DIR ET_DRY_RUN ADDONS_CACHE
-
-# shellcheck source=lib/common.sh
-source "${SCRIPT_DIR}/lib/common.sh"
 
 step() { echo; echo "=== $* ==="; }
 
@@ -92,8 +109,12 @@ do_uninstall() {
 
   # Remove files we added that had no pre-existing counterpart to restore.
   local added
+  # anytone-d578uv-com.json was dropped in 7.0.2-1 but is still listed so an
+  # uninstall on a system built by an older revision cleans it up.
   for added in "${ET_PREFIX}/conf/radios.d/anytone-d578uv.json" \
                "${ET_PREFIX}/conf/radios.d/anytone-d578uv-com.json" \
+               "${ET_PREFIX}/conf/radios.d/anytone-d890.bt.json" \
+               "${ET_PREFIX}/bin/et-anytone-d890" \
                "${ET_PREFIX}/conf/radios.d/active-radio.json"; do
     [ -e "${latest}${added}" ] || [ -L "${latest}${added}" ] || rm -fv "$added" 2>/dev/null
   done
@@ -117,12 +138,12 @@ if [ "$VERIFY_ONLY" -eq 1 ]; then
   fi
   # shellcheck source=lib/verify.sh
   source "${SCRIPT_DIR}/lib/verify.sh"
-  echo "EmComm Tools Customizer ${VERSION} -- verification"
+  echo "EmComm Tools Customizer ${CUSTOMIZER_VERSION} -- verification"
   verify_system
   exit $?
 fi
 
-echo "EmComm Tools Customizer ${VERSION} -- live system apply"
+echo "EmComm Tools Customizer ${CUSTOMIZER_VERSION} -- live system apply"
 [ "$ET_DRY_RUN" -eq 1 ] && log "WARN" "DRY RUN -- nothing will be written"
 echo "Backup directory: ${ET_BACKUP_DIR}"
 
@@ -165,8 +186,27 @@ if [ "$DO_RADIO" -eq 1 ]; then
   customize_radio_configs
 fi
 
+if [ "$DO_BACKUP" -eq 1 ]; then
+  step "3. et-user-backup manifest"
+  # shellcheck source=lib/customize-backup.sh
+  source "${SCRIPT_DIR}/lib/customize-backup.sh"
+  # Snapshot the stock script first so its path list can be inherited, exactly
+  # as the ISO build does. Harmless if a snapshot already exists.
+  snapshot_stock_user_backup
+  customize_user_backup_manifest
+fi
+
 if [ "$DO_ADDONS" -eq 1 ]; then
-  step "3. et-os-addons features"
+  step "4. et-os-addons installers"
+  log "WARN" "These run upstream's installers, which change system packages:"
+  log "WARN" "  apt purge wsjtx wsjtx-doc wsjtx-data   (WSJT-X Improved replaces it)"
+  log "WARN" "  apt purge kiwix                        (AppImage replaces it)"
+  log "WARN" "  pip installs, and a QSSTV source build"
+  log "WARN" "--uninstall restores FILES only; it cannot undo package changes."
+  if [ "$ET_DRY_RUN" -eq 0 ]; then
+    log "WARN" "Ctrl-C within 10 seconds to abort."
+    sleep 10
+  fi
   # shellcheck source=lib/customize-addons.sh
   source "${SCRIPT_DIR}/lib/customize-addons.sh"
   integrate_etosaddons_features "$ADDONS_CACHE"

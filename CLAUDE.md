@@ -17,13 +17,38 @@ Windows partition. The ISO boots the normal Ubuntu/ETC installer and the user
 chooses their own disk layout. Do not reintroduce automated partitioning,
 and nothing in this repo may write to a block device.
 
+## Versioning
+
+This project tracks ETC rather than numbering itself independently. The version
+is `<ETC semver we target>-<our revision>`, set at the top of
+`build-etc-iso.sh`:
+
+```bash
+ETC_TARGET_VERSION="7.0.2"    # the ETC release these customizations are tested against
+CUSTOMIZER_REVISION="1"       # our iteration on top of it
+# CUSTOMIZER_VERSION => "7.0.2-1"
+```
+
+Currency is then obvious: if ETC's latest release is 7.0.2 and this says
+`7.0.2-1`, we are current. `check_etc_target_drift()` compares the release
+actually being built against `ETC_TARGET_VERSION` and warns, in either
+direction, during the build.
+
+**When moving to a new ETC release:** read its notes first for settings that
+became redundant, new `et-os-addons` installers, and changes to
+`et-user-backup`'s path list — then set `ETC_TARGET_VERSION` and reset
+`CUSTOMIZER_REVISION=1`. Bump only the revision for changes of ours.
+
+Releases before this scheme used plain semver (`v2.0.0`); those references in
+the changelog are historical and stay as they are.
+
 ## Architecture
 
 Every customization lives in exactly **one** place, under `lib/`, and operates
 on `$ET_ROOT`:
 
 | Caller | `ET_ROOT` |
-|---|---|
+| --- | --- |
 | `build-etc-iso.sh` | the unpacked squashfs |
 | `apply-to-live-system.sh` | `/` |
 

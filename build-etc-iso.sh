@@ -25,7 +25,27 @@ trap 'echo "[ERROR] Script failed at line $LINENO with exit code $?. Command: $B
 # Configuration
 # ============================================================================
 
-CUSTOMIZER_VERSION="2.0.0"
+# ---------------------------------------------------------------------------
+# Versioning, aligned to EmComm Tools Community's release model.
+#
+# ETC versions a release three ways, all visible in one tag:
+#   tag    emcomm-tools-os-community-20261126-r7-final-7.0.2
+#   name   2026.11.26.R7
+#   semver 7.0.2
+#
+# This project tracks ETC rather than numbering itself independently, so the
+# version is "<the ETC semver we target>-<our revision against it>". That makes
+# currency obvious at a glance: if ETC's latest is 7.0.2 and this says 7.0.2-2,
+# we are current. If ETC ships 7.1.0 and this still says 7.0.2-2, we are a
+# release behind, and check_etc_target_drift() says so during the build.
+#
+# Bump CUSTOMIZER_REVISION for changes of ours; set ETC_TARGET_VERSION when
+# moving to a new ETC release, after reading its notes for things we can drop.
+#
+# The values themselves live in lib/common.sh, sourced below, so this script
+# and apply-to-live-system.sh cannot report different versions for the same
+# checkout -- which they did (2.0.0 vs 2.1.0) when each kept its own literal.
+# ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SECRETS_FILE="${SCRIPT_DIR}/secrets.env"
 
@@ -240,6 +260,48 @@ list_available_versions() {
     echo ""
 }
 
+# Say plainly whether the ETC release being built matches the one this
+# customizer was written and tested against.
+#
+# The point is to make staleness impossible to miss. Our customizations are
+# tuned to a specific ETC release -- which settings are redundant, which
+# installer scripts exist, which paths et-user-backup covers -- and ETC moves
+# roughly twice a year. Silently building against an untested release is how
+# you end up fighting upstream instead of extending it.
+check_etc_target_drift() {
+    if [ -z "${VERSION:-}" ] || [ "$VERSION" = "dev" ]; then
+        log "WARN" "Could not read a semver from ${RELEASE_TAG}"
+        log "WARN" "  This customizer targets ETC ${ETC_TARGET_VERSION}; verify by hand."
+        return 0
+    fi
+
+    if [ "$VERSION" = "$ETC_TARGET_VERSION" ]; then
+        log "SUCCESS" "ETC ${VERSION} matches this customizer's target (v${CUSTOMIZER_VERSION})"
+        return 0
+    fi
+
+    # Sort the two semvers to say which direction the drift runs.
+    local newest
+    newest=$(printf '%s\n%s\n' "$VERSION" "$ETC_TARGET_VERSION" | sort -V | tail -1)
+
+    log "WARN" ""
+    if [ "$newest" = "$VERSION" ]; then
+        log "WARN" "Building ETC ${VERSION}, but this customizer targets ${ETC_TARGET_VERSION}."
+        log "WARN" "  ETC is NEWER than what these customizations were tested against."
+        log "WARN" "  Read its release notes before trusting this image:"
+        log "WARN" "    ${GITHUB_RELEASES_URL}"
+        log "WARN" "  Things to re-check: settings ETC now handles natively, new"
+        log "WARN" "  et-os-addons installers, and et-user-backup's path list."
+        log "WARN" "  Then set ETC_TARGET_VERSION=${VERSION} and reset CUSTOMIZER_REVISION=1."
+    else
+        log "WARN" "Building ETC ${VERSION}, but this customizer targets ${ETC_TARGET_VERSION}."
+        log "WARN" "  You are building an OLDER ETC than this customizer expects."
+        log "WARN" "  Customizations written for ${ETC_TARGET_VERSION} may not apply."
+    fi
+    log "WARN" ""
+    return 0
+}
+
 get_release_info() {
     log "INFO" "Fetching release information (mode: $RELEASE_MODE)..."
     
@@ -303,6 +365,8 @@ get_release_info() {
     # Output ISO filename
     OUTPUT_ISO="${OUTPUT_DIR}/${RELEASE_TAG}-custom.iso"
     
+    check_etc_target_drift
+
     log "SUCCESS" "Release: $RELEASE_NAME"
     log "INFO" "  Tag: $RELEASE_TAG"
     log "INFO" "  Version: $VERSION"
@@ -994,8 +1058,12 @@ restore_user_backup() {
         return 0
     fi
     
-    # Restore user backup (et-user-backup tarball)
-    # Contains: .config/emcomm-tools, .local/share/emcomm-tools, .local/share/pat
+    # Restore user backup (et-user-backup tarball).
+    #
+    # Contents vary by which et-user-backup made it. R7's stock version covers
+    # ten ETC paths; the manifest-driven one from lib/customize-backup.sh adds
+    # personal directories. Only the ETC config allowlist below is unpacked
+    # into /etc/skel -- see the note there.
     if [ -n "$user_backup" ]; then
         log "INFO" "Restoring user backup: $(basename "$user_backup")"
         
@@ -1005,24 +1073,76 @@ restore_user_backup() {
             return 1
         fi
         
-        # Extract to /etc/skel with timeout and progress
+        # Extract to /etc/skel with timeout and progress.
         local skel_dir="${SQUASHFS_DIR}/etc/skel"
         mkdir -p "$skel_dir"
-        
-        log "DEBUG" "Extracting backup with timeout (300 seconds)..."
-        # Use timeout to prevent hangs; extract with verbose progress
-        if timeout 300 tar xzf "$user_backup" -C "$skel_dir" --checkpoint=.1000 --checkpoint-action=dot 2>&1 | tee -a "$LOG_FILE"; then
-            log "SUCCESS" "User backup restored to /etc/skel"
+
+        # ONLY the ETC configuration subset goes into /etc/skel.
+        #
+        # /etc/skel is the template for EVERY account created on the installed
+        # system, and it ships inside the ISO. Extracting a whole backup here
+        # was tolerable when et-user-backup only covered three ETC config
+        # directories. It is not now: the manifest in lib/customize-backup.sh
+        # adds Documents, notes, .fldigi and .nbems, so an unfiltered extract
+        # would bake the operator's documents and message logs into the image
+        # and hand a copy to every new user.
+        #
+        # The full archive is stashed below for restoring into a real $HOME
+        # with `./post-install.sh --restore`, which is where personal data
+        # belongs.
+        local -a skel_paths=(
+            ".config/emcomm-tools"
+            ".config/partyline"
+            ".local/share/emcomm-tools"
+            ".local/share/pat"
+            ".reticulum"
+            ".reticulum-meshchat"
+            ".nomadnetwork"
+            "BACKUP_ITEMS.lst"
+        )
+
+        # Intersect the allowlist with what the archive actually holds: tar
+        # errors out on a member that is not present.
+        local -a present=()
+        local listing p
+        listing=$(tar tzf "$user_backup" 2>/dev/null)
+        for p in "${skel_paths[@]}"; do
+            if grep -qE "^\./?${p}(/|$)" <<< "$listing"; then
+                present+=("$p")
+            fi
+        done
+
+        if [ "${#present[@]}" -eq 0 ]; then
+            log "WARN" "Backup holds none of the ETC config paths -- skipping skel restore"
         else
-            local exit_code=$?
-            if [ $exit_code -eq 124 ]; then
-                log "WARN" "Backup extraction timed out (>300 sec). Extracted files will be incomplete. Will try to use what was restored."
+            log "DEBUG" "Extracting ${#present[@]} ETC config paths into /etc/skel..."
+            local rc=0
+            timeout 300 tar xzf "$user_backup" -C "$skel_dir" \
+                --checkpoint=.1000 --checkpoint-action=dot \
+                "${present[@]}" >> "$LOG_FILE" 2>&1 || rc=$?
+
+            if [ "$rc" -eq 0 ]; then
+                log "SUCCESS" "ETC config restored to /etc/skel (${present[*]})"
+            elif [ "$rc" -eq 124 ]; then
+                log "WARN" "Extraction timed out (>300s); skel contents may be incomplete"
             else
-                log "ERROR" "Backup extraction failed with code $exit_code"
+                log "ERROR" "Backup extraction failed with code $rc"
                 return 1
             fi
         fi
-        
+
+        # Stash the FULL archive for restoring personal data into a real home
+        # directory later, which `./post-install.sh --restore` does. Everything
+        # outside the allowlist above lives only here, never in skel.
+        local skel_backups="${SQUASHFS_DIR}/etc/skel/.etc-backups"
+        mkdir -p "$skel_backups"
+        if cp "$user_backup" "${skel_backups}/$(basename "$user_backup")"; then
+            log "SUCCESS" "Full backup staged for post-install restore into \$HOME"
+            log "INFO" "  On the installed system: ./post-install.sh --restore"
+        else
+            log "WARN" "Could not stage the full backup into /etc/skel/.etc-backups"
+        fi
+
         # Verify extraction
         if [ -d "$skel_dir/.config/emcomm-tools" ]; then
             log "SUCCESS" "ETC config restored"
@@ -1305,7 +1425,10 @@ update_release_info() {
     local release_number_upper="${RELEASE_NUMBER^^}"
     
     # Format: ETC_R5_FINAL (CUSTOMIZED) to indicate this is our build
-    local custom_description="ETC_${release_number_upper}_${release_type} (CUSTOMIZED)"
+    # Carries the customizer version so `et-system-info` and conky show which
+    # build is running. The literal "CUSTOMIZED" must stay -- verify_customizations()
+    # greps for exactly that string.
+    local custom_description="ETC_${release_number_upper}_${release_type} (CUSTOMIZED ${CUSTOMIZER_VERSION})"
     
     log "DEBUG" "Updating DISTRIB_DESCRIPTION to: $custom_description"
     
@@ -1333,17 +1456,16 @@ customize_desktop() {
     source "$SECRETS_FILE"
     log "DEBUG" "Sourced secrets file for desktop config"
     
-    # All hardcoded as of v2.1.0 -- these are no longer secrets.env settings.
+    # All hardcoded as of 7.0.2-1 -- these are no longer secrets.env settings.
     #
     # Every value here now MATCHES ETC R7 rather than fighting it. R7 natively
     # sets brightness to 100% on login, disables automatic brightness, disables
     # dimming, and enables dark mode. The old DIM_SCREEN default of "true" was
     # re-enabling, on every build, the dimming R7 had just turned off.
     #
-    # This function is still required even though it mostly agrees with R7: it
-    # creates /etc/dconf/profile/user, the database cascade that
-    # customize_power()'s keyfile depends on. Deleting it would silently break
-    # the power settings.
+    # This function still creates /etc/dconf/profile/user, the database cascade
+    # that any system-wide dconf default depends on. Keep it even though the
+    # values below now mostly agree with R7.
     local color_scheme="prefer-dark"
     local scaling disable_a11y auto_brightness dim_screen
     scaling=$(dconf_double "1.0")
@@ -1633,164 +1755,7 @@ EOF
     log "SUCCESS" "Git configured for: $git_name"
 }
 
-customize_power() {
-    log "INFO" "Configuring power management..."
-    
-    # shellcheck source=/dev/null
-    source "$SECRETS_FILE"
-    log "DEBUG" "Sourced secrets file for power config"
-    
-    # Read power settings with defaults
-    local lid_close_ac="${POWER_LID_CLOSE_AC:-suspend}"
-    local lid_close_battery="${POWER_LID_CLOSE_BATTERY:-suspend}"
-    local power_button="${POWER_BUTTON_ACTION:-interactive}"
-    local idle_ac="${POWER_IDLE_AC:-nothing}"
-    local idle_battery="${POWER_IDLE_BATTERY:-suspend}"
-    local idle_timeout="${POWER_IDLE_TIMEOUT:-900}"
-    local auto_power_saver auto_suspend
-    auto_power_saver=$(dconf_bool "${AUTOMATIC_POWER_SAVER:-true}")
-    auto_suspend=$(dconf_bool "${AUTOMATIC_SUSPEND:-true}")
 
-    # AUTOMATIC_SUSPEND=no must actually prevent suspend, which means forcing
-    # both sleep-inactive types to 'nothing' and the session idle-delay to 0.
-    # Setting a timeout alone does nothing if the type is still 'suspend'.
-    local idle_delay="$idle_timeout"
-    if [ "$auto_suspend" = "false" ]; then
-        idle_ac="nothing"
-        idle_battery="nothing"
-        idle_delay=0
-        log "DEBUG" "AUTOMATIC_SUSPEND=no -- forcing sleep-inactive types to 'nothing'"
-    fi
-
-    log "DEBUG" "Power: lid_ac=$lid_close_ac, lid_battery=$lid_close_battery, button=$power_button"
-    log "DEBUG" "Idle: ac=$idle_ac, battery=$idle_battery, timeout=$idle_timeout, delay=$idle_delay"
-    log "DEBUG" "Auto: power_saver=$auto_power_saver, suspend=$auto_suspend"
-
-    # Power management uses dconf - add to the same system-wide database
-    # as the desktop settings (created by customize_desktop)
-    local dconf_db_dir="${SQUASHFS_DIR}/etc/dconf/db/local.d"
-    local dconf_file="${dconf_db_dir}/01-power-settings"
-
-    # Ensure directory exists (should already exist from customize_desktop)
-    mkdir -p "$dconf_db_dir"
-    log "DEBUG" "Writing power dconf settings: $dconf_file"
-
-    # Every key below was verified to exist in GNOME 43's schemas via
-    # `gsettings list-keys`. Three keys that used to be written here did NOT
-    # exist and were silently discarded on every build:
-    #
-    #   power-profile-daemon            -- not a dconf key at all; the power
-    #                                      profile is set over D-Bus by
-    #                                      power-profiles-daemon. POWER_MODE
-    #                                      is therefore not settable here and
-    #                                      is no longer read.
-    #   .../power/battery-saver
-    #     enable-battery-saver          -- no such schema path. The real key is
-    #                                      power-saver-profile-on-low-battery,
-    #                                      in the power schema itself.
-    #   org/gnome/desktop/session
-    #     auto-save-session-timeout     -- no such key. The idle key in that
-    #                                      schema is idle-delay, a uint32.
-    cat > "$dconf_file" <<EOF
-# Power management settings
-# Generated by emcomm-tools-customizer
-
-[org/gnome/settings-daemon/plugins/power]
-lid-close-ac-action='${lid_close_ac}'
-lid-close-battery-action='${lid_close_battery}'
-power-button-action='${power_button}'
-sleep-inactive-ac-type='${idle_ac}'
-sleep-inactive-battery-type='${idle_battery}'
-sleep-inactive-ac-timeout=${idle_timeout}
-sleep-inactive-battery-timeout=${idle_timeout}
-power-saver-profile-on-low-battery=${auto_power_saver}
-
-[org/gnome/desktop/session]
-idle-delay=uint32 ${idle_delay}
-EOF
-
-    # Recompile dconf database
-    log "DEBUG" "Recompiling dconf database..."
-    setup_chroot_mounts
-    trap 'cleanup_chroot_mounts' EXIT
-    
-    chroot "${SQUASHFS_DIR}" /usr/bin/dconf update 2>/dev/null || {
-        log "WARN" "dconf update failed - power settings may not apply correctly"
-    }
-    
-    cleanup_chroot_mounts
-    trap - EXIT
-    
-    log "SUCCESS" "Power management configured"
-}
-
-customize_upower() {
-    log "INFO" "Configuring UPower battery thresholds..."
-
-    # Battery-PERCENTAGE actions live in UPower, not dconf.
-    #
-    # This exists because "suspend at 10% battery" has no dconf representation.
-    # org.gnome.settings-daemon.plugins.power's sleep-inactive-battery-type is
-    # an ENUM (nothing/suspend/hibernate/...) driven by an IDLE TIMER, not a
-    # charge level -- writing "10%" into it would be silently discarded, which
-    # is the exact failure mode this release spent its time removing.
-    #
-    # UPower only consults percentages when UsePercentageForPolicy=true, so set
-    # that explicitly rather than relying on the distro default.
-    local pct="${POWER_BATTERY_ACTION_PERCENT:-10}"
-    local action="${POWER_BATTERY_ACTION:-Suspend}"
-
-    if ! [[ "$pct" =~ ^[0-9]+$ ]] || [ "$pct" -lt 1 ] || [ "$pct" -gt 100 ]; then
-        log "ERROR" "POWER_BATTERY_ACTION_PERCENT must be 1-100, got '$pct'"
-        return 1
-    fi
-
-    case "$action" in
-        PowerOff|Hibernate|HybridSleep|Suspend|Ignore) ;;
-        *)
-            log "ERROR" "POWER_BATTERY_ACTION must be one of PowerOff, Hibernate, HybridSleep, Suspend, Ignore -- got '$action'"
-            return 1
-            ;;
-    esac
-
-    local conf="${SQUASHFS_DIR}/etc/UPower/UPower.conf"
-    if [ ! -f "$conf" ]; then
-        log "WARN" "$conf not found -- skipping battery threshold config"
-        return 0
-    fi
-
-    # UPower requires PercentageLow > PercentageCritical > PercentageAction.
-    # If the requested action point is at or above the stock warning levels,
-    # lift them so the ordering stays valid; UPower rejects the file otherwise
-    # and falls back to its built-in defaults.
-    local low=20 critical=5
-    if [ "$pct" -ge "$critical" ]; then
-        critical=$((pct + 5))
-        low=$((critical + 10))
-    fi
-
-    sed -i \
-        -e "s/^#\?UsePercentageForPolicy=.*/UsePercentageForPolicy=true/" \
-        -e "s/^#\?PercentageLow=.*/PercentageLow=${low}/" \
-        -e "s/^#\?PercentageCritical=.*/PercentageCritical=${critical}/" \
-        -e "s/^#\?PercentageAction=.*/PercentageAction=${pct}/" \
-        -e "s/^#\?CriticalPowerAction=.*/CriticalPowerAction=${action}/" \
-        "$conf"
-
-    # Confirm the writes landed. sed reports success even when nothing matched.
-    local applied=0
-    grep -qE "^PercentageAction=${pct}$" "$conf" && applied=$((applied + 1))
-    grep -qE "^CriticalPowerAction=${action}$" "$conf" && applied=$((applied + 1))
-    grep -qE "^UsePercentageForPolicy=true$" "$conf" && applied=$((applied + 1))
-
-    if [ "$applied" -ne 3 ]; then
-        log "ERROR" "UPower.conf edits did not apply (${applied}/3) -- format may have changed"
-        return 1
-    fi
-
-    log "SUCCESS" "Battery: ${action} at ${pct}% (warn ${low}%, critical ${critical}%)"
-    return 0
-}
 
 customize_timezone() {
     log "INFO" "Configuring system timezone..."
@@ -1922,7 +1887,7 @@ setup_first_login_packages() {
         return 0
     fi
 
-    # Single profile since v2.1.0 -- the commode=0 "PTT only" variant was
+    # Single profile since 7.0.2-1 -- the commode=0 "PTT only" variant was
     # removed as a duplicate of stock ETC's digirig-mobile-no-cat.
     local default_profile="anytone-d578uv.json"
 
@@ -3052,8 +3017,10 @@ EmComm Tools Customizer - Build Manifest
 Build Date: $(date +'%Y-%m-%d %H:%M:%S %Z')
 Build Mode: $RELEASE_MODE
 ETC Version: $RELEASE_TAG
+ETC Semver: ${VERSION:-unknown}  (this customizer targets ${ETC_TARGET_VERSION})
+Customizer: ${CUSTOMIZER_VERSION}
 Ubuntu ISO: $UBUNTU_ISO_FILE
-Script Version: $(git -C "$SCRIPT_DIR" describe --tags --always 2>/dev/null || echo 'unknown')
+Git Revision: $(git -C "$SCRIPT_DIR" describe --tags --always --dirty 2>/dev/null || echo 'unknown')
 
 Configuration Summary:
 - Callsign: ${CALLSIGN:-N0CALL}
@@ -3348,7 +3315,7 @@ EOF
 # ============================================================================
 
 rebuild_squashfs() {
-    # Hardcoded as of v2.1.0: this is a build-tooling detail, not operator
+    # Hardcoded as of 7.0.2-1: this is a build-tooling detail, not operator
     # configuration, so it no longer comes from secrets.env.
     #
     # zstd is the right default by a wide margin here. xz saves maybe 10% on an
@@ -3801,13 +3768,12 @@ main() {
         "wifi|best-effort|customize_wifi"
         "desktop|best-effort|customize_desktop"
         "release info|best-effort|update_release_info"
-        "power management|best-effort|customize_power"
-        "battery thresholds|best-effort|customize_upower"
         "timezone|best-effort|customize_timezone"
         "APRS|fatal|customize_aprs"
         "D578UVIII radio profiles|fatal|customize_radio_configs"
         "AnyTone Hamlib backend|fatal|install_hamlib_anytone"
         "D890UV Bluetooth TNC|best-effort|customize_anytone_d890_tnc"
+        "snapshot stock backup|best-effort|snapshot_stock_user_backup"
         "et-os-addons|best-effort|integrate_etosaddons_wrapped"
         "backup manifest|best-effort|customize_user_backup_manifest"
         "user and autologin|fatal|customize_user_and_autologin"
