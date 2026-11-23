@@ -1,6 +1,9 @@
 # Local secrets file - do not commit to git
 secrets.env
 
+# Per-machine Claude Code overrides. .claude/settings.json IS committed.
+.claude/settings.local.json
+
 # Backup files
 *.bak
 *.backup

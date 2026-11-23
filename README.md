@@ -1,6 +1,32 @@
 # EmComm Tools Customizer
 
-Fully automated customization of EmComm Tools Community (ETC) ISO images using xorriso/squashfs. No GUI required.
+Customizes EmComm Tools Community (ETC) images using xorriso/squashfs — no Cubic,
+no GUI. Applies the same customizations to an **already-installed** system too.
+
+> **Versioning tracks ETC**: `<ETC semver targeted>-<our revision>`. This is
+> `7.0.2-1`, built and tested against ETC R7 (7.0.2). The build warns if the
+> ETC release it resolves differs from that.
+>
+> **v2.0.0 was a breaking release.** Installer automation is gone: a built ISO now
+> boots to the standard Ubuntu / ETC installer walkthrough and you choose the
+> disk and partition layout yourself. The `dd` USB writer is gone as well —
+> nothing in this repository writes to a block device. The Anytone D578UV CAT
+> control was rewritten because it never worked.
+> See [CHANGELOG.md](CHANGELOG.md) and [UPGRADING.md](UPGRADING.md).
+
+## Scripts
+
+| Script | What it does | Touches disks? |
+|---|---|---|
+| `apply-to-live-system.sh` | **root** — applies APRS, radio and addon config to a running ETC system. Backs up everything; `--dry-run`, `--verify`, `--uninstall`. | No |
+| `post-install.sh` | **your user** — home-directory work: restores `etc-user-backup` / Wine archives, installs CHIRP, verifies the system. Refuses to run under sudo. | No |
+| `build-etc-iso.sh` | Builds a customized ISO. Boots to the normal installer. | No |
+| `build-hamlib-anytone.sh` | Builds the CowboyPilot Hamlib fork for AnyTone D578UVIII CAT (model 37001). `--revert` restores ETC's Hamlib. | No |
+| `build-direwolf-gpsd.sh` | Rebuilds Dire Wolf with `ENABLE_GPSD` for GPS-tracked beaconing. `--revert` supported. | No |
+| `fix-apt-sources.sh` | Repoints apt at `old-releases.ubuntu.com` for EOL Ubuntu (ETC v6 is 22.10 "kinetic", EOL since 2023). Needed before installing anything. `--check`, `--dry-run`, `--revert`. | No |
+
+Customizations live in `lib/` and operate on `$ET_ROOT`, so the ISO build and the
+live-system path run **the same code** and cannot drift apart.
 
 ## Overview
 
@@ -22,8 +48,9 @@ ETC already includes all ham radio tools (Winlink, VARA, JS8Call, fldigi, etc.).
 - ✅ **VARA license pre-registration** (manual registry edit → backup → auto-restore on builds)
 - ✅ **VS Code workspace setup** (standard project location included in et-user-backup)
 - ✅ **Automatic user config restoration** (from `etc-user-backup-*.tar.gz` if present)
-- ✅ **APRS configuration** (iGate, beacon, digipeater with smart beaconing)
-- ✅ **Ham radio CAT control** (Anytone D578UV with DigiRig Mobile, rigctld auto-start)
+- ✅ **APRS configuration** (receive-only iGate, position beacon, digipeater)
+- ✅ **Ham radio CAT control** (Anytone AT-D578UVIII via DigiRig, Hamlib model 37001)
+- ✅ **Live-system apply** — same customizations without rebuilding an ISO
 - ✅ **Optional et-os-addons features** (individually configurable):
   - VR-N76 radio config, GridTracker, WSJT-X Improved, QSSTV, XYGrib, Kiwix, JS8Spotter, NetControl, WiFi hotspot, user backup tool
   - Control via `ENABLE_ETOSADDONS_*` variables in `secrets.env` (all enabled by default)
@@ -39,7 +66,11 @@ This customizer **respects upstream ETC architecture**. We:
 - Don't change package selections or install additional software
 - Don't pre-install VARA or Wine prefix (these require a desktop session post-install)
 
-## Release Status: v1.0 (First Working Build)
+## Release Status: 7.0.2-1 (targets ETC R7)
+
+**Breaking release.** Installer automation and the `dd` USB writer were removed,
+and the Anytone D578UV CAT control was rewritten because it never worked. Read
+[CHANGELOG.md](CHANGELOG.md) before upgrading from v1.
 
 ### ✅ What's Working
 
@@ -55,9 +86,11 @@ This customizer **respects upstream ETC architecture**. We:
   - Smart beaconing with configurable interval
   - Digipeater WIDE path support
   - Separate from Packet/Winlink (no conflicts)
-- **Ham radio CAT control**: Anytone D578UV with DigiRig Mobile
-  - Rigctld daemon auto-starts at boot (localhost:4532)
-  - Active radio config automatically created
+- **Ham radio CAT control**: Anytone AT-D578UVIII with DigiRig Mobile
+  - Hamlib model 37001 via the CowboyPilot/Hamlib AnyTone backend
+    (`./build-hamlib-anytone.sh` — stock Hamlib 4.5 has no AnyTone backend)
+  - Two profiles: PTT-only (`commode=0`) and full COM mode (`commode=1`)
+  - Uses ETC's existing udev rules and rigctld unit — no patching
   - udev rules for /dev/et-cat symlink (CP2102/CH340/PL2303/FTDI)
   - Users can select different radio via `et-radio` after boot
 - **D578 CAT Control**: DigiRig Mobile configuration for CAT control (et-mode packet/Winlink compatible)
@@ -68,96 +101,84 @@ This customizer **respects upstream ETC architecture**. We:
 - **VS Code workspace**: Pre-configured workspace with Projects directory in ~/.config/emcomm-tools/
 - **Additional packages**: Development tools (VS Code, git, nodejs, npm, CHIRP via pipx) installable via configuration
 - **Cache system**: Downloaded ISOs cached for faster rebuilds
-- **Preseed automation**: Ubuntu 22.10 installer fully automated with debian-installer (d-i)
-  - No interactive prompts: keyboard, locale, hostname, username, password, timezone, partitioning all preseed-driven
-  - Text-based installer (d-i) respects all preseed directives including partitioning
-- **Anytone D578UV radio**: Radio configuration added to et-radio menu (rigctrl ID 301)
+- **Standard installer walkthrough**: the ISO boots to the normal Ubuntu / ETC
+  installer. You pick the disk and partition layout yourself. No preseed, no
+  automated partitioning, and nothing here writes to a block device.
+- **Anytone AT-D578UVIII radio**: two profiles in the et-radio menu, Hamlib model
+  37001 (v1 used `301`, which does not exist in Hamlib)
 - **Release info persistence**: Custom release name (`ETC_R5_FINAL (CUSTOMIZED)`) persists after installation
   - Uses dpkg conffile MD5 update to prevent installer from reverting `/etc/lsb-release`
   - `et-system-info release` correctly shows custom build name
 
 ### Optional et-os-addons Features
 
-The `et-os-addons` repository provides optional application launchers and configurations. These are **enabled by default** but can be disabled via `ENABLE_ETOSADDONS_*` variables in `secrets.env`:
+`et-os-addons` is not a set of launchers — it carries nine real installer
+scripts. We run those individually against our R7 base rather than its
+`scripts/install.sh`, which would build ETC from a submodule pinned to
+`release/r6`.
 
-| Feature | Variable | Description |
-|---------|----------|-------------|
-| VR-N76 Radio | `ENABLE_ETOSADDONS_VR_N76` | VR-N76 old radio utility and preset config |
-| QSSTV | `ENABLE_ETOSADDONS_QSSTV` | QSSTV slow-scan TV launcher and config template |
-| WSJT-X | `ENABLE_ETOSADDONS_WSJTX` | WSJT-X launcher and config template |
-| JS8 Spotter | `ENABLE_ETOSADDONS_JS8SPOTTER` | JS8Call spotting utility and launcher |
-| NetControl | `ENABLE_ETOSADDONS_NETCONTROL` | Network control utility with launcher |
-| WiFi Hotspot | `ENABLE_ETOSADDONS_HOTSPOT` | WiFi hotspot launcher utility |
-| User Backup | `ENABLE_ETOSADDONS_USERBACKUP` | User backup/restore manager utility |
-| Kiwix | `ENABLE_ETOSADDONS_KIWIX` | Offline content browser with desktop integration |
-| VGC VR-N76 Radio | Always enabled | VGC VR-N76 radio config for `et-radio` menu |
+| Feature | Variable | Default | Notes |
+| --- | --- | --- | --- |
+| XyGrib | `ENABLE_ETOSADDONS_XYGRIB` | yes | GRIB weather map viewer |
+| GridTracker 2 | `ENABLE_ETOSADDONS_GRIDTRACKER` | yes | |
+| JS8Spotter | `ENABLE_ETOSADDONS_JS8SPOTTER` | yes | |
+| QSSTV | `ENABLE_ETOSADDONS_QSSTV` | yes | **Slowest build step** — full Qt5 source compile, ~15–30 min |
+| WSJT-X Improved | `ENABLE_ETOSADDONS_WSJTX_IMPROVED` | yes | apt-purges stock wsjtx first |
+| CommStatOne | `ENABLE_ETOSADDONS_COMMSTATONE` | yes | JS8Call group/net dashboard |
+| Kiwix | `ENABLE_ETOSADDONS_KIWIX` | yes | **Replaces** ETC's apt kiwix, whose broken webserver blocks `et-hotspot` |
+| Overlay files | `ENABLE_ETOSADDONS_OVERLAY` | yes | et-hotspot, Wine add-on scripts, Saildocs grib |
+| NetControl | `ENABLE_ETOSADDONS_NETCONTROL` | no | Needs Wine + `NetControl.exe` |
+| et-launcher | `ENABLE_ETOSADDONS_ET_LAUNCHER` | no | Autostarts a launcher UI at login |
+| Desktop tweaks | `ENABLE_ETOSADDONS_DESKTOP` | no | glib override; competes with our dconf |
+
+Removed flags: `ENABLE_ETOSADDONS_HOTSPOT`, `_VARAC`, `_VARA_EXTRAS` and
+`_VR_N76` are now covered by `ENABLE_ETOSADDONS_OVERLAY`, matching how upstream
+copies its overlay. `ENABLE_ETOSADDONS_USERBACKUP` is replaced by
+`ENABLE_MANIFEST_BACKUP` (see Backups).
+
+**On a live system** these are opt-in — `sudo ./apply-to-live-system.sh --addons`
+— because they apt-purge and replace system packages, which `--uninstall`
+cannot reverse.
 
 **To disable a feature**, set the variable to `"no"` in `secrets.env`:
 ```bash
 ENABLE_ETOSADDONS_QSSTV="no"        # Disable QSSTV
-ENABLE_ETOSADDONS_WSJTX="no"        # Disable WSJT-X
 ```
 
 All features default to `"yes"` and are integrated explicitly into the build process with no overwrites.
 
-## Fully Automated Installation
+## Installing a Built ISO
 
-The ISO uses **Ubiquity** (Ubuntu's GUI installer) with preseed for zero-interaction installation. The `only-ubiquity` boot parameter triggers the installer immediately instead of booting to a live session.
+**The ISO does not install itself.** It boots to the standard Ubuntu / EmComm
+Tools installer walkthrough, and you choose the target disk and partition layout
+yourself, every time.
 
-**Automated Installation Workflow**:
-1. Boot custom ISO from Ventoy
-2. GRUB menu shows "Try or Install Ubuntu" (default selection)
-3. `only-ubiquity` parameter launches installer directly (skips live desktop)
-4. GRUB loads preseed from `file=/cdrom/preseed.cfg`
-5. **Ubiquity runs with preseed answers** for:
-   - Keyboard layout
-   - Locale / language
-   - Hostname (set to `ETC-{CALLSIGN}`)
-   - Username (set from config)
-   - Password (hashed in preseed)
-   - Timezone
-   - Partitioning (strategy-aware)
-   - Package selection (ubuntu-desktop task)
-6. System boots directly to desktop (or login prompt if autologin disabled)
-7. All customizations apply automatically (WiFi, APRS, desktop settings, CAT control, etc.)
+This changed in v2.0.0. v1 shipped a preseed that drove the installer unattended
+and partitioned automatically — see [CHANGELOG.md](CHANGELOG.md) for exactly what
+it did and why it was removed.
 
-**Boot Parameters Explained**:
+### Steps
 
-The GRUB configuration is automatically updated to:
-```bash
-linux /casper/vmlinuz file=/cdrom/preseed.cfg only-ubiquity quiet splash ---
-```
+1. **Put the ISO on a USB stick.** No script here writes to a block device.
+   - **Ventoy** — safest, since it is a plain file copy onto an already-prepared
+     stick with no device path to get wrong:
+     `sudo ./build-etc-iso.sh --ventoy /media/$USER/Ventoy`
+   - **A GUI writer** — balenaEtcher, GNOME Disks, Rufus. They show the target
+     drive by name and size before writing.
+   - **`dd`**, run by you, after checking the device twice:
+     ```bash
+     lsblk -o NAME,SIZE,MODEL,TRAN,MOUNTPOINT
+     sudo dd if=output/<iso> of=/dev/sdX bs=4M status=progress conv=fsync
+     ```
+2. **Boot it** and run the installer as normal.
+3. **Apply customizations** after first boot:
+   ```bash
+   sudo ./apply-to-live-system.sh
+   ```
 
-This tells the system to:
-- `file=/cdrom/preseed.cfg` - Load preseed answers for installer questions
-- `only-ubiquity` - **Boot directly to installer** (skip live desktop "Try Ubuntu" mode)
-- `quiet splash` - Normal boot appearance
+See [UPGRADING.md](UPGRADING.md) for the full upgrade path, including tracking
+ETC beta releases.
 
-**Note**: Without `only-ubiquity`, the ISO boots to a live session where you'd have to click "Install Ubuntu" manually.
-
-**Partitioning Behavior**:
-
-The preseed adapts based on `INSTALL_DISK` and `PARTITION_STRATEGY` configuration:
-
-- **Partition Mode** (`PARTITION_STRATEGY="force-partition"`, `INSTALL_DISK="/dev/sda5"`):
-  - Uses `d-i partman-auto/method string regular` (non-destructive)
-  - Debian-installer targets specified partition only
-  - Safe for dual-boot systems
-  - Respects existing Windows/other OS partitions
-  
-- **Auto-Detect Mode** (`PARTITION_STRATEGY="auto-detect"`, `INSTALL_DISK=""`) — **Default, Recommended**:
-  - Script analyzes disk layout before building ISO
-  - Automatically chooses safest strategy (usually partition mode)
-  - Embedded in preseed so installer knows partitioning approach
-  - Prevents destructive mistakes on multi-partition systems
-
-- **Entire-Disk Mode** (`PARTITION_STRATEGY="force-entire-disk"`, `CONFIRM_ENTIRE_DISK="yes"`):
-  - Uses `d-i partman-auto/method string lvm` (auto-partition with LVM)
-  - **DESTRUCTIVE**: Erases entire disk and creates new partitions
-  - Requires explicit confirmation in `secrets.env`
-  - Only use for single-disk systems with no existing data
-
-**Reference**: [Debian Preseed Documentation](https://www.debian.org/releases/stable/amd64/apbs02.en.html)
 
 ### Future Work (Tracked in GitHub Issues)
 
@@ -209,8 +230,11 @@ emcomm-tools-customizer/
 ├── build-etc-iso.sh          # Main build script (fully automated)
 ├── secrets.env.template      # Configuration template
 ├── secrets.env               # Your configuration (gitignored)
-├── cache/                    # Downloaded files (persistent)
-│   └── ubuntu-22.10-desktop-amd64.iso   # ← Drop your ISO here!
+├── cache/                    # Build inputs, embedded in the ISO (persistent)
+│   ├── ubuntu-22.10-desktop-amd64.iso   # optional: skips the download
+│   ├── GridTracker2-*-amd64.deb         # required for ENABLE_GRIDTRACKER=yes
+│   ├── code_*_amd64.deb                 # kept automatically (offline fallback)
+│   └── etc-*-backup-*.tar.gz            # optional: your ETC backups
 ├── output/                   # Generated custom ISOs
 ├── logs/                     # Build logs
 └── post-install/             # Scripts for after ISO installation
@@ -222,9 +246,7 @@ Ubuntu 22.10 reached end-of-life, so you must first update apt sources:
 
 ```bash
 # Fix apt sources for EOL Ubuntu 22.10
-sudo sed -i 's/archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
-sudo sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
-sudo apt update
+sudo ./fix-apt-sources.sh
 
 # Install build dependencies
 sudo apt install -y xorriso squashfs-tools wget curl jq
@@ -243,15 +265,34 @@ cd emcomm-tools-customizer
 cp secrets.env.template secrets.env
 nano secrets.env  # Fill in your values
 
-# Build from stable release and write to USB (RECOMMENDED)
-sudo ./build-etc-iso.sh -r stable --write-to
-# Script auto-detects USB drives and prompts you to select
+# Put build inputs in cache/ (see the Directory Structure above)
+mkdir -p cache && cp ~/Downloads/GridTracker2-*-amd64.deb cache/
 
-# Or specify USB device directly (skip menu)
-sudo ./build-etc-iso.sh -r stable --write-to /dev/sdb
+# Build from the newest stable release
+sudo ./build-etc-iso.sh -r stable
 
-# Output: Custom ISO written to USB, ready to boot!
+# Output: output/<name>.iso
+# Put it on a USB stick yourself (Ventoy / balenaEtcher / dd) and boot it.
 ```
+
+### Rebuilding on a system installed from one of these ISOs
+
+Clone and build -- the build links `/opt/emcomm-customizer-cache` into
+`cache/` and restores a missing `secrets.env` from it as your own file. See
+[QUICK_START.md](QUICK_START.md#rebuilding-on-a-system-installed-from-one-of-these-isos).
+
+### Already running ETC? Skip the ISO entirely
+
+To apply these customizations to an installed system — no Cubic, no rebuild, no
+disk operations:
+
+```bash
+sudo ./apply-to-live-system.sh --dry-run   # preview
+sudo ./apply-to-live-system.sh             # apply
+sudo ./apply-to-live-system.sh --uninstall # undo
+```
+
+See [UPGRADING.md](UPGRADING.md).
 
 ### Skip ISO Download
 
@@ -263,7 +304,7 @@ mkdir -p cache
 cp ~/Downloads/ubuntu-22.10-desktop-amd64.iso cache/
 
 # Now build - ISO download will be skipped!
-sudo ./build-etc-iso.sh -r stable --write-to
+sudo ./build-etc-iso.sh -r stable
 ```
 
 The script checks `cache/ubuntu-22.10-desktop-amd64.iso` before downloading.
@@ -271,26 +312,23 @@ The script checks `cache/ubuntu-22.10-desktop-amd64.iso` before downloading.
 ## Build Options
 
 ```bash
-# List available releases and tags from GitHub
+# List available releases and tags from GitHub (betas included)
 ./build-etc-iso.sh -l
 
-# Build from stable release and write to USB (RECOMMENDED)
-sudo ./build-etc-iso.sh -r stable --write-to
-
-# Build from latest development tag with USB auto-detect
-sudo ./build-etc-iso.sh -r latest --write-to
-
-# Build a specific tag and write to specific USB device
-sudo ./build-etc-iso.sh -r tag -t emcomm-tools-os-community-20251113-r5-build17 --write-to /dev/sdb
-
-# Minimal build (smaller ISO, no embedded cache files) with USB write
-sudo ./build-etc-iso.sh -r stable -m --write-to
-
-# Debug mode with USB write
-sudo ./build-etc-iso.sh -r stable -d --write-to
-
-# Build only (no USB write) - manual copy later
+# Build from the newest stable release
 sudo ./build-etc-iso.sh -r stable
+
+# Build from the newest tag (development / beta)
+sudo ./build-etc-iso.sh -r latest
+
+# Build a specific tag
+sudo ./build-etc-iso.sh -r tag -t emcomm-tools-os-community-20251113-r5-build17
+
+# Minimal build (smaller ISO, no embedded cache files)
+sudo ./build-etc-iso.sh -r stable -m
+
+# Build and copy to a mounted Ventoy stick
+sudo ./build-etc-iso.sh -r stable --ventoy /media/$USER/Ventoy
 ```
 
 ### Option Reference
@@ -300,37 +338,32 @@ sudo ./build-etc-iso.sh -r stable
 | `-r <stable\|latest\|tag>` | Release mode |
 | `-t <tag>` | Specific tag name (required with `-r tag`) |
 | `-l` | List available releases and tags |
-| `--write-to [/dev/sdX]` | **Auto-detect and write to USB** (no device = interactive selection) |
-| `--ventoy <mount-path>` | Copy ISO to mounted Ventoy USB |
+| `--ventoy <mount-path>` | Copy ISO + helper files to a mounted Ventoy USB (file copy only) |
 | `-m` | Minimal build (exclude cache files, saves ~4GB) |
 | `-d` | Debug mode (show DEBUG log messages) |
+| `-k` | Keep the work directory for debugging |
 | `-v` | Verbose mode (bash -x tracing) |
 | `-h` | Show help |
 
-**Note**: Optional et-os-addons features are enabled by default via `ENABLE_ETOSADDONS_*` variables. Disable individual features by setting them to `"no"` in `secrets.env`.
+**Note**: et-os-addons features are controlled by `ENABLE_ETOSADDONS_*` in
+`secrets.env`. Most install only a launcher and depend on an application ETC does
+not ship — the template says which.
 
-### USB Writing (Auto-Detection)
+### Getting the ISO onto a USB stick
 
-The `--write-to` option includes built-in USB auto-detection:
+Removed in v2.0.0: `--write-to`, which `dd`'d the ISO to a block device and, used
+bare, auto-detected which device to write. **No script in this repository writes
+to a block device any more.** Use whichever tool you trust:
 
-```bash
-# Interactive device selection (RECOMMENDED)
-# Script lists USB devices and you choose from menu
-sudo ./build-etc-iso.sh -r stable --write-to
-
-# Specific device (skip menu)
-# Write directly to /dev/sdb without prompting
-sudo ./build-etc-iso.sh -r stable --write-to /dev/sdb
-```
-
-**Auto-Detection Features**:
-- Queries `lsblk` for removable or usb-transport devices
-- Filters out nvme devices (system drives) automatically
-- Displays device size and model for confirmation
-- Auto-unmounts any mounted partitions
-- Requires explicit "YES" confirmation before writing
-- Shows real-time `dd` progress during write
-- Auto-ejects device when complete
+- **Ventoy** — `--ventoy` copies the ISO onto an already-prepared stick. A plain
+  file copy to a mounted filesystem, so there is no device path to get wrong.
+- **A GUI writer** — balenaEtcher, GNOME Disks, Rufus. They show the target drive
+  by name and size before writing.
+- **`dd`** — run it yourself, and check the device twice:
+  ```bash
+  lsblk -o NAME,SIZE,MODEL,TRAN,MOUNTPOINT
+  sudo dd if=output/<iso> of=/dev/sdX bs=4M status=progress conv=fsync
+  ```
 
 ### Release Modes
 
@@ -367,7 +400,6 @@ Optional features from [et-os-addons](https://github.com/clifjones/et-os-addons)
 **Configuration:**
 Features default to enabled. To disable specific features, edit `secrets.env`:
 ```bash
-ENABLE_ETOSADDONS_WSJTX="yes"        # Keep WSJT-X
 ENABLE_ETOSADDONS_GRIDTRACKER="yes"  # Keep GridTracker
 ENABLE_ETOSADDONS_QSSTV="no"         # Exclude QSSTV
 ENABLE_ETOSADDONS_KIWIX="no"         # Exclude offline Wikipedia
@@ -395,37 +427,34 @@ GRID_SQUARE="CN87"             # Maidenhead grid locator
 
 # === User Account ===
 USER_USERNAME=""                # Linux username (defaults to lowercase CALLSIGN)
-USER_PASSWORD=""                # Password (leave blank to keep ETC default)
+USER_PASSWORD=""                # Ignored: the installer sets your password
 ENABLE_AUTOLOGIN="no"          # "yes" or "no" - default is NO (password prompt)
 
 # === System ===
 MACHINE_NAME=""                 # Hostname (defaults to ETC-{CALLSIGN})
 TIMEZONE="America/Denver"       # System timezone (Linux format, see /usr/share/zoneinfo/)
 
-# === Desktop Preferences ===
-DESKTOP_COLOR_SCHEME="prefer-dark"  # prefer-dark or prefer-light
-DESKTOP_SCALING_FACTOR="1.0"        # 1.0, 1.25, 1.5, or 2.0
-DISABLE_ACCESSIBILITY="yes"         # yes = disable screen reader, on-screen keyboard
-
-# === Display & Screen Management ===
-AUTOMATIC_SCREEN_BRIGHTNESS="false" # true = adaptive brightness, false = manual
-DIM_SCREEN="true"                   # true = dim screen during idle
-SCREEN_BLANK="true"                 # true = blank screen after idle timeout
-SCREEN_BLANK_TIMEOUT="300"          # Seconds before screen blanks (300=5min)
-
-# === Power Management ===
-POWER_MODE="balanced"               # balanced, performance, or power-saver
-POWER_LID_CLOSE_AC="suspend"        # AC lid close: nothing, suspend, hibernate, logout
-POWER_LID_CLOSE_BATTERY="suspend"   # Battery lid close: nothing, suspend, hibernate, logout
-POWER_BUTTON_ACTION="interactive"   # Power button: nothing, suspend, hibernate, interactive
-POWER_IDLE_AC="nothing"             # AC idle action: nothing, suspend, hibernate
-POWER_IDLE_BATTERY="suspend"        # Battery idle action: nothing, suspend, hibernate
-POWER_IDLE_TIMEOUT="900"            # Seconds before idle action (900=15min)
-AUTOMATIC_POWER_SAVER="true"        # true = enable power saver on battery
-AUTOMATIC_SUSPEND="true"            # true = enable automatic suspend
+# === Desktop, display and power ===
+# REMOVED. Desktop and display values are hardcoded to match ETC R7, which
+# natively enables dark mode and disables dimming/auto-brightness.
+#
+# Power and battery settings are gone entirely: three of the dconf keys the old
+# code wrote did not exist, so nothing it claimed to configure ever applied.
+# The image inherits GNOME/UPower defaults, which on battery means
+# suspend-on-idle. Change it on the installed system:
+#   gnome-control-center power      /      powerprofilesctl set performance
 
 # === Additional System Packages ===
-ADDITIONAL_PACKAGES="code git nodejs npm"  # Space-separated apt packages to install
+# REMOVED. nodejs and npm are hardcoded build dependencies. "code" could never
+# work via apt on first install (Ubuntu 22.10 has no such package) -- VS Code
+# installs from a downloaded .deb, then updates through its own apt repo.
+# "git" comes from ETC.
+
+# === Applications ===
+ENABLE_VSCODE="yes"            # Downloads the current stable .deb
+ENABLE_CHIRP="yes"             # Built from git into /opt/chirp-venv
+ENABLE_GRIDTRACKER="no"        # Needs GridTracker2-*-amd64.deb in cache/
+# No file paths: installer files go in cache/, which the ISO embeds.
 
 # === WiFi Networks ===
 WIFI_SSID_HOME="YourHomeNetwork"
@@ -441,25 +470,29 @@ WINLINK_PASSWORD=""            # Your Winlink password
 
 # === APRS Configuration ===
 APRS_SSID="10"                 # SSID (0-15, 10=iGate)
-APRS_PASSCODE="-1"             # APRS-IS passcode (-1=RX only)
-APRS_SYMBOL="/r"               # Symbol: table+code (/r=antenna)
+APRS_PASSCODE=""               # Empty = computed from CALLSIGN
+APRS_SYMBOL="digi"             # Dire Wolf symbol name or 2-char code
 APRS_COMMENT="EmComm iGate"    # Beacon comment
 
 # APRS Beacon (position beaconing)
-ENABLE_APRS_BEACON="no"        # Enable position beaconing
-APRS_BEACON_INTERVAL="300"     # Seconds between beacons
+ENABLE_APRS_BEACON="yes"       # Enable position beaconing
+APRS_BEACON_MODE="fixed"       # fixed | gps (gps needs build-direwolf-gpsd.sh)
+APRS_LAT=""                    # Empty = center of GRID_SQUARE (~3km)
+APRS_LON=""
+APRS_BEACON_INTERVAL="30:00"   # "30:00"=30 min. A bare "30" means 30 SECONDS.
 APRS_BEACON_VIA="WIDE1-1"      # Digipeater path
 APRS_BEACON_POWER="10"         # PHG: Power in watts
 APRS_BEACON_HEIGHT="20"        # PHG: Antenna height (feet)
 APRS_BEACON_GAIN="3"           # PHG: Antenna gain (dBi)
 
-# APRS iGate (RF to Internet gateway)
+# APRS iGate (RF to Internet gateway, receive-only)
 ENABLE_APRS_IGATE="yes"        # Enable iGate
 APRS_SERVER="noam.aprs2.net"   # APRS-IS server
 
-# Direwolf Audio
-DIREWOLF_ADEVICE="plughw:1,0"  # Audio device (Digirig)
-DIREWOLF_PTT="CM108"           # PTT method
+# === Anytone AT-D578UVIII ===
+ENABLE_ANYTONE_D578="yes"      # Write the D578UVIII radio profile
+ENABLE_HAMLIB_ANYTONE="yes"    # Build the Hamlib fork providing model 37001
+ENABLE_ANYTONE_D890_TNC="yes"  # D890UV Bluetooth KISS TNC profile + helper
 
 # === VARA License (Optional) ===
 VARA_FM_CALLSIGN=""            # Callsign registered with VARA FM license
@@ -471,117 +504,31 @@ VARA_HF_LICENSE_KEY=""         # Your VARA HF license key
 PAT_EMCOMM_ALIAS="yes"         # Create "emcomm" quick-connect alias
 PAT_EMCOMM_GATEWAY=""          # Gateway callsign (e.g., "W7ACS-10")
 
-# === Power Management ===
-POWER_LID_CLOSE_AC="suspend"      # Lid close on AC power
-POWER_LID_CLOSE_BATTERY="suspend" # Lid close on battery
-POWER_BUTTON_ACTION="interactive" # Power button action
-POWER_IDLE_AC="nothing"           # Idle action on AC
-POWER_IDLE_BATTERY="suspend"      # Idle action on battery
-POWER_IDLE_TIMEOUT="900"          # Idle timeout (seconds)
+# === Backups ===
+ENABLE_MANIFEST_BACKUP="yes"   # Manifest-driven et-user-backup
+BACKUP_EXTRA_ITEMS=""          # Extra $HOME-relative paths, space-separated
 ```
 
-### Partition & Installation Modes
+### Installation Modes
 
-The build script automatically detects your disk layout and chooses the safest partitioning strategy. This feature was redesigned to handle three common scenarios:
+**Removed in v2.0.0.** v1 documented four partition strategies here
+(`auto-detect`, `force-partition`, `force-entire-disk`, `force-free-space`)
+driven by `PARTITION_STRATEGY`, `INSTALL_DISK`, `SWAP_SIZE_MB`, `EXT4_SIZE_MB`
+and `CONFIRM_ENTIRE_DISK`.
 
-**Partition Strategy Options:**
+All of it is gone. The generated preseed set
+`partman-auto/choose_recipe select atomic` together with
+`partman/confirm_write_new_label boolean true` — the whole-disk recipe plus a
+pre-answered "yes, destroy the partition table" — against an auto-detected disk,
+while its own comments conceded that Ubiquity "ignores most partman preseeds".
+The result was unpredictable and destroyed a partition in practice.
 
-```bash
-# === AUTO-DETECT (Default - Recommended) ===
-# Script analyzes disk layout and chooses the best strategy automatically
-PARTITION_STRATEGY="auto-detect"    # Analyze and decide
-INSTALL_DISK=""                     # Leave empty (auto-detect) or specify disk
-CONFIRM_ENTIRE_DISK="no"            # No confirmation needed for auto-detect
+**You now choose the disk and the partition layout in the installer**, the same
+way you would with stock Ubuntu or stock ETC. Those five variables are ignored if
+left in an old `secrets.env`.
 
-# === FORCE PARTITION MODE (Dual-Boot) ===
-# Use existing partition - safe for dual-boot systems
-PARTITION_STRATEGY="force-partition"
-INSTALL_DISK="/dev/sda5"            # Target partition (ends with digit)
-CONFIRM_ENTIRE_DISK="no"
-
-# === FORCE ENTIRE-DISK MODE (Dedicated System) ===
-# WARNING: DESTRUCTIVE - erases entire disk and creates new partitions with LVM
-# Only use for fresh installs with no data on the target disk
-PARTITION_STRATEGY="force-entire-disk"
-INSTALL_DISK="/dev/sda"             # Entire disk (no partition number)
-CONFIRM_ENTIRE_DISK="yes"           # MUST be "yes" to proceed
-
-# === FORCE FREE-SPACE MODE (Windows Dual-Boot with Space) ===
-# Create partitions in available free space on Windows partition
-PARTITION_STRATEGY="force-free-space"
-INSTALL_DISK="/dev/sda"             # Disk with Windows partition + free space
-CONFIRM_ENTIRE_DISK="no"            # No confirmation needed
-```
-
-**How Auto-Detect Works:**
-
-When `PARTITION_STRATEGY="auto-detect"` (default), the script:
-
-1. **Checks if `INSTALL_DISK` is a specific partition** (e.g., `/dev/sda5`):
-   - → Uses **partition mode** (safe for dual-boot)
-
-2. **If disk is blank or only has Linux partitions**:
-   - → Uses **entire-disk mode** (LVM auto-partitioning)
-
-3. **If Windows partition detected with free space**:
-   - → Uses **free-space mode** (create partitions in gap)
-
-4. **If Windows partition detected with NO free space**:
-   - → Requires **CONFIRM_ENTIRE_DISK="yes"** to proceed with entire-disk
-
-**Strategy Behavior Comparison:**
-
-| Strategy | INSTALL_DISK | Behavior | Preseed Config | Best For |
-|----------|--------------|----------|----------------|----------|
-| **auto-detect** | empty or disk | Analyze and decide | Dynamic based on disk | Most users |
-| **partition** | `/dev/sda5` | Use manual partitioning for single partition | `partman-auto/method regular` | Dual-boot (Windows+ETC) |
-| **entire-disk** | `/dev/sda` | Auto-partition entire disk with LVM | `partman-auto/method lvm` | Fresh install, single disk |
-| **free-space** | `/dev/sda` | Create partitions in available free space | `partman-auto/method regular` + free space | Windows with 50GB+ free |
-
-**Preseed Partitioning Details:**
-
-- **Partition Mode** (`partman-auto/method string regular`):
-  - Uses standard ext4 filesystem (no LVM)
-  - Requires you to have pre-partitioned the disk
-  - Safe for dual-boot: only modifies target partition
-  - Swap configured at next partition number (e.g., sda6 if using sda5)
-
-- **Entire-Disk Mode** (`partman-auto/method string lvm`):
-  - **DESTRUCTIVE**: Erases all partitions on target disk
-  - Uses LVM for flexible partition management
-  - Automatic partition sizing with swap
-  - Only use if you're certain about target disk
-
-- **Free-Space Mode** (`partman-auto/method string regular`):
-  - Creates new partitions in unallocated space
-  - Preserves Windows partition
-  - Ideal for upgrading Windows system to dual-boot
-
-**Size Calculation:**
-
-The script calculates optimal partition sizes:
-
-```
-Available Space = Total Disk Size
-Swap Size = MIN(25% of available, MAX(2GB, MIN(4GB)))
-EXT4 Size = Remaining space
-```
-
-Override calculated sizes (optional):
-
-```bash
-SWAP_SIZE_MB="4096"        # Force 4GB swap (in MB)
-EXT4_SIZE_MB="51200"       # Force 50GB ext4 (in MB)
-```
-
-**Safety Features:**
-
-- ✅ Partition mode is always safe (targets one partition only)
-- ✅ Entire-disk mode requires `CONFIRM_ENTIRE_DISK="yes"` to proceed
-- ✅ Auto-detect chooses safest option based on current disk layout
-- ✅ Script validates partition paths before generating preseed
-- ✅ Detailed logging shows detected strategy and proposed partitioning
-
+See [CHANGELOG.md](CHANGELOG.md) for the full detail and [UPGRADING.md](UPGRADING.md)
+for migration.
 
 ### VARA License Setup
 
@@ -688,107 +635,49 @@ The build automatically installs:
 - **VS Code** - editor
 - **Node.js & npm** - JavaScript development
 - **git** - version control
-- **CHIRP** - Radio programming software (installed via pipx with official wheel from https://archive.chirpmyradio.com/)
+- **CHIRP** - Radio programming software (built from `github.com/kk7ds/chirp` into `/opt/chirp-venv`)
 
-Additional packages can be configured in `secrets.env` via `ADDITIONAL_PACKAGES` variable.
+The apt package list is hardcoded in `customize_additional_packages()`; it is a build dependency set, not a preference.
 
-**Note on CHIRP**: Ubuntu 22.10 repos have outdated CHIRP packages. The build uses the official installation method (pipx with downloaded wheel) as documented at https://chirpmyradio.com/projects/chirp/wiki/ChirpOnLinux.
+**Note on CHIRP**: Ubuntu 22.10's CHIRP is from 2020, PyPI's `chirp` is an unrelated bioacoustics package, and archive.chirpmyradio.com refuses non-browser downloads, so the build installs from git. CHIRP does not support AnyTone DMR radios; use anytone-cps for those.
 
-### Automatic Backup Restoration
+### Backup Restoration
 
-**FULLY AUTOMATED DURING BUILD** ✅
+Backups are found automatically at build time and **staged** in the ISO; your
+home directory is restored on the installed system by `post-install.sh`.
 
-If you place backup files in the `cache/` directory before building, they are **automatically** restored during ISO customization with proper timeout handling:
+At build time, the newest `etc-user-backup-*.tar.gz` and
+`etc-wine-backup-*.tar.gz` are taken from your home directory or `cache/`:
 
-- `cache/etc-user-backup-*.tar.gz` → User configs extracted to ISO immediately (~30-60 seconds)
-  - Includes: `~/.config/emcomm-tools`, `~/.local/share`, documents, desktop settings
-  - Extracted directly into `/etc/skel` during build (applied to new users)
-  
-- `cache/etc-wine-backup-*.tar.gz` → Wine prefix auto-restored on **first login** (deferred from build)
-  - VARA registry and prefix data available immediately after first login
-  - Deferred to avoid hanging during ISO build (Wine prefix extraction is slow)
+- **ETC configuration only** (`.config/emcomm-tools`, `.local/share/emcomm-tools`,
+  `.local/share/pat`, Reticulum, Partyline) is extracted into `/etc/skel`, so the
+  account the installer creates starts with your callsign, grid and Pat setup.
+  Documents, message logs and other personal data are deliberately **not** put
+  in skel -- skel is copied into every account.
+- **Both full archives** are staged once at
+  `/opt/emcomm-customizer-cache/backups/`.
 
-**Automation Details:**
-
-- **User backup**: Uses `timeout 300 tar xzf ... --checkpoint=.1000 --checkpoint-action=dot`
-  - 300-second timeout prevents hangs on large backups (611MB+)
-  - Progress tracking shows extraction status (every 1000 files = one dot)
-  - Extracted during build (fast, doesn't block other customizations)
-
-- **Wine backup**: Copied to `~/.etc-backups/` during build
-  - `~/.etc-backups/00-restore-wine-backup.sh` auto-runs on first login
-  - Restores Wine prefix to `~/.wine32` from backup tarball
-  - Runs asynchronously (doesn't block desktop startup)
-
-**How to Use:**
-
-1. Create backups from existing ETC installation:
+On the installed system, run as yourself (not sudo):
 
 ```bash
-# On existing ETC system:
-et-user-backup                    # Creates cache/etc-user-backup-*.tar.gz
-
-# If you also want Wine/VARA settings:
-et-user-backup --wine            # Includes .wine32 (creates ~600MB backup)
-
-# Copy to your build machine's cache/
-scp user@etc-machine:cache/etc-*-backup*.tar.gz ./cache/
+/opt/emcomm-tools-customizer/post-install.sh --restore        # user backup
+/opt/emcomm-tools-customizer/post-install.sh --restore-wine   # also ~/.wine32 (asks first)
+/opt/emcomm-tools-customizer/post-install.sh --everything     # every task, Wine included
 ```
 
-2. Run build - backups are extracted automatically:
+The Wine restore overwrites `~/.wine32`, including VARA and its licence, so it
+is never automatic and always asks.
+
+ISOs built before 7.0.2-2 staged the archives in `~/.etc-backups/` instead and
+did not embed the scripts. Clone the repo on those systems; current
+`post-install.sh` searches `~/.etc-backups/` as well.
+
+**Restoring by hand:**
 
 ```bash
-./build-etc-iso.sh -r stable
-# User backup: extracts during build (watch for progress dots)
-# Wine backup: copied to ~/.etc-backups/, restores on first login
+tar xzf etc-user-backup-*.tar.gz -C ~/   # user config
+tar xzf etc-wine-backup-*.tar.gz -C ~/   # Wine prefix
 ```
-
-3. Boot the ISO - all user settings + Wine/VARA auto-restored
-
-**What Gets Restored:**
-
-From user backup:
-
-- `~/.config/emcomm-tools/` - ETC configuration (callsign, grid, user.json)
-- `~/.local/share/emcomm-tools/` - Maps, tilesets, application data
-- `~/.local/share/pat/` - Winlink Pat settings (mailbox passwords, aliases)
-- `~/.local/share/WSJT-X/` - WSJT-X settings and logs
-- `~/Documents/` - Your documents folder
-- `~/.navit/` - Navigation bookmarks and maps
-- `~/my-maps/` - Custom map data
-- `~/YAAC/` - YAAC configuration
-
-From Wine backup (optional):
-
-- `~/.wine32/` - Entire Wine 32-bit prefix (VARA HF/FM with installed licenses)
-
-**Technical Details:**
-
-- User backup extraction: Uses tar with `--checkpoint` for progress tracking
-- Timeout: 300 seconds (5 minutes) - if extraction takes longer, partial restore is used
-- Wine backup: Large file (500MB+) is NOT extracted during ISO build; instead it's copied to `~/.etc-backups/` and restored automatically on first user login
-- No blocking: Wine extraction deferred to first login avoids "hanging" during ISO build
-
-**Alternative: Manual Restoration (if backups not in cache/)**
-
-If you didn't place backups in the cache/ directory before building, you can restore manually after the OS boots:
-
-```bash
-# Copy backup to home directory
-cp /path/to/etc-user-backup-*.tar.gz ~
-
-# Restore user configuration only
-tar xzf ~/etc-user-backup-*.tar.gz -C ~/
-
-# Or restore with Wine prefix
-tar xzf ~/etc-user-backup-*.tar.gz -C ~/   # user config
-tar xzf ~/etc-wine-backup-*.tar.gz -C ~/   # Wine prefix
-```
-
-
-
-
-
 
 ### APRS Configuration (Automatic)
 
@@ -798,29 +687,19 @@ APRS configuration is automatically applied during ISO build by modifying ETC's 
 
 **Features:**
 - **iGate Mode** - Upload position/weather to APRS-IS internet server (requires login)
-- **Smart Beaconing** - Automatic position updates based on movement/time
+- **Position beacon** - fixed (from grid square or explicit lat/lon), or GPS-tracked
+  once Dire Wolf is rebuilt with gpsd
 - **Digipeater Support** - WIDE path relaying for packet radio network
 - **ETC Template System** - Respects ETC's `{{ET_*}}` runtime placeholders
 
-**Configuration Variables:**
+Two constraints the generator handles, both of which v1 got wrong:
 
-```bash
-# === APRS Configuration ===
-APRS_SSID="10"                       # Station SSID (10=iGate, 11-15 for specific roles)
-APRS_PASSCODE=""                    # APRS-IS passcode (-1 for RX only)
-APRS_SYMBOL="r/"                    # Two-character symbol: r/=portable, a/=digipeater, etc.
-APRS_COMMENT="EmComm Tools - ETC"   # Station comment/info string
+- Dire Wolf's config parser is **line-oriented** — no backslash continuations.
+  Every directive is emitted on one line.
+- `every=30` means 30 **seconds**. Use `30:00` for 30 minutes.
 
-ENABLE_APRS_IGATE="yes"              # yes/no - enable APRS-IS internet gateway
-ENABLE_APRS_BEACON="yes"             # yes/no - enable position beaconing
-
-APRS_SERVER="noam.aprs2.net"        # APRS-IS server (noam=N.America, euro=Europe, etc.)
-APRS_BEACON_INTERVAL="30"           # Beacon interval in minutes (smart beaconing)
-APRS_BEACON_DISTANCE="1"            # Distance in miles before beacon (movement trigger)
-
-DIREWOLF_ADEVICE="plughw:1,0"       # Audio device for direwolf
-DIREWOLF_PTT="CM108"                # PTT method: CM108 (USB audio) or GPIO
-```
+**Configuration Variables:** see [secrets.env.template](secrets.env.template),
+which is the authoritative list.
 
 **How It Works:**
 

@@ -25,6 +25,27 @@ trap 'echo "[ERROR] Script failed at line $LINENO with exit code $?. Command: $B
 # Configuration
 # ============================================================================
 
+# ---------------------------------------------------------------------------
+# Versioning, aligned to EmComm Tools Community's release model.
+#
+# ETC versions a release three ways, all visible in one tag:
+#   tag    emcomm-tools-os-community-20261126-r7-final-7.0.2
+#   name   2026.11.26.R7
+#   semver 7.0.2
+#
+# This project tracks ETC rather than numbering itself independently, so the
+# version is "<the ETC semver we target>-<our revision against it>". That makes
+# currency obvious at a glance: if ETC's latest is 7.0.2 and this says 7.0.2-2,
+# we are current. If ETC ships 7.1.0 and this still says 7.0.2-2, we are a
+# release behind, and check_etc_target_drift() says so during the build.
+#
+# Bump CUSTOMIZER_REVISION for changes of ours; set ETC_TARGET_VERSION when
+# moving to a new ETC release, after reading its notes for things we can drop.
+#
+# The values themselves live in lib/common.sh, sourced below, so this script
+# and apply-to-live-system.sh cannot report different versions for the same
+# checkout -- which they did (2.0.0 vs 2.1.0) when each kept its own literal.
+# ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SECRETS_FILE="${SCRIPT_DIR}/secrets.env"
 
@@ -39,6 +60,8 @@ UBUNTU_ISO_URL="https://old-releases.ubuntu.com/releases/kinetic/ubuntu-22.10-de
 UBUNTU_ISO_FILE="ubuntu-22.10-desktop-amd64.iso"
 
 # Directory structure (relative to script)
+# Where backups are staged inside the image. post-install.sh searches this.
+STAGED_BACKUP_DIR_REL="/opt/emcomm-customizer-cache/backups"
 CACHE_DIR="${SCRIPT_DIR}/cache"          # Downloaded files (ISOs, tarballs) - persists across builds
 OUTPUT_DIR="${SCRIPT_DIR}/output"         # Generated ISOs
 WORK_DIR="${SCRIPT_DIR}/.work"            # Temporary build directory (cleaned each build)
@@ -48,8 +71,12 @@ RELEASE_MODE="latest"
 SPECIFIED_TAG=""
 MINIMAL_BUILD=0                           # When 1, omit cache files from ISO to reduce size
 KEEP_WORK=0                               # When 1, preserve .work directory for iterative debugging
-WRITE_TO_USB=""                           # USB device path for dd write (e.g., /dev/sdb)
 VENTOY_MOUNT=""                           # Path to mounted Ventoy USB
+
+# Optional (best-effort) steps that returned non-zero, reported together at the
+# end of the customization sequence so a long build's warnings aren't lost in
+# scrollback.
+declare -a FAILED_OPTIONAL_STEPS=()
 
 # Colors for output
 RED='\033[0;31m'
@@ -97,6 +124,31 @@ log() {
 }
 
 # ============================================================================
+# Shared customization modules
+# ============================================================================
+# These are the SAME files apply-to-live-system.sh uses. Every customization
+# lives in exactly one place so the ISO build and a live system cannot drift
+# apart -- which is precisely how v1 ended up shipping a Hamlib model number
+# (301) that does not exist, and an APRS beacon with no position in it.
+#
+# The modules operate on $ET_ROOT. Here that is the unpacked squashfs; on a
+# live system it is "/". lib/common.sh must be sourced after log() above so it
+# does not redefine this script's logger.
+
+# shellcheck source=lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+# shellcheck source=lib/customize-aprs.sh
+source "${SCRIPT_DIR}/lib/customize-aprs.sh"
+# shellcheck source=lib/customize-radio.sh
+source "${SCRIPT_DIR}/lib/customize-radio.sh"
+# shellcheck source=lib/customize-addons.sh
+source "${SCRIPT_DIR}/lib/customize-addons.sh"
+# shellcheck source=lib/customize-backup.sh
+source "${SCRIPT_DIR}/lib/customize-backup.sh"
+# shellcheck source=lib/customize-anytone-dmr.sh
+source "${SCRIPT_DIR}/lib/customize-anytone-dmr.sh"
+
+# ============================================================================
 # Usage
 # ============================================================================
 
@@ -104,86 +156,80 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
-Fully automated ETC ISO customization using xorriso/squashfs.
-No Cubic GUI required - everything is scripted.
+Builds a customized EmComm Tools Community ISO with xorriso/squashfs.
+No Cubic GUI required.
+
+The resulting ISO boots to the STANDARD Ubuntu / EmComm Tools installer
+walkthrough. It contains no preseed and no automated partitioning -- you
+choose the target disk and layout yourself, every time.
 
 RELEASE OPTIONS:
     -r MODE   Release mode (default: latest)
               - stable: Latest formal GitHub Release (production-ready)
-              - latest: Most recent git tag (development builds)
+              - latest: Most recent git tag (development / beta builds)
               - tag:    Use a specific tag by name (requires -t)
     -t TAG    Specify exact tag name (use -l to list available)
     -l        List available tags and releases, then exit
 
 BUILD OPTIONS:
-    -a        Include et-os-addons (WSJT-X Improved, GridTracker 2, SSTV, weather tools)
-              Adds ~2GB to ISO but enables FT8/FT4 and extended radio modes
     -d        Debug mode (show DEBUG log messages on console)
     -k        Keep work directory after build (for iterative debugging)
     -m        Minimal build (omit cache files from ISO to reduce size)
     -v        Verbose mode (enable bash -x debugging)
     -h        Show this help message
 
-USB WRITE OPTIONS:
-    --write-to [/dev/sdX]
-              Write ISO directly to USB device with dd (ERASES DEVICE!)
-              If device is omitted, detects USB drives and prompts for selection.
-              Automatically ejects when complete. This is the recommended method.
-              Examples:
-                sudo ./build-etc-iso.sh -r stable --write-to          # auto-detect
-                sudo ./build-etc-iso.sh -r stable --write-to /dev/sdb # specific device
-              
+OUTPUT OPTIONS:
     --ventoy /path/to/ventoy
-              Copy ISO + config files to mounted Ventoy USB
-              Ventoy ignores ISO boot params, so extra config files are needed.
-              Example: sudo ./build-etc-iso.sh -r stable --ventoy /media/user/Ventoy
+              Copy the finished ISO plus helper files to a mounted Ventoy USB.
+              This is an ordinary file copy to a mounted filesystem; it does
+              not write to a block device.
+              Example: sudo ./build-etc-iso.sh -r stable --ventoy /media/\$USER/Ventoy
+
+CONFIGURATION:
+    Settings come from secrets.env (copy secrets.env.template to start).
+    On a system installed from one of these ISOs, a missing secrets.env is
+    restored automatically from /opt/emcomm-customizer-cache.
+    APRS, radio and et-os-addons settings are shared with
+    apply-to-live-system.sh via lib/, so an ISO build and a live system
+    produce identical configuration.
 
 DIRECTORY STRUCTURE:
-    cache/    Downloaded ISOs and tarballs (persistent)
-              - Drop your Ubuntu ISO here to skip download
-              - ETC tarballs are cached here too
+    cache/    Build inputs (persistent, embedded in non-minimal ISOs)
+              - Ubuntu ISO: drop it here to skip the 3.6GB download
+              - GridTracker2-*.deb: required for ENABLE_GRIDTRACKER=yes
+              - code_*.deb: kept automatically as an offline fallback
+              - etc-user-backup / etc-wine-backup archives (optional)
+              - ETC tarballs and et-os-addons are cached here too
+              On an installed system, /opt/emcomm-customizer-cache is
+              linked in automatically.
     output/   Generated custom ISOs
     logs/     Build logs (DEBUG messages always written here)
 
 BUILD SIZE:
     By default, cache files (Ubuntu ISO, ETC tarballs) are embedded in the
-    output ISO so they're available for the next build on the installed system.
-    Use -m for a minimal build that excludes these files (saves ~4GB).
+    output ISO so they are available for the next build on the installed
+    system. Use -m for a minimal build that excludes these (saves ~4GB).
 
 PREREQUISITES:
-    sudo apt install xorriso squashfs-tools wget curl jq
+    sudo apt install xorriso squashfs-tools wget curl jq git
 
 EXAMPLES:
-    # List available releases
+    # List available releases (including betas)
     ./build-etc-iso.sh -l
 
-    # Build from stable release (recommended)
+    # Build from the newest stable release
     sudo ./build-etc-iso.sh -r stable
 
-    # Build and write to USB (auto-detect device - RECOMMENDED)
-    sudo ./build-etc-iso.sh -r stable --write-to
+    # Build from a specific beta tag
+    sudo ./build-etc-iso.sh -r tag -t v6.1.0-beta2
 
-    # Build and write to specific USB device
-    sudo ./build-etc-iso.sh -r stable --write-to /dev/sdb
-
-    # Build and copy to Ventoy USB
+    # Build and copy to a Ventoy USB stick
     sudo ./build-etc-iso.sh -r stable --ventoy /media/\$USER/Ventoy
 
-    # Build from latest development tag
-    sudo ./build-etc-iso.sh -r latest
-
-    # Build specific version
-    sudo ./build-etc-iso.sh -r tag -t emcomm-tools-os-community-20251113-r5-build17
-
-    # Build with debug output for troubleshooting
-    sudo ./build-etc-iso.sh -r stable -d
-
-    # Minimal build (smaller ISO, no embedded cache)
-    sudo ./build-etc-iso.sh -r stable -m
-
-    # Build with expert enhancements (FT8, GridTracker, SSTV)
-    sudo ./build-etc-iso.sh -r stable -a
-
+REMOVED IN v2.0.0:
+    --write-to    dd'd the ISO to a block device, with USB auto-detection.
+                  Removed; write the ISO yourself with a tool that shows you
+                  the target drive. See CHANGELOG.md.
 EOF
 }
 
@@ -221,6 +267,48 @@ list_available_versions() {
     echo "  ./build-etc-iso.sh -r latest                    # Latest development tag"
     echo "  ./build-etc-iso.sh -r tag -t <tag-name>         # Specific tag"
     echo ""
+}
+
+# Say plainly whether the ETC release being built matches the one this
+# customizer was written and tested against.
+#
+# The point is to make staleness impossible to miss. Our customizations are
+# tuned to a specific ETC release -- which settings are redundant, which
+# installer scripts exist, which paths et-user-backup covers -- and ETC moves
+# roughly twice a year. Silently building against an untested release is how
+# you end up fighting upstream instead of extending it.
+check_etc_target_drift() {
+    if [ -z "${VERSION:-}" ] || [ "$VERSION" = "dev" ]; then
+        log "WARN" "Could not read a semver from ${RELEASE_TAG}"
+        log "WARN" "  This customizer targets ETC ${ETC_TARGET_VERSION}; verify by hand."
+        return 0
+    fi
+
+    if [ "$VERSION" = "$ETC_TARGET_VERSION" ]; then
+        log "SUCCESS" "ETC ${VERSION} matches this customizer's target (v${CUSTOMIZER_VERSION})"
+        return 0
+    fi
+
+    # Sort the two semvers to say which direction the drift runs.
+    local newest
+    newest=$(printf '%s\n%s\n' "$VERSION" "$ETC_TARGET_VERSION" | sort -V | tail -1)
+
+    log "WARN" ""
+    if [ "$newest" = "$VERSION" ]; then
+        log "WARN" "Building ETC ${VERSION}, but this customizer targets ${ETC_TARGET_VERSION}."
+        log "WARN" "  ETC is NEWER than what these customizations were tested against."
+        log "WARN" "  Read its release notes before trusting this image:"
+        log "WARN" "    ${GITHUB_RELEASES_URL}"
+        log "WARN" "  Things to re-check: settings ETC now handles natively, new"
+        log "WARN" "  et-os-addons installers, and et-user-backup's path list."
+        log "WARN" "  Then set ETC_TARGET_VERSION=${VERSION} and reset CUSTOMIZER_REVISION=1."
+    else
+        log "WARN" "Building ETC ${VERSION}, but this customizer targets ${ETC_TARGET_VERSION}."
+        log "WARN" "  You are building an OLDER ETC than this customizer expects."
+        log "WARN" "  Customizations written for ${ETC_TARGET_VERSION} may not apply."
+    fi
+    log "WARN" ""
+    return 0
 }
 
 get_release_info() {
@@ -286,6 +374,8 @@ get_release_info() {
     # Output ISO filename
     OUTPUT_ISO="${OUTPUT_DIR}/${RELEASE_TAG}-custom.iso"
     
+    check_etc_target_drift
+
     log "SUCCESS" "Release: $RELEASE_NAME"
     log "INFO" "  Tag: $RELEASE_TAG"
     log "INFO" "  Version: $VERSION"
@@ -342,6 +432,7 @@ check_prerequisites() {
     if [ -z "${CALLSIGN:-}" ] || [ "$CALLSIGN" = "N0CALL" ]; then
         log "WARN" "CALLSIGN not configured in secrets.env (using default N0CALL)"
     fi
+    warn_retired_deb_settings
     
     log "SUCCESS" "All prerequisites satisfied"
     return 0
@@ -777,9 +868,9 @@ WIKIPEDIASCRIPT
     # Post-install customizations (while chroot mounts are still active)
     log "INFO" "Applying post-install customizations..."
     
-    # Configure ham radio CAT control (Anytone D578UV)
+    # Configure ham radio CAT control (Anytone AT-D578UVIII) via lib/
     log "DEBUG" "Configuring radio CAT control..."
-    customize_radio_configs_in_chroot
+    ET_ROOT="$SQUASHFS_DIR" customize_radio_configs
     
     # CHIRP and Microsoft Edge: NOW INSTALLED ON FIRST LOGIN (not during build)
     # This prevents ETC's post-install cleanup from removing them as "development" packages
@@ -926,59 +1017,37 @@ restore_user_backup() {
     fi
     local user_backup=""
     local wine_backup=""
-    local backup_count=0
     
-    # Auto-detect user backup (etc-user-backup-*.tar.gz)
-    # Priority: 1) Home folder (et-user-backup default), 2) Cache folder
-    # Always select the most recent (newest) backup by modification time
-    if compgen -G "${home_dir}/etc-user-backup-*.tar.gz" > /dev/null 2>&1; then
-        backup_count=$(find "${home_dir}" -maxdepth 1 -name 'etc-user-backup-*.tar.gz' -type f 2>/dev/null | wc -l)
-        user_backup=$(find "${home_dir}" -maxdepth 1 -name 'etc-user-backup-*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-        if [ "$backup_count" -gt 1 ]; then
-            log "INFO" "Found ${backup_count} user backups in home folder, using newest: $(basename "$user_backup")"
-        else
-            log "INFO" "Found user backup in home folder: $(basename "$user_backup")"
-        fi
-    elif compgen -G "${cache_dir}/etc-user-backup-*.tar.gz" > /dev/null 2>&1; then
-        backup_count=$(find "${cache_dir}" -maxdepth 1 -name 'etc-user-backup-*.tar.gz' -type f 2>/dev/null | wc -l)
-        user_backup=$(find "${cache_dir}" -maxdepth 1 -name 'etc-user-backup-*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-        if [ "$backup_count" -gt 1 ]; then
-            log "INFO" "Found ${backup_count} user backups in cache folder, using newest: $(basename "$user_backup")"
-        else
-            log "INFO" "Found user backup in cache folder: $(basename "$user_backup")"
-        fi
-    fi
-    
-    # Auto-detect wine backup (etc-wine-backup-*.tar.gz)
-    # Priority: 1) Home folder, 2) Cache folder
-    # Always select the most recent (newest) backup by modification time
-    if compgen -G "${home_dir}/etc-wine-backup-*.tar.gz" > /dev/null 2>&1; then
-        backup_count=$(find "${home_dir}" -maxdepth 1 -name 'etc-wine-backup-*.tar.gz' -type f 2>/dev/null | wc -l)
-        wine_backup=$(find "${home_dir}" -maxdepth 1 -name 'etc-wine-backup-*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-        if [ "$backup_count" -gt 1 ]; then
-            log "INFO" "Found ${backup_count} Wine backups in home folder, using newest: $(basename "$wine_backup")"
-        else
-            log "INFO" "Found Wine backup in home folder: $(basename "$wine_backup")"
-        fi
-    elif compgen -G "${cache_dir}/etc-wine-backup-*.tar.gz" > /dev/null 2>&1; then
-        backup_count=$(find "${cache_dir}" -maxdepth 1 -name 'etc-wine-backup-*.tar.gz' -type f 2>/dev/null | wc -l)
-        wine_backup=$(find "${cache_dir}" -maxdepth 1 -name 'etc-wine-backup-*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-        if [ "$backup_count" -gt 1 ]; then
-            log "INFO" "Found ${backup_count} Wine backups in cache folder, using newest: $(basename "$wine_backup")"
-        else
-            log "INFO" "Found Wine backup in cache folder: $(basename "$wine_backup")"
-        fi
-    fi
-    
+    # Newest archive of each kind across every place one can be. The last two
+    # matter when rebuilding on a system that one of these ISOs installed:
+    # older ISOs left archives in ~/.etc-backups, newer ones in
+    # /opt/emcomm-customizer-cache/backups. Searching only $HOME and cache/
+    # meant a rebuild there silently shipped without the operator's config.
+    local -a search=("$home_dir" "$cache_dir" "${home_dir}/.etc-backups" "${STAGED_BACKUP_DIR_REL}")
+    _newest_backup() {
+        local d; for d in "${search[@]}"; do
+            [ -d "$d" ] && find -L "$d" -maxdepth 1 -name "$1" -type f -printf '%T@ %p\n' 2>/dev/null
+        done | sort -rn | head -1 | cut -d' ' -f2-
+    }
+    log "DEBUG" "Backup search: ${search[*]}"
+    user_backup=$(_newest_backup 'etc-user-backup-*.tar.gz')
+    wine_backup=$(_newest_backup 'etc-wine-backup-*.tar.gz')
+    [ -n "$user_backup" ] && log "INFO" "Using user backup: $user_backup"
+    [ -n "$wine_backup" ] && log "INFO" "Using Wine backup: $wine_backup"
+
     # Check if any backups were found
     if [ -z "$user_backup" ] && [ -z "$wine_backup" ]; then
-        log "DEBUG" "No backup files found in home (~/) or cache/"
+        log "DEBUG" "No backup files found in: ${search[*]}"
         log "INFO" "To use backups, run 'et-user-backup' or place etc-user-backup-*.tar.gz in ~/ or cache/"
         return 0
     fi
     
-    # Restore user backup (et-user-backup tarball)
-    # Contains: .config/emcomm-tools, .local/share/emcomm-tools, .local/share/pat
+    # Restore user backup (et-user-backup tarball).
+    #
+    # Contents vary by which et-user-backup made it. R7's stock version covers
+    # ten ETC paths; the manifest-driven one from lib/customize-backup.sh adds
+    # personal directories. Only the ETC config allowlist below is unpacked
+    # into /etc/skel -- see the note there.
     if [ -n "$user_backup" ]; then
         log "INFO" "Restoring user backup: $(basename "$user_backup")"
         
@@ -988,24 +1057,86 @@ restore_user_backup() {
             return 1
         fi
         
-        # Extract to /etc/skel with timeout and progress
+        # Extract to /etc/skel with timeout and progress.
         local skel_dir="${SQUASHFS_DIR}/etc/skel"
         mkdir -p "$skel_dir"
-        
-        log "DEBUG" "Extracting backup with timeout (300 seconds)..."
-        # Use timeout to prevent hangs; extract with verbose progress
-        if timeout 300 tar xzf "$user_backup" -C "$skel_dir" --checkpoint=.1000 --checkpoint-action=dot 2>&1 | tee -a "$LOG_FILE"; then
-            log "SUCCESS" "User backup restored to /etc/skel"
+
+        # ONLY the ETC configuration subset goes into /etc/skel.
+        #
+        # /etc/skel is the template for EVERY account created on the installed
+        # system, and it ships inside the ISO. Extracting a whole backup here
+        # was tolerable when et-user-backup only covered three ETC config
+        # directories. It is not now: the manifest in lib/customize-backup.sh
+        # adds Documents, notes, .fldigi and .nbems, so an unfiltered extract
+        # would bake the operator's documents and message logs into the image
+        # and hand a copy to every new user.
+        #
+        # The full archive is stashed below for restoring into a real $HOME
+        # with `./post-install.sh --restore`, which is where personal data
+        # belongs.
+        local -a skel_paths=(
+            ".config/emcomm-tools"
+            ".config/partyline"
+            ".local/share/emcomm-tools"
+            ".local/share/pat"
+            ".reticulum"
+            ".reticulum-meshchat"
+            ".nomadnetwork"
+            "BACKUP_ITEMS.lst"
+        )
+
+        # Intersect the allowlist with what the archive actually holds: tar
+        # errors out on a member that is not present.
+        #
+        # The prefix group is (\./)? -- an OPTIONAL "./", since tar may or may
+        # not prefix members with it. It must NOT be `\./?`, which means a
+        # LITERAL dot followed by an optional slash: every path in this list
+        # already starts with a dot (.config, .local), so that pattern demanded
+        # "./.config" or "..config" and matched nothing at all. The first build
+        # skipped the entire skel restore because of it.
+        #
+        # Dots in the path are escaped so ".config" cannot match "Xconfig".
+        local -a present=()
+        local listing p esc
+        listing=$(tar tzf "$user_backup" 2>/dev/null)
+        for p in "${skel_paths[@]}"; do
+            esc=$(sed 's/[.[\*^$]/\\&/g' <<< "$p")
+            if grep -qE "^(\./)?${esc}(/|\$)" <<< "$listing"; then
+                present+=("$p")
+            fi
+        done
+
+        if [ "${#present[@]}" -eq 0 ]; then
+            log "WARN" "Backup holds none of the ETC config paths -- skipping skel restore"
         else
-            local exit_code=$?
-            if [ $exit_code -eq 124 ]; then
-                log "WARN" "Backup extraction timed out (>300 sec). Extracted files will be incomplete. Will try to use what was restored."
+            log "DEBUG" "Extracting ${#present[@]} ETC config paths into /etc/skel..."
+            local rc=0
+            timeout 300 tar xzf "$user_backup" -C "$skel_dir" \
+                --checkpoint=.1000 --checkpoint-action=dot \
+                "${present[@]}" >> "$LOG_FILE" 2>&1 || rc=$?
+
+            if [ "$rc" -eq 0 ]; then
+                log "SUCCESS" "ETC config restored to /etc/skel (${present[*]})"
+            elif [ "$rc" -eq 124 ]; then
+                log "WARN" "Extraction timed out (>300s); skel contents may be incomplete"
             else
-                log "ERROR" "Backup extraction failed with code $exit_code"
+                log "ERROR" "Backup extraction failed with code $rc"
                 return 1
             fi
         fi
-        
+
+        # Stage the FULL archive for restoring personal data into a real home
+        # directory later, which `post-install.sh --restore` does. Everything
+        # outside the allowlist above lives only here, never in skel.
+        #
+        # This used to go to /etc/skel/.etc-backups. Two things were wrong with
+        # that: post-install.sh never searched ~/.etc-backups, so it reported
+        # "No backup archives found" on every install; and skel is copied into
+        # EVERY new home, so the multi-GB Wine archive was duplicated per user.
+        # One root-owned copy under /opt, found by post-install.sh, fixes both.
+        stage_backup_archive "$user_backup" || \
+            log "WARN" "Could not stage the full backup into ${STAGED_BACKUP_DIR}"
+
         # Verify extraction
         if [ -d "$skel_dir/.config/emcomm-tools" ]; then
             log "SUCCESS" "ETC config restored"
@@ -1018,45 +1149,35 @@ restore_user_backup() {
         fi
     fi
     
-    # Wine backup handling
-    # .wine32 is very large (500MB+) and should be restored post-install
-    # Create a restore script that will extract it automatically on first login
+    # Wine backup: staged once, restored on demand by
+    # `post-install.sh --restore-wine`. It overwrites ~/.wine32 (VARA and its
+    # licence), so it is never extracted automatically. The old first-login
+    # restore-wine.sh was never wired to anything and never ran.
     if [ -n "$wine_backup" ]; then
-        log "INFO" "Wine backup found - setting up automatic restoration..."
-        
-        # Copy the wine backup to /etc/skel for post-login restoration
-        local skel_backups="${SQUASHFS_DIR}/etc/skel/.etc-backups"
-        mkdir -p "$skel_backups"
-        
-        local wine_backup_dest="${skel_backups}/$(basename "$wine_backup")"
-        log "DEBUG" "Copying Wine backup to: $wine_backup_dest"
-        
-        # Copy with progress indication
-        cp -v "$wine_backup" "$wine_backup_dest" | tee -a "$LOG_FILE"
-        
-        # Create a one-time restore script
-        local restore_script="${SQUASHFS_DIR}/etc/skel/.config/emcomm-tools/restore-wine.sh"
-        mkdir -p "$(dirname "$restore_script")"
-        
-        cat > "$restore_script" <<'WINE_RESTORE'
-#!/bin/bash
-# Auto-restore Wine backup on first login (self-deleting)
-BACKUP_FILE="${HOME}/.etc-backups/$(basename "${1:-}")"
-if [ -f "$BACKUP_FILE" ]; then
-    echo "Restoring Wine/VARA configuration from backup..."
-    if tar xzf "$BACKUP_FILE" -C "$HOME"; then
-        echo "✓ Wine backup restored successfully"
-        rm -f "$BACKUP_FILE"
-        rm -f "$0"  # Self-delete
-    else
-        echo "✗ Failed to restore Wine backup"
+        if stage_backup_archive "$wine_backup"; then
+            log "INFO" "  On the installed system: post-install.sh --restore-wine"
+        else
+            log "WARN" "Could not stage the Wine backup into ${STAGED_BACKUP_DIR}"
+        fi
     fi
-fi
-WINE_RESTORE
-        chmod 755 "$restore_script"
-        
-        log "SUCCESS" "Wine backup will be restored automatically on first login"
+}
+
+
+stage_backup_archive() {
+    local src="$1"
+    STAGED_BACKUP_DIR="${SQUASHFS_DIR}${STAGED_BACKUP_DIR_REL}"
+    mkdir -p "$STAGED_BACKUP_DIR"
+    chmod 755 "$STAGED_BACKUP_DIR"
+    local dest="${STAGED_BACKUP_DIR}/$(basename "$src")"
+    if cp "$src" "$dest"; then
+        # Readable by the installed user, who is created later by the
+        # installer and so cannot own it here. See CLAUDE.md: a non-minimal
+        # ISO is already personal and not shareable.
+        chmod 644 "$dest"
+        log "SUCCESS" "Staged $(basename "$src") ($(du -h "$dest" | cut -f1)) at ${STAGED_BACKUP_DIR_REL}"
+        return 0
     fi
+    return 1
 }
 
 customize_hostname() {
@@ -1288,7 +1409,10 @@ update_release_info() {
     local release_number_upper="${RELEASE_NUMBER^^}"
     
     # Format: ETC_R5_FINAL (CUSTOMIZED) to indicate this is our build
-    local custom_description="ETC_${release_number_upper}_${release_type} (CUSTOMIZED)"
+    # Carries the customizer version so `et-system-info` and conky show which
+    # build is running. The literal "CUSTOMIZED" must stay -- verify_customizations()
+    # greps for exactly that string.
+    local custom_description="ETC_${release_number_upper}_${release_type} (CUSTOMIZED ${CUSTOMIZER_VERSION})"
     
     log "DEBUG" "Updating DISTRIB_DESCRIPTION to: $custom_description"
     
@@ -1316,16 +1440,29 @@ customize_desktop() {
     source "$SECRETS_FILE"
     log "DEBUG" "Sourced secrets file for desktop config"
     
-    local color_scheme="${DESKTOP_COLOR_SCHEME:-prefer-dark}"
-    local scaling="${DESKTOP_SCALING_FACTOR:-1.0}"
-    local disable_a11y="${DISABLE_ACCESSIBILITY:-yes}"
-    local auto_brightness="${AUTOMATIC_SCREEN_BRIGHTNESS:-false}"
-    local dim_screen="${DIM_SCREEN:-true}"
-    local screen_blank="${SCREEN_BLANK:-true}"
-    local screen_blank_timeout="${SCREEN_BLANK_TIMEOUT:-300}"
-    
+    # All hardcoded as of 7.0.2-1 -- these are no longer secrets.env settings.
+    #
+    # Every value here now MATCHES ETC R7 rather than fighting it. R7 natively
+    # sets brightness to 100% on login, disables automatic brightness, disables
+    # dimming, and enables dark mode. The old DIM_SCREEN default of "true" was
+    # re-enabling, on every build, the dimming R7 had just turned off.
+    #
+    # This function still creates /etc/dconf/profile/user, the database cascade
+    # that any system-wide dconf default depends on. Keep it even though the
+    # values below now mostly agree with R7.
+    local color_scheme="prefer-dark"
+    local scaling disable_a11y auto_brightness dim_screen
+    scaling=$(dconf_double "1.0")
+    disable_a11y="yes"
+    auto_brightness=$(dconf_bool "no")
+    dim_screen=$(dconf_bool "no")
+
+    # 0 disables blanking. GNOME treats these as seconds. A field laptop
+    # running a net should not blank its display.
+    local screen_blank_timeout=0
+
     log "DEBUG" "Desktop config: color_scheme=$color_scheme, scaling=$scaling"
-    log "DEBUG" "Display config: auto_brightness=$auto_brightness, dim=$dim_screen, blank=$screen_blank"
+    log "DEBUG" "Display config: auto_brightness=$auto_brightness, dim=$dim_screen, blank_timeout=$screen_blank_timeout"
     
     # GNOME dconf uses a binary database, not plain text files in user.d
     # To set system-wide defaults, we use:
@@ -1366,13 +1503,21 @@ icon-theme='${icon_theme}'
 text-scaling-factor=${scaling}
 EOF
 
-    # Add accessibility settings if disabled
+    # Add accessibility settings if disabled.
+    #
+    # Two fixes here. The block used to set
+    # always-show-universal-access-status=true, which pins the accessibility
+    # menu INTO the top bar -- the opposite of what DISABLE_ACCESSIBILITY=yes
+    # asks for. And it re-declared [org/gnome/desktop/interface]
+    # text-scaling-factor=1.0, which silently overrode the
+    # DESKTOP_SCALING_FACTOR written above it, so that setting never worked
+    # for anyone who changed it.
     if [[ "$disable_a11y" == "yes" ]]; then
         cat >> "$dconf_file" <<'EOF'
 
 # Disable accessibility features
 [org/gnome/desktop/a11y]
-always-show-universal-access-status=true
+always-show-universal-access-status=false
 
 [org/gnome/desktop/a11y/applications]
 screen-keyboard-enabled=false
@@ -1385,23 +1530,25 @@ large-text=false
 [org/gnome/terminal/legacy]
 menu-accelerator-enabled=true
 
-[org/gnome/desktop/interface]
-text-scaling-factor=1.0
-
 [org/gnome/settings-daemon/peripherals/keyboard]
 remember-numlock-state=true
 EOF
     fi
 
-    # Add display/brightness settings
+    # Add display/brightness settings.
+    #
+    # sleep-display-ac / sleep-display-battery are INTEGER keys. They used to
+    # be written quoted ('300'), which dconf parses as a string, rejects as a
+    # type mismatch, and drops -- so screen blanking was never actually
+    # configured by any previous build. Unquoted here.
     cat >> "$dconf_file" <<EOF
 
 # Display and brightness settings
 [org/gnome/settings-daemon/plugins/power]
 ambient-enabled=${auto_brightness}
 idle-dim=${dim_screen}
-sleep-display-ac='${screen_blank_timeout}'
-sleep-display-battery='${screen_blank_timeout}'
+sleep-display-ac=${screen_blank_timeout}
+sleep-display-battery=${screen_blank_timeout}
 EOF
 
     # Compile dconf database so GNOME recognizes the settings on first boot
@@ -1425,530 +1572,16 @@ EOF
     log "SUCCESS" "Desktop preferences configured (${color_scheme}, ${scaling}x)"
 }
 
-apply_etosaddons_overlay() {
-    log "INFO" "Applying et-os-addons overlay files (if available)..."
-    
-    local addons_dir="${CACHE_DIR}/et-os-addons-main"
-    local addons_overlay="${addons_dir}/overlay"
-    
-    if [ ! -d "$addons_overlay" ]; then
-        log "DEBUG" "et-os-addons overlay not found - skipping"
-        return 0
-    fi
-    
-    # Copy opt/emcomm-tools addons to squashfs
-    if [ -d "${addons_overlay}/opt/emcomm-tools" ]; then
-        log "DEBUG" "Copying et-os-addons ETC tools..."
-        cp -r "${addons_overlay}/opt/emcomm-tools"/* "${SQUASHFS_DIR}/opt/emcomm-tools/" 2>/dev/null || {
-            log "WARN" "Failed to copy some ETC addon files"
-        }
-        # Fix permissions on config templates
-        chroot "${SQUASHFS_DIR}" chmod -f 664 /opt/emcomm-tools/conf/template.d/*.conf 2>/dev/null || true
-    fi
-    
-    # Copy skel files (for new user defaults)
-    if [ -d "${addons_overlay}/etc/skel" ]; then
-        log "DEBUG" "Copying et-os-addons skel files..."
-        cp -r "${addons_overlay}/etc/skel"/* "${SQUASHFS_DIR}/etc/skel/" 2>/dev/null || {
-            log "WARN" "Failed to copy some skel addon files"
-        }
-    fi
-    
-    log "SUCCESS" "et-os-addons overlay applied"
-}
 
-customize_aprs() {
-    log "INFO" "Configuring APRS/Direwolf settings..."
-    
-    # shellcheck source=/dev/null
-    source "$SECRETS_FILE"
-    log "DEBUG" "Sourced secrets file for APRS config"
-    
-    local callsign="${CALLSIGN:-N0CALL}"
-    local grid="${GRID_SQUARE:-}"
-    local winlink_passwd="${WINLINK_PASSWORD:-}"
-    
-    # APRS-specific settings
-    local aprs_ssid="${APRS_SSID:-10}"
-    local aprs_passcode="${APRS_PASSCODE:--1}"
-    local aprs_symbol="${APRS_SYMBOL:-/r}"
-    local aprs_comment="${APRS_COMMENT:-EmComm iGate}"
-    local enable_beacon="${ENABLE_APRS_BEACON:-no}"
-    local beacon_interval="${APRS_BEACON_INTERVAL:-300}"
-    local beacon_via="${APRS_BEACON_VIA:-WIDE1-1}"
-    local beacon_power="${APRS_BEACON_POWER:-10}"
-    local beacon_height="${APRS_BEACON_HEIGHT:-20}"
-    local beacon_gain="${APRS_BEACON_GAIN:-3}"
-    local beacon_dir="${APRS_BEACON_DIR:-}"
-    local enable_igate="${ENABLE_APRS_IGATE:-yes}"
-    local aprs_server="${APRS_SERVER:-noam.aprs2.net}"
-    local direwolf_ptt="${DIREWOLF_PTT:-CM108}"
-    
-    log "DEBUG" "User config: callsign=$callsign, grid=$grid"
-    log "DEBUG" "APRS config: ssid=$aprs_ssid, igate=$enable_igate, beacon=$enable_beacon"
-    
-    if [[ "$callsign" == "N0CALL" ]]; then
-        log "WARN" "APRS not configured - callsign is N0CALL"
-        return 0
-    fi
-    
-    # === 1. Pre-populate ETC's user.json ===
-    # ETC uses ~/.config/emcomm-tools/user.json for user settings
-    # This is read by et-user, et-direwolf, et-yaac, et-winlink at runtime
-    local etc_config_dir="${SQUASHFS_DIR}/etc/skel/.config/emcomm-tools"
-    log "DEBUG" "Creating ETC config dir: $etc_config_dir"
-    mkdir -p "$etc_config_dir"
-    
-    local user_json="${etc_config_dir}/user.json"
-    log "DEBUG" "Writing user.json: $user_json"
-    
-    cat > "$user_json" <<EOF
-{
-  "callsign": "${callsign}",
-  "grid": "${grid}",
-  "winlinkPasswd": "${winlink_passwd}"
-}
-EOF
-    chmod 644 "$user_json"
-    log "DEBUG" "user.json written"
-    
-    # === 2. Modify ETC's direwolf APRS template ===
-    # CRITICAL: ETC's et-direwolf wrapper does sed replacements on EVERY LAUNCH:
-    #   sed "s|{{ET_CALLSIGN}}|${CALLSIGN}|g"
-    #   sed "s|{{ET_AUDIO_DEVICE}}|${DIREWOLF_AUDIO_DEVICE}|g"
-    # 
-    # We MUST preserve {{ET_CALLSIGN}} and {{ET_AUDIO_DEVICE}} placeholders!
-    # We ADD iGate/beacon settings as hardcoded values (sed won't touch them).
-    # This means iGate server, beacon interval, and symbol are set at ISO build time
-    # and persist until the next rebuild (not runtime-configurable).
-    #
-    # Template files:
-    #   - direwolf.aprs-digipeater.conf (APRS mode only)
-    #   - direwolf.packet-digipeater.conf (Packet/Winlink mode only)
-    # Modifying APRS template does NOT affect Packet mode - separate templates!
-    
-    local template_dir="${SQUASHFS_DIR}/opt/emcomm-tools/conf/template.d/packet"
-    local aprs_template="${template_dir}/direwolf.aprs-digipeater.conf"
-    
-    if [ ! -d "$template_dir" ]; then
-        log "WARN" "ETC template directory not found: $template_dir"
-        log "WARN" "Skipping direwolf template modification"
-        return 0
-    fi
-    
-    # Backup original template
-    if [ -f "$aprs_template" ]; then
-        cp "$aprs_template" "${aprs_template}.orig"
-        log "DEBUG" "Backed up original template to ${aprs_template}.orig"
-    fi
-    
-    local temp_conf
-    temp_conf=$(mktemp)
-    
-    # Start with original template
-    cp "$aprs_template" "$temp_conf"
-    
-    # Remove any existing IGSERVER/IGLOGIN lines
-    sed -i '/^IGSERVER/d' "$temp_conf"
-    sed -i '/^IGLOGIN/d' "$temp_conf"
-    
-    # Add iGate if enabled (insert after PTT line for proper direwolf parsing)
-    if [[ "$enable_igate" == "yes" ]]; then
-        sed -i "/^PTT RIG 2 localhost:4532/a IGSERVER ${aprs_server}\nIGLOGIN {{ET_CALLSIGN}}-${aprs_ssid} ${aprs_passcode}" "$temp_conf"
-        log "DEBUG" "Added iGate to APRS template: server=${aprs_server}, passcode=${aprs_passcode}"
-    fi
-    
-    # Optionally modify PBEACON with custom settings
-    if [[ "$enable_beacon" == "yes" ]]; then
-        # Build PHG string (power/height/gain)
-        local phg_string="power=${beacon_power} height=${beacon_height} gain=${beacon_gain}"
-        if [[ -n "$beacon_dir" ]]; then
-            phg_string="${phg_string} dir=${beacon_dir}"
-        fi
-        
-        # Parse symbol (e.g., "/r" -> table="/", code="r")
-        local symbol_table="${aprs_symbol:0:1}"
-        local symbol_code="${aprs_symbol:1:1}"
-        
-        # Replace existing PBEACON line with custom one
-        sed -i "s|^PBEACON .*|PBEACON delay=1 every=${beacon_interval} overlay=S symbol=\"${symbol_table}${symbol_code}\" ${phg_string} comment=\"${aprs_comment}\" via=${beacon_via}|" "$temp_conf"
-        log "DEBUG" "Modified PBEACON: interval=${beacon_interval}s, symbol=${aprs_symbol}, phg=${phg_string}"
-    fi
-    
-    # Move modified template into place
-    mv "$temp_conf" "$aprs_template"
-    chmod 644 "$aprs_template"
-    
-    log "SUCCESS" "Modified APRS template: ${callsign}-${aprs_ssid} (igate=${enable_igate}, beacon=${enable_beacon})"
-    log "DEBUG" "Placeholders {{ET_CALLSIGN}} and {{ET_AUDIO_DEVICE}} preserved for ETC runtime substitution"
-}
 
 # Configure radio in chroot (called from within install_etc_in_chroot where mounts are already active)
-customize_radio_configs_in_chroot() {
-    log "DEBUG" "Configuring Anytone D578UV CAT control in chroot..."
-    
-    local radios_dir="${SQUASHFS_DIR}/opt/emcomm-tools/conf/radios.d"
-    mkdir -p "$radios_dir"
-    
-    # Anytone D578UV is core - always configure it
-    log "DEBUG" "Adding Anytone D578UV (DigiRig Mobile) CAT control..."
-    cat > "${radios_dir}/anytone-d578uv.json" <<'EOF'
-{
-  "id": "anytone-d578uv",
-  "vendor": "Anytone",
-  "model": "D578UV (DigiRig Mobile)",
-  "rigctrl": {
-    "id": "301",
-    "baud": "9600",
-    "ptt": "CM108"
-  },
-  "notes": [
-    "D-Star capable VHF/UHF radio with CAT control",
-    "DigiRig Mobile provides USB-to-CAT interface",
-    "CM108 PTT via USB audio device",
-    "Supports APRS and digital modes (D-Star, DMR, YSF)",
-    "Default baud rate: 9600bps"
-  ],
-  "fieldNotes": [
-    "Connect D578UV to DigiRig Mobile 6-pin connector",
-    "DigiRig USB connection to computer",
-    "Serial device auto-mapped to /dev/et-cat",
-    "Audio device enumerates as CM108-compatible",
-    "Use et-mode to select digital mode (APRS, D-Star, etc.)",
-    "Configure frequency/offset using radio display",
-    "PTT control via CM108 USB audio device"
-  ]
-}
-EOF
-    
-    chmod 644 "${radios_dir}/anytone-d578uv.json"
-    
-    # Set Anytone as active radio by default (core functionality)
-    ln -sf "${radios_dir}/anytone-d578uv.json" "${radios_dir}/active-radio.json"
-    log "DEBUG" "Set active radio: anytone-d578uv"
-    
-    # Create udev rule for /dev/et-cat symlink (predictable CAT device name)
-    local udev_dir="${SQUASHFS_DIR}/etc/udev/rules.d"
-    mkdir -p "$udev_dir"
-    
-    log "DEBUG" "Creating udev rule for /dev/et-cat symlink..."
-    cat > "${udev_dir}/99-emcomm-tools-cat.rules" <<'EOF'
-# EmComm Tools CAT Device Symlink
-# Maps DigiRig and other CAT devices to predictable /dev/et-cat symlink
-
-# DigiRig Mobile (CP2102 USB-UART bridge)
-SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="et-cat"
-
-# Generic CH340 (common in budget CAT cables)
-SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="et-cat"
-
-# Prolific PL2303 (common in older CAT cables)
-SUBSYSTEM=="tty", ATTRS{idVendor}=="067b", ATTRS{idProduct}=="2303", SYMLINK+="et-cat"
-
-# FTDI FT232 (common in professional CAT cables)
-SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", SYMLINK+="et-cat"
-EOF
-    
-    chmod 644 "${udev_dir}/99-emcomm-tools-cat.rules"
-    
-    # === CRITICAL FIX: Protect Anytone D578UV from being overwritten by rigctld ===
-    # ETC's wrapper-rigctld.sh has a do_full_auto() function that destructively 
-    # replaces active-radio.json when certain radios (like IC-705) are detected.
-    # We patch it to preserve our Anytone D578UV configuration.
-    #
-    # NOTE: The sed multi-line append syntax is tricky and often fails silently.
-    # This implementation uses a reliable approach: create temp file, then concatenate.
-    log "DEBUG" "Patching rigctld wrapper to preserve Anytone D578UV..."
-    
-    local wrapper_script="${SQUASHFS_DIR}/opt/emcomm-tools/sbin/wrapper-rigctld.sh"
-    if [ -f "$wrapper_script" ]; then
-        # Backup the original
-        cp "$wrapper_script" "${wrapper_script}.backup"
-        log "DEBUG" "Backed up wrapper-rigctld.sh to ${wrapper_script}.backup"
-        
-        # Create the preservation code as a separate file
-        local patch_code
-        patch_code=$(mktemp)
-        cat > "$patch_code" << 'ANYTONE_PRESERVE_EOF'
-  # CUSTOM FIX: Preserve Anytone D578UV if already configured
-  # Added by EmComm Tools Customizer - prevents do_full_auto() from overwriting
-  if [ -L "${ET_HOME}/conf/radios.d/active-radio.json" ]; then
-    if grep -q '"anytone' "${ET_HOME}/conf/radios.d/active-radio.json" 2>/dev/null; then
-      et-log "Anytone D578UV is configured - preserving configuration"
-      return 0
-    fi
-  fi
-ANYTONE_PRESERVE_EOF
-        
-        # Find the line number of do_full_auto() function definition
-        local func_line
-        func_line=$(grep -n '^do_full_auto()' "$wrapper_script" | head -1 | cut -d: -f1)
-        
-        if [ -n "$func_line" ]; then
-            # Find the next line after the function opening brace (typically line after function def)
-            # The function body starts after the opening brace, usually on the line with 'et-log "Found ET_DEVICE'
-            local insert_line=$((func_line + 2))
-            
-            # Create new wrapper script with preservation code inserted
-            local new_wrapper
-            new_wrapper=$(mktemp)
-            
-            # Copy lines 1 to insert_line-1
-            head -n $((insert_line - 1)) "$wrapper_script" > "$new_wrapper"
-            
-            # Insert the preservation code
-            cat "$patch_code" >> "$new_wrapper"
-            
-            # Copy remaining lines
-            tail -n +$insert_line "$wrapper_script" >> "$new_wrapper"
-            
-            # Replace original with patched version
-            mv "$new_wrapper" "$wrapper_script"
-            chmod 755 "$wrapper_script"
-            
-            # Verify the patch was applied correctly
-            if grep -q "Anytone D578UV is configured - preserving configuration" "$wrapper_script"; then
-                log "SUCCESS" "wrapper-rigctld.sh successfully patched to preserve Anytone"
-                log "DEBUG" "Patch inserted at line $insert_line"
-                
-                # Show the patched function for verification
-                log "DEBUG" "Patched do_full_auto() function (first 15 lines):"
-                sed -n "${func_line},$((func_line + 15))p" "$wrapper_script" | while read -r line; do
-                    log "DEBUG" "  $line"
-                done
-            else
-                log "ERROR" "Anytone preservation patch FAILED to apply!"
-                log "DEBUG" "Restoring original wrapper-rigctld.sh from backup"
-                cp "${wrapper_script}.backup" "$wrapper_script"
-            fi
-            
-            rm -f "$patch_code"
-        else
-            log "WARN" "Could not find do_full_auto() function in wrapper-rigctld.sh"
-            log "DEBUG" "Contents of wrapper-rigctld.sh (first 30 lines):"
-            head -30 "$wrapper_script" | while read -r line; do
-                log "DEBUG" "  $line"
-            done
-        fi
-    else
-        log "WARN" "wrapper-rigctld.sh not found at: $wrapper_script"
-        log "WARN" "Radio may be overwritten by rigctld auto-configuration on boot"
-    fi
-    local systemd_dir="${SQUASHFS_DIR}/etc/systemd/system"
-    mkdir -p "$systemd_dir"
-    
-    log "DEBUG" "Creating systemd service for rigctld..."
-    cat > "${systemd_dir}/rigctld.service" <<'EOFSERVICE'
-[Unit]
-Description=HAMlib Rig Control Daemon for EmComm Tools
-Documentation=https://www.hamlib.org/
-Requires=network.target
-After=network.target udev.service
-
-[Service]
-Type=simple
-User=root
-Group=root
-Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/emcomm-tools/bin:/opt/emcomm-tools/sbin"
-
-# Start wrapper script which handles radio config and rigctld invocation
-ExecStart=/opt/emcomm-tools/sbin/wrapper-rigctld.sh start
-
-# Restart on failure
-Restart=on-failure
-RestartSec=5
-
-# Allow time for radio to be powered on
-TimeoutStartSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOFSERVICE
-    
-    chmod 644 "${systemd_dir}/rigctld.service"
-    
-    # Enable rigctld for auto-start at boot
-    chroot "${SQUASHFS_DIR}" systemctl enable rigctld.service 2>/dev/null || \
-        log "WARN" "Could not enable rigctld in chroot (service will start on first boot)"
-    
-    log "DEBUG" "Anytone D578UV CAT control configured"
-}
 
 # Configure radio AFTER ETC is installed (as customization step)
-customize_radio_configs() {
-    log "INFO" "Radio configs applied (completed during ETC post-install phase)..."
-    # NOTE: Radio configs are now written in-chroot immediately after install.sh
-    # This stub function is retained for API compatibility
-    return 0
-}
 
 # ============================================================================
 # Integrate et-os-addons Optional Features
 # ============================================================================
 
-integrate_etosaddons_features() {
-    log "INFO" "Integrating et-os-addons optional features..."
-    
-    # shellcheck source=/dev/null
-    source "$SECRETS_FILE"
-    log "DEBUG" "Sourced secrets file for et-os-addons config"
-    
-    local addons_overlay="${CACHE_DIR}/et-os-addons-main/overlay"
-    
-    if [ ! -d "$addons_overlay" ]; then
-        log "DEBUG" "et-os-addons overlay not found in cache - skipping optional features"
-        return 0
-    fi
-    
-    # === VR-N76 Old Radio Support ===
-    local enable_vr_n76="${ENABLE_ETOSADDONS_VR_N76:-yes}"
-    if [ "$enable_vr_n76" = "yes" ]; then
-        if [ -f "${addons_overlay}/opt/emcomm-tools/bin/et-vr-n76-old" ]; then
-            log "DEBUG" "Installing et-vr-n76-old launcher..."
-            cp "${addons_overlay}/opt/emcomm-tools/bin/et-vr-n76-old" \
-                "${SQUASHFS_DIR}/opt/emcomm-tools/bin/" 2>/dev/null && \
-                chmod 755 "${SQUASHFS_DIR}/opt/emcomm-tools/bin/et-vr-n76-old" || \
-                log "WARN" "Failed to copy et-vr-n76-old"
-        fi
-    fi
-    
-    # === QSSTV Optional Feature ===
-    local enable_qsstv="${ENABLE_ETOSADDONS_QSSTV:-yes}"
-    if [ "$enable_qsstv" = "yes" ]; then
-        if [ -f "${addons_overlay}/opt/emcomm-tools/bin/et-qsstv" ]; then
-            log "DEBUG" "Installing et-qsstv launcher..."
-            cp "${addons_overlay}/opt/emcomm-tools/bin/et-qsstv" \
-                "${SQUASHFS_DIR}/opt/emcomm-tools/bin/" 2>/dev/null && \
-                chmod 755 "${SQUASHFS_DIR}/opt/emcomm-tools/bin/et-qsstv" || \
-                log "WARN" "Failed to copy et-qsstv"
-        fi
-        if [ -f "${addons_overlay}/opt/emcomm-tools/conf/template.d/qsstv_9.0.conf" ]; then
-            log "DEBUG" "Installing QSSTV config template..."
-            cp "${addons_overlay}/opt/emcomm-tools/conf/template.d/qsstv_9.0.conf" \
-                "${SQUASHFS_DIR}/opt/emcomm-tools/conf/template.d/" 2>/dev/null || \
-                log "WARN" "Failed to copy QSSTV template"
-        fi
-    fi
-    
-    # === WSJT-X Optional Feature ===
-    local enable_wsjtx="${ENABLE_ETOSADDONS_WSJTX:-yes}"
-    if [ "$enable_wsjtx" = "yes" ]; then
-        if [ -f "${addons_overlay}/opt/emcomm-tools/bin/et-wsjtx" ]; then
-            log "DEBUG" "Installing et-wsjtx launcher..."
-            cp "${addons_overlay}/opt/emcomm-tools/bin/et-wsjtx" \
-                "${SQUASHFS_DIR}/opt/emcomm-tools/bin/" 2>/dev/null && \
-                chmod 755 "${SQUASHFS_DIR}/opt/emcomm-tools/bin/et-wsjtx" || \
-                log "WARN" "Failed to copy et-wsjtx"
-        fi
-        if [ -f "${addons_overlay}/opt/emcomm-tools/conf/template.d/WSJT-X.conf" ]; then
-            log "DEBUG" "Installing WSJT-X config template..."
-            cp "${addons_overlay}/opt/emcomm-tools/conf/template.d/WSJT-X.conf" \
-                "${SQUASHFS_DIR}/opt/emcomm-tools/conf/template.d/" 2>/dev/null || \
-                log "WARN" "Failed to copy WSJT-X template"
-        fi
-    fi
-    
-    # === JS8 Spotter Optional Feature ===
-    local enable_js8spotter="${ENABLE_ETOSADDONS_JS8SPOTTER:-yes}"
-    if [ "$enable_js8spotter" = "yes" ]; then
-        if [ -f "${addons_overlay}/opt/emcomm-tools/bin/et-js8spotter" ]; then
-            log "DEBUG" "Installing et-js8spotter launcher..."
-            cp "${addons_overlay}/opt/emcomm-tools/bin/et-js8spotter" \
-                "${SQUASHFS_DIR}/opt/emcomm-tools/bin/" 2>/dev/null && \
-                chmod 755 "${SQUASHFS_DIR}/opt/emcomm-tools/bin/et-js8spotter" || \
-                log "WARN" "Failed to copy et-js8spotter"
-        fi
-        if [ -f "${addons_overlay}/usr/share/applications/js8spotter.desktop" ]; then
-            log "DEBUG" "Installing JS8Spotter desktop file..."
-            mkdir -p "${SQUASHFS_DIR}/usr/share/applications"
-            cp "${addons_overlay}/usr/share/applications/js8spotter.desktop" \
-                "${SQUASHFS_DIR}/usr/share/applications/" 2>/dev/null || \
-                log "WARN" "Failed to copy JS8Spotter desktop file"
-        fi
-    fi
-    
-    # === Network Control Optional Feature ===
-    local enable_netcontrol="${ENABLE_ETOSADDONS_NETCONTROL:-yes}"
-    if [ "$enable_netcontrol" = "yes" ]; then
-        if [ -f "${addons_overlay}/opt/emcomm-tools/bin/et-netcontrol" ]; then
-            log "DEBUG" "Installing et-netcontrol launcher..."
-            cp "${addons_overlay}/opt/emcomm-tools/bin/et-netcontrol" \
-                "${SQUASHFS_DIR}/opt/emcomm-tools/bin/" 2>/dev/null && \
-                chmod 755 "${SQUASHFS_DIR}/opt/emcomm-tools/bin/et-netcontrol" || \
-                log "WARN" "Failed to copy et-netcontrol"
-        fi
-        if [ -f "${addons_overlay}/usr/share/applications/netcontrol.desktop" ]; then
-            log "DEBUG" "Installing NetControl desktop file..."
-            mkdir -p "${SQUASHFS_DIR}/usr/share/applications"
-            cp "${addons_overlay}/usr/share/applications/netcontrol.desktop" \
-                "${SQUASHFS_DIR}/usr/share/applications/" 2>/dev/null || \
-                log "WARN" "Failed to copy NetControl desktop file"
-        fi
-        if [ -f "${addons_overlay}/usr/share/pixmaps/netcontrol.png" ]; then
-            log "DEBUG" "Installing NetControl icon..."
-            mkdir -p "${SQUASHFS_DIR}/usr/share/pixmaps"
-            cp "${addons_overlay}/usr/share/pixmaps/netcontrol.png" \
-                "${SQUASHFS_DIR}/usr/share/pixmaps/" 2>/dev/null || \
-                log "WARN" "Failed to copy NetControl icon"
-        fi
-    fi
-    
-    # === WiFi Hotspot Optional Feature ===
-    local enable_hotspot="${ENABLE_ETOSADDONS_HOTSPOT:-yes}"
-    if [ "$enable_hotspot" = "yes" ]; then
-        if [ -f "${addons_overlay}/opt/emcomm-tools/bin/et-hotspot" ]; then
-            log "DEBUG" "Installing et-hotspot launcher..."
-            cp "${addons_overlay}/opt/emcomm-tools/bin/et-hotspot" \
-                "${SQUASHFS_DIR}/opt/emcomm-tools/bin/" 2>/dev/null && \
-                chmod 755 "${SQUASHFS_DIR}/opt/emcomm-tools/bin/et-hotspot" || \
-                log "WARN" "Failed to copy et-hotspot"
-        fi
-    fi
-    
-    # === User Backup Manager Optional Feature ===
-    local enable_userbackup="${ENABLE_ETOSADDONS_USERBACKUP:-yes}"
-    if [ "$enable_userbackup" = "yes" ]; then
-        if [ -f "${addons_overlay}/opt/emcomm-tools/bin/et-user-backup" ]; then
-            log "DEBUG" "Installing et-user-backup utility..."
-            cp "${addons_overlay}/opt/emcomm-tools/bin/et-user-backup" \
-                "${SQUASHFS_DIR}/opt/emcomm-tools/bin/" 2>/dev/null && \
-                chmod 755 "${SQUASHFS_DIR}/opt/emcomm-tools/bin/et-user-backup" || \
-                log "WARN" "Failed to copy et-user-backup"
-        fi
-    fi
-    
-    # === Kiwix Offline Content Browser ===
-    local enable_kiwix="${ENABLE_ETOSADDONS_KIWIX:-yes}"
-    if [ "$enable_kiwix" = "yes" ]; then
-        if [ -f "${addons_overlay}/usr/share/applications/kiwix.desktop" ]; then
-            log "DEBUG" "Installing Kiwix desktop file..."
-            mkdir -p "${SQUASHFS_DIR}/usr/share/applications"
-            cp "${addons_overlay}/usr/share/applications/kiwix.desktop" \
-                "${SQUASHFS_DIR}/usr/share/applications/" 2>/dev/null || \
-                log "WARN" "Failed to copy Kiwix desktop file"
-        fi
-        if [ -f "${addons_overlay}/usr/share/pixmaps/kiwix-desktop.svg" ]; then
-            log "DEBUG" "Installing Kiwix icon..."
-            mkdir -p "${SQUASHFS_DIR}/usr/share/pixmaps"
-            cp "${addons_overlay}/usr/share/pixmaps/kiwix-desktop.svg" \
-                "${SQUASHFS_DIR}/usr/share/pixmaps/" 2>/dev/null || \
-                log "WARN" "Failed to copy Kiwix icon"
-        fi
-    fi
-    
-    # === VGC VR-N76 Radio Config ===
-    # Always include this radio option (no ENABLE variable needed)
-    if [ -f "${addons_overlay}/opt/emcomm-tools/conf/radios.d/vgc-vrn76.bt.json" ]; then
-        log "DEBUG" "Installing VGC VR-N76 radio config..."
-        local radios_dir="${SQUASHFS_DIR}/opt/emcomm-tools/conf/radios.d"
-        mkdir -p "$radios_dir"
-        cp "${addons_overlay}/opt/emcomm-tools/conf/radios.d/vgc-vrn76.bt.json" \
-            "${SQUASHFS_DIR}/opt/emcomm-tools/conf/radios.d/" 2>/dev/null || \
-            log "WARN" "Failed to copy VGC VR-N76 radio config"
-    fi
-    
-    log "SUCCESS" "et-os-addons features integrated"
-}
 
 customize_user_and_autologin() {
     log "INFO" "Configuring user account..."
@@ -1965,82 +1598,45 @@ customize_user_and_autologin() {
     local enable_autologin="${ENABLE_AUTOLOGIN:-no}"
     
     log "DEBUG" "User config: fullname='$fullname', username='$username'"
-    log "DEBUG" "Autologin: $enable_autologin, password_set: $([ -n "$password" ] && echo 'yes' || echo 'no')"
+    log "DEBUG" "Autologin: $enable_autologin"
     
-    # Only configure autologin if explicitly enabled
-    if [ "$enable_autologin" = "yes" ]; then
-        local lightdm_dir="${SQUASHFS_DIR}/etc/lightdm/lightdm.conf.d"
-        log "DEBUG" "Creating LightDM config dir: $lightdm_dir"
-        mkdir -p "$lightdm_dir"
-        
-        local autologin_conf="${lightdm_dir}/50-autologin.conf"
-        log "DEBUG" "Writing autologin config: $autologin_conf"
-        cat > "$autologin_conf" <<EOF
-[Seat:*]
-autologin-user=$username
-autologin-user-timeout=0
-user-session=ubuntu
-EOF
-        log "DEBUG" "Autologin config written successfully"
-        log "SUCCESS" "Autologin configured for: $username"
+    # Autologin goes in GDM's custom.conf. ETC runs GDM; LightDM is not
+    # installed. This used to write /etc/lightdm/lightdm.conf.d, which nothing
+    # reads, so ENABLE_AUTOLOGIN=yes has never done anything.
+    #
+    # Trade-off worth knowing: with autologin, PAM never sees your password,
+    # so the GNOME keyring stays locked until something asks for it. VS Code
+    # then prompts for the keyring password, or signs out of GitHub, Copilot
+    # and Settings Sync if the prompt is dismissed.
+    local gdm_conf="${SQUASHFS_DIR}/etc/gdm3/custom.conf"
+    if [ ! -f "$gdm_conf" ]; then
+        log "WARN" "No ${gdm_conf} -- cannot configure autologin"
     else
-        log "INFO" "Autologin disabled - user will be prompted for password"
-        # Remove any existing autologin configuration (if ETC has one)
-        local autologin_conf="${SQUASHFS_DIR}/etc/lightdm/lightdm.conf.d/50-autologin.conf"
-        if [ -f "$autologin_conf" ]; then
-            log "DEBUG" "Removing existing autologin config: $autologin_conf"
-            rm -f "$autologin_conf"
-        fi
-    fi
-    
-    # Set user password by pre-hashing and writing directly
-    # We avoid chroot because it requires bind mounts that can hang
-    if [ -n "$password" ]; then
-        log "INFO" "Setting up password for user..."
-        
-        # Hash the password using openssl (works without chroot)
-        local hashed_password
-        hashed_password=$(openssl passwd -6 "$password")
-        
-        if [ -n "$hashed_password" ]; then
-            # Create a first-boot script that sets the password
-            local firstboot_dir="${SQUASHFS_DIR}/etc/profile.d"
-            local firstboot_script="${firstboot_dir}/z99-set-user-password.sh"
-            
-            mkdir -p "$firstboot_dir"
-            
-            cat > "$firstboot_script" << PWEOF
-#!/bin/bash
-# One-time password setup - self-deleting script
-if [ "\$(id -u)" = "0" ] && [ -f "/etc/shadow" ]; then
-    # Update password hash for user
-    if grep -q "^${username}:" /etc/shadow 2>/dev/null; then
-        sed -i "s|^${username}:[^:]*:|${username}:${hashed_password}:|" /etc/shadow
-    fi
-    # Self-delete
-    rm -f "\$0"
-fi
-PWEOF
-            chmod 755 "$firstboot_script"
-            log "DEBUG" "Created first-boot password script"
-            
-            # Also try to directly modify shadow if the user exists
-            local shadow_file="${SQUASHFS_DIR}/etc/shadow"
-            if [ -f "$shadow_file" ] && grep -q "^${username}:" "$shadow_file" 2>/dev/null; then
-                sed -i "s|^${username}:[^:]*:|${username}:${hashed_password}:|" "$shadow_file"
-                log "SUCCESS" "Password hash set directly in shadow file"
-                # Remove the first-boot script since we did it directly
-                rm -f "$firstboot_script"
+        # Drop any active setting first, so re-runs and "no" both converge.
+        sed -i -E '/^[[:space:]]*AutomaticLogin(Enable)?[[:space:]]*=/d' "$gdm_conf"
+        if [ "$enable_autologin" = "yes" ]; then
+            if grep -q '^\[daemon\]' "$gdm_conf"; then
+                sed -i "/^\[daemon\]/a AutomaticLoginEnable=true\nAutomaticLogin=${username}" "$gdm_conf"
             else
-                log "INFO" "User not in shadow yet - password will be set on first boot"
+                printf '[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin=%s\n' "$username" >> "$gdm_conf"
             fi
+            log "SUCCESS" "GDM autologin configured for: $username"
+            log "WARN" "  Autologin leaves the GNOME keyring locked; VS Code will ask to unlock it"
         else
-            log "WARN" "Failed to hash password"
+            log "INFO" "Autologin disabled - user will be prompted for password"
         fi
-    else
-        log "INFO" "No password configured - user will use ETC default or must set on first boot"
     fi
-    
+
+    # USER_PASSWORD is not applied. The installer creates the account and
+    # sets the password you type there. This used to write
+    # /etc/profile.d/z99-set-user-password.sh to edit /etc/shadow, but
+    # profile.d runs as the logging-in user, never root, so its root check
+    # always failed and the script did nothing. The fallback edited the
+    # squashfs's /etc/shadow, where the account does not exist yet.
+    if [ -n "$password" ]; then
+        log "INFO" "USER_PASSWORD is ignored -- set your password in the installer"
+    fi
+
     # Pre-populate ETC's user.json with secrets (callsign, grid, Winlink password)
     # This ensures personalized config even if backup restoration is deferred
     log "INFO" "Pre-populating ETC user configuration..."
@@ -2068,652 +1664,9 @@ EOF
 # Partition Detection and Strategy
 # ============================================================================
 
-detect_partition_strategy() {
-    # Analyze current disk layout using lsblk (not parted, which can hang waiting for user input)
-    # Returns: partition_strategy, target_disk, ext4_size, swap_size
-    # NOTE: log function redirects console output to stderr, keeping stdout clean for pipe-delimited output
-    
-    # Strategy values: auto-detect, use-entire-disk, use-partition, use-free-space
-    local target_device="${1:-}"
-    local force_strategy="${2:-}"  # Optional: force-entire-disk, force-partition, force-free-space
-    
-    log "INFO" "Analyzing partition strategy..."
-    
-    # If user explicitly configured INSTALL_DISK and it's a specific partition, use it as-is
-    if [[ -n "$target_device" && "$target_device" =~ [0-9]$ ]]; then
-        # Partition mode: target is a specific partition like /dev/sda5
-        log "INFO" "Target is specific partition: $target_device (partition mode)"
-        
-        # Check if partition exists and get its size
-        if [ -b "$target_device" ] 2>/dev/null; then
-            local part_size_sectors
-            part_size_sectors=$(blockdev --getsz "$target_device" 2>/dev/null || echo "0")
-            local part_size_gb=$((part_size_sectors / 2097152))  # Convert 512-byte sectors to GB
-            
-            log "INFO" "Partition size: ~${part_size_gb}GB"
-            echo "use-partition|$target_device|${part_size_gb}GB|calculated"
-            return 0
-        else
-            log "WARN" "Target partition $target_device does not exist - will auto-detect"
-        fi
-    fi
-    
-    # If we reach here, either no specific partition was set, or it doesn't exist
-    # Try to detect current disk layout for analysis
-    
-    log "INFO" "Running partition auto-detection using lsblk..."
-    
-    # Find target disk
-    local target_disk
-    if [[ -n "$target_device" && "$target_device" =~ ^/dev/[a-z] ]]; then
-        target_disk="$target_device"
-    else
-        # Find first non-removable disk
-        target_disk=$(lsblk -d -n -o NAME,TYPE 2>/dev/null | grep "disk" | head -1 | awk '{print $1}')
-        target_disk="/dev/$target_disk"
-    fi
-    
-    if [ -z "$target_disk" ] || [ ! -b "$target_disk" ]; then
-        log "WARN" "Could not determine target disk - defaulting to partition mode"
-        echo "unknown|unknown|unknown|unknown"
-        return 1
-    fi
-    
-    log "DEBUG" "Target disk for analysis: $target_disk"
-    
-    # Use lsblk instead of parted (parted can hang waiting for user input)
-    # lsblk is fast and provides all info we need: partition count and filesystem types
-    local lsblk_output
-    lsblk_output=$(lsblk -b "$target_disk" -o NAME,FSTYPE,TYPE 2>/dev/null) || lsblk_output=""
-    
-    if [ -z "$lsblk_output" ]; then
-        log "WARN" "lsblk failed or returned empty - defaulting to partition mode"
-        echo "partition|$target_disk|0|fallback"
-        return 0
-    fi
-    
-    # Count partitions from lsblk output
-    local partition_count
-    partition_count=$(echo "$lsblk_output" | grep -c "part" || echo "0")
-    
-    local has_windows=0
-    local has_linux=0
-    local total_disk_gb=0
-    
-    # Check for Windows/Linux filesystems from lsblk output
-    if echo "$lsblk_output" | grep -qi "ntfs\|fat"; then
-        has_windows=1
-        log "INFO" "Detected Windows partition (NTFS/FAT) on $target_disk"
-    fi
-    
-    if echo "$lsblk_output" | grep -qi "ext4\|ext3\|btrfs"; then
-        has_linux=1
-        log "INFO" "Detected Linux partition on $target_disk"
-    fi
-    
-    # Get disk size using blockdev
-    if command -v blockdev &>/dev/null; then
-        local disk_size_sectors
-        disk_size_sectors=$(blockdev --getsz "$target_disk" 2>/dev/null || echo "0")
-        total_disk_gb=$((disk_size_sectors / 2097152))  # Convert to GB
-        log "DEBUG" "Total disk size: ~${total_disk_gb}GB, Partition count: $partition_count"
-    fi
-    
-    # Decision logic based on partition analysis
-    if [ $partition_count -eq 0 ]; then
-        log "INFO" "No partitions found - entire disk available (~${total_disk_gb}GB)"
-        echo "entire-disk|$target_disk|${total_disk_gb}GB|calculated"
-    elif [ $has_windows -eq 1 ] && [ $has_linux -eq 0 ]; then
-        log "INFO" "Windows partition(s) detected, no Linux partitions"
-        # For Windows-only disks, suggest free-space mode to preserve Windows
-        if [ $partition_count -le 4 ]; then
-            log "INFO" "Partition table has room for new partitions - using free-space mode"
-            echo "free-space|$target_disk|${total_disk_gb}GB|calculated"
-        else
-            log "WARN" "Partition table is full - will need to repartition entire disk"
-            echo "entire-disk|$target_disk|${total_disk_gb}GB|calculated"
-        fi
-    elif [ $has_linux -eq 1 ] || [ $partition_count -le 2 ]; then
-        log "INFO" "Linux partition(s) or simple partition table detected (safe partition mode)"
-        echo "partition|$target_disk|${total_disk_gb}GB|calculated"
-    else
-        log "INFO" "Complex partition table detected - defaulting to safe partition mode"
-        echo "partition|$target_disk|${total_disk_gb}GB|calculated"
-    fi
-}
 
-calculate_swap_size() {
-    # Calculate ideal swap based on available RAM
-    # Input: total_size_gb (space available for ext4+swap)
-    # Output: swap_size_gb
-    
-    local available_gb="${1:-0}"
-    local override_mb="${2:-}"  # Optional override from SWAP_SIZE_MB
-    
-    if [ -n "$override_mb" ] && [ "$override_mb" -gt 0 ]; then
-        # User override
-        local override_gb=$((override_mb / 1024))
-        log "INFO" "Using user-configured swap size: ${override_gb}GB"
-        echo "$override_gb"
-        return 0
-    fi
-    
-    # Auto-calculate based on available space and best practices
-    # Conservative approach: use 2-4GB for modern systems, or 25% of available, whichever is less
-    
-    local swap_gb=$((available_gb / 4))  # 25% of available space
-    
-    if [ $swap_gb -lt 2 ]; then
-        swap_gb=2
-    elif [ $swap_gb -gt 4 ]; then
-        swap_gb=4
-    fi
-    
-    log "INFO" "Calculated swap size: ${swap_gb}GB (from ${available_gb}GB available)"
-    echo "$swap_gb"
-}
 
-customize_preseed() {
-    log "INFO" "Generating preseed file for automated Ubuntu installer..."
-    
-    # Enable error tracing for this function
-    local preseed_debug=1
-    
-    if [ $preseed_debug -eq 1 ]; then
-        log "DEBUG" "[PRESEED] Starting preseed customization"
-        log "DEBUG" "[PRESEED] ISO_EXTRACT_DIR=$ISO_EXTRACT_DIR"
-    fi
-    
-    # shellcheck source=/dev/null
-    if ! source "$SECRETS_FILE"; then
-        log "ERROR" "[PRESEED] Failed to source secrets file: $SECRETS_FILE"
-        return 1
-    fi
-    log "DEBUG" "Sourced secrets file for preseed config"
-    
-    local callsign="${CALLSIGN:-N0CALL}"
-    local machine_name="${MACHINE_NAME:-ETC-${callsign}}"
-    local fullname="${USER_FULLNAME:-EmComm User}"
-    local username="${USER_USERNAME:-${callsign,,}}"
-    local password="${USER_PASSWORD:-}"
-    local timezone="${TIMEZONE:-America/Denver}"
-    local keyboard_layout="${KEYBOARD_LAYOUT:-us}"
-    local locale="${LOCALE:-en_US.UTF-8}"
-    
-    # Partition strategy variables (new)
-    local partition_strategy="${PARTITION_STRATEGY:-auto-detect}"
-    local install_disk="${INSTALL_DISK:-}"           # May be empty for auto-detect
-    local swap_size_mb="${SWAP_SIZE_MB:-}"
-    local ext4_size_mb="${EXT4_SIZE_MB:-}"
-    local confirm_entire_disk="${CONFIRM_ENTIRE_DISK:-no}"
-    
-    log "DEBUG" "Partition strategy: $partition_strategy"
-    
-    # Detect partition strategy based on current disk layout
-    local strategy_result strategy_mode target_disk target_size target_calc
-    local calculated_swap_gb calculated_ext4_gb
-    
-    if [[ "$partition_strategy" == "auto-detect" ]]; then
-        log "INFO" "Running auto-detect partition strategy..."
-        strategy_result=$(detect_partition_strategy "$install_disk" 2>/dev/null || echo "unknown|unknown|unknown|unknown")
-        IFS='|' read -r strategy_mode target_disk target_size target_calc <<< "$strategy_result"
-        log "INFO" "Auto-detect result: mode=$strategy_mode, disk=$target_disk, size=$target_size"
-        
-        # Calculate swap size based on detected partition size if in auto mode
-        if [[ "$target_size" != "auto" ]] && [[ -n "$swap_size_mb" ]] && [ "$swap_size_mb" -gt 0 ]; then
-            calculated_swap_gb=$((swap_size_mb / 1024))
-            log "INFO" "Using user-configured swap: ${calculated_swap_gb}GB (${swap_size_mb}MB)"
-        elif [[ "$target_size" != "auto" ]] && [[ "$target_size" =~ ^([0-9]+)GB ]]; then
-            # Extract numeric GB from target_size (e.g., "50GB" -> 50)
-            local available_gb="${BASH_REMATCH[1]}"
-            calculated_swap_gb=$(calculate_swap_size "$available_gb" "$swap_size_mb")
-            log "INFO" "Calculated swap size: ${calculated_swap_gb}GB from available ${available_gb}GB"
-        fi
-    else
-        strategy_mode="$partition_strategy"
-        target_disk="$install_disk"
-        log "INFO" "Using explicit partition strategy: $strategy_mode"
-        
-        # Calculate swap for explicit strategy if user provided overrides
-        if [ -n "$swap_size_mb" ] && [ "$swap_size_mb" -gt 0 ]; then
-            calculated_swap_gb=$((swap_size_mb / 1024))
-            log "INFO" "Using user-configured swap: ${calculated_swap_gb}GB (${swap_size_mb}MB)"
-        fi
-    fi
-    
-    # Map strategy names to actions
-    case "$strategy_mode" in
-        use-partition|partition|force-partition)
-            log "INFO" "Using partition mode (safe for dual-boot)"
-            strategy_mode="partition"
-            ;;
-        use-entire-disk|entire-disk|force-entire-disk)
-            log "WARN" "Using entire-disk mode (DESTRUCTIVE)"
-            if [[ "$confirm_entire_disk" != "yes" ]]; then
-                log "ERROR" "Entire-disk mode requires CONFIRM_ENTIRE_DISK=\"yes\" in secrets.env"
-                log "ERROR" "This will ERASE all partitions. Please review carefully and confirm."
-                return 1
-            fi
-            strategy_mode="entire-disk"
-            ;;
-        use-free-space|free-space|force-free-space)
-            log "INFO" "Using free-space mode (create partitions in available space)"
-            strategy_mode="free-space"
-            ;;
-        *)
-            log "WARN" "Unknown strategy: $strategy_mode - defaulting to partition mode"
-            strategy_mode="partition"
-            ;;
-    esac
-    
-    log "DEBUG" "Preseed config: hostname='$machine_name', username='$username', timezone='$timezone'"
-    log "DEBUG" "Partition strategy: $strategy_mode, target_disk='$target_disk', target_size='${target_size:-auto}'"
-    if [ -n "$calculated_swap_gb" ]; then
-        log "DEBUG" "Swap calculation: ${calculated_swap_gb}GB"
-    fi
-    if [ -n "$ext4_size_mb" ] && [ "$ext4_size_mb" -gt 0 ]; then
-        calculated_ext4_gb=$((ext4_size_mb / 1024))
-        log "DEBUG" "Ext4 size override: ${calculated_ext4_gb}GB (${ext4_size_mb}MB)"
-    fi
-    
-    # Create preseed directory in ISO ROOT (not in squashfs)
-    # The preseed file must be accessible from GRUB bootloader BEFORE squashfs is mounted
-    # Location: /preseed.cfg on the ISO, accessed via preseed/file=/cdrom/preseed.cfg
-    local preseed_dir="${ISO_EXTRACT_DIR}"
-    log "DEBUG" "Creating preseed file in ISO root: $preseed_dir"
-    
-    if [ -z "$ISO_EXTRACT_DIR" ]; then
-        log "ERROR" "[PRESEED] ISO_EXTRACT_DIR is not set!"
-        return 1
-    fi
-    
-    # Generate preseed file with strategy-based partitioning
-    local preseed_file="${preseed_dir}/preseed.cfg"
-    log "DEBUG" "Generating preseed file: $preseed_file"
-    log "DEBUG" "[PRESEED] About to create preseed with cat heredoc"
-    
-    # Hash password for preseed (format: SHA512 hash prefixed with $6$)
-    local hashed_password=""
-    if [ -n "$password" ]; then
-        log "DEBUG" "[PRESEED] Hashing password with openssl..."
-        if ! hashed_password=$(openssl passwd -6 "$password" 2>&1); then
-            log "ERROR" "[PRESEED] Password hashing failed: $hashed_password"
-            return 1
-        fi
-        log "DEBUG" "[PRESEED] Password hash generated successfully"
-    else
-        log "WARN" "[PRESEED] No password configured - preseed will skip password setup"
-    fi
-    
-    # Create preseed file for Ubiquity (Ubuntu Desktop installer)
-    # CRITICAL: Ubuntu Desktop uses Ubiquity, NOT debian-installer (d-i)!
-    # Reference: https://wiki.ubuntu.com/UbiquityAutomation
-    #
-    # Ubiquity IGNORES these d-i directives:
-    #   - netcfg (network configuration)
-    #   - LVM and RAID partitioning
-    #   - base-installer
-    #   - pkgsel/tasksel
-    #   - finish-install
-    #
-    # Ubiquity HONORS these d-i directives:
-    #   - keyboard-configuration
-    #   - passwd (user account setup)
-    #   - time/zone
-    #   - localechooser/languagechooser/countrychooser
-    #
-    # Ubiquity-specific keys use "ubiquity/" prefix
-    
-    log "DEBUG" "[PRESEED] Creating Ubiquity-compatible preseed file..."
-    cat > "$preseed_file" <<'EOF'
-# Ubiquity Preseed File for Automated Ubuntu Desktop Installation
-# Generated by EmComm Tools Customizer
-# Reference: https://wiki.ubuntu.com/UbiquityAutomation
-#
-# IMPORTANT: This preseed is for Ubiquity (Ubuntu Desktop graphical installer).
-# Boot with "automatic-ubiquity only-ubiquity noprompt" parameters to enable automation.
-# In automatic mode, Ubiquity respects the 'seen' flag for preseeded values.
 
-### Ubiquity-specific settings
-# Skip the summary/confirmation page before installation begins
-ubiquity ubiquity/summary boolean true
-
-# Automatically reboot when installation completes
-ubiquity ubiquity/reboot boolean true
-
-# Power off instead of reboot (set to false for reboot)
-ubiquity ubiquity/poweroff boolean false
-
-# Command to run on successful installation (runs outside /target, but /target is mounted)
-ubiquity ubiquity/success_command string \
-    sed -i 's/DISTRIB_DESCRIPTION=.*/DISTRIB_DESCRIPTION="RELEASE_DESCRIPTION_VAR"/' /target/etc/lsb-release || true
-
-### Language and Locale (Ubiquity honors these)
-# Language selection
-languagechooser languagechooser/language-name select English
-
-# Country/territory selection
-countrychooser countrychooser/shortlist select US
-
-# Additional locales to support
-localechooser localechooser/supported-locales multiselect LOCALE_VAR
-
-# Console keyboard layout
-console-setup console-setup/ask_detect boolean false
-console-setup console-setup/layoutcode string KEYBOARD_LAYOUT_VAR
-
-# Keyboard configuration (Ubiquity honors this)
-d-i keyboard-configuration/layoutcode string KEYBOARD_LAYOUT_VAR
-d-i keyboard-configuration/xkb-keymap select KEYBOARD_LAYOUT_VAR
-keyboard-configuration keyboard-configuration/layoutcode string KEYBOARD_LAYOUT_VAR
-keyboard-configuration keyboard-configuration/xkb-keymap select KEYBOARD_LAYOUT_VAR
-
-### Timezone (Ubiquity honors this)
-d-i time/zone string TIMEZONE_VAR
-d-i clock-setup/utc boolean true
-
-### User Account Setup (Ubiquity honors these)
-# Disable root login - use sudo instead
-d-i passwd/root-login boolean false
-
-# Create user account
-d-i passwd/user-fullname string FULLNAME_VAR
-d-i passwd/username string USERNAME_VAR
-d-i passwd/user-password-crypted password PASSWORD_HASH_VAR
-d-i user-setup/allow-password-weak boolean true
-d-i user-setup/encrypt-home boolean false
-
-# Also set via passwd/* for compatibility
-passwd passwd/user-fullname string FULLNAME_VAR
-passwd passwd/username string USERNAME_VAR
-passwd passwd/user-password-crypted password PASSWORD_HASH_VAR
-passwd passwd/user-default-groups string adm cdrom dip lpadmin plugdev sambashare sudo
-
-### Partitioning - NOTE: Ubiquity has LIMITED preseed support for partitioning
-# Ubiquity ignores LVM/RAID partitioning preseeds!
-# For automated partitioning, Ubiquity uses its own simpler method.
-# The user will still see the partitioning screen unless we use a specific recipe.
-#
-# These are provided for reference but may not fully automate partitioning:
-PARTMAN_MODE_PLACEHOLDER
-
-### Bootloader (limited support in Ubiquity)
-d-i grub-installer/only_debian boolean true
-d-i grub-installer/with_other_os boolean true
-d-i grub-installer/bootdev string INSTALL_DISK_VAR
-
-### Popularity contest
-popularity-contest popularity-contest/participate boolean false
-EOF
-    
-    if [ $? -ne 0 ]; then
-        log "ERROR" "[PRESEED] Failed to create preseed file with cat heredoc (exit code: $?)"
-        return 1
-    fi
-    log "DEBUG" "[PRESEED] Preseed file created with cat heredoc"
-    
-    # Verify preseed file was actually created
-    if [ ! -f "$preseed_file" ]; then
-        log "ERROR" "[PRESEED] Preseed file not found after creation: $preseed_file"
-        return 1
-    fi
-    log "DEBUG" "[PRESEED] Preseed file verified at: $preseed_file"
-
-    # Substitute variables into preseed file
-    log "DEBUG" "[PRESEED] Starting variable substitution in preseed..."
-    
-    if ! sed -i "s|KEYBOARD_LAYOUT_VAR|$keyboard_layout|g" "$preseed_file"; then
-        log "ERROR" "[PRESEED] sed failed on KEYBOARD_LAYOUT_VAR"
-        return 1
-    fi
-    sed -i "s|LOCALE_VAR|$locale|g" "$preseed_file"
-    sed -i "s|TIMEZONE_VAR|$timezone|g" "$preseed_file"
-    sed -i "s|HOSTNAME_VAR|$machine_name|g" "$preseed_file"
-    sed -i "s|FULLNAME_VAR|$fullname|g" "$preseed_file"
-    sed -i "s|USERNAME_VAR|$username|g" "$preseed_file"
-    sed -i "s|PASSWORD_HASH_VAR|$hashed_password|g" "$preseed_file"
-    sed -i "s|INSTALL_DISK_VAR|${target_disk:-/dev/sda}|g" "$preseed_file"
-    
-    # Build release description for late_command (same format as update_release_info)
-    local release_type=""
-    if [[ "$RELEASE_TAG" =~ -final ]]; then
-        release_type="FINAL"
-    elif [[ "$RELEASE_TAG" =~ build[0-9]+ ]]; then
-        release_type="$BUILD_NUMBER"
-    else
-        release_type="DEV"
-    fi
-    local release_number_upper="${RELEASE_NUMBER^^}"
-    local release_description="ETC_${release_number_upper}_${release_type} (CUSTOMIZED)"
-    sed -i "s|RELEASE_DESCRIPTION_VAR|$release_description|g" "$preseed_file"
-    log "DEBUG" "[PRESEED] Release description for late_command: $release_description"
-    
-    log "DEBUG" "[PRESEED] Variable substitution completed"
-    
-    # Generate partitioning preseed based on detected strategy
-    log "DEBUG" "[PRESEED] Creating partman configuration temp file..."
-    local partman_config_file
-    if ! partman_config_file=$(mktemp); then
-        log "ERROR" "[PRESEED] Failed to create temp file for partman config"
-        return 1
-    fi
-    log "DEBUG" "[PRESEED] Temp file created: $partman_config_file"
-    
-    case "$strategy_mode" in
-        partition)
-            log "INFO" "Configuring preseed for partition mode (existing partition, safe for dual-boot)"
-            log "WARN" "NOTE: Ubiquity has LIMITED partitioning preseed support - user may still see partition screen"
-            cat > "$partman_config_file" << 'PARTMAN_CONFIG'
-# Partition mode: Use existing partition
-# NOTE: Ubiquity ignores most partman preseeds - these are best-effort
-# The user may still need to confirm partitioning manually
-d-i partman-auto/method string regular
-d-i partman-auto/choose_recipe select atomic
-d-i partman/confirm_write_new_label boolean true
-d-i partman/choose_partition select finish
-d-i partman/confirm boolean true
-d-i partman/confirm_nooverwrite boolean true
-PARTMAN_CONFIG
-            ;;
-        entire-disk)
-            log "INFO" "Configuring preseed for entire-disk mode (DESTRUCTIVE - will format entire disk)"
-            log "WARN" "NOTE: Ubiquity has LIMITED partitioning preseed support - user may still see partition screen"
-            cat > "$partman_config_file" << 'PARTMAN_CONFIG'
-# Entire-disk mode: Format entire disk
-# NOTE: Ubiquity IGNORES LVM preseed directives!
-# These are best-effort settings
-d-i partman-auto/disk string INSTALL_DISK_VAR
-d-i partman-auto/method string regular
-d-i partman-auto/choose_recipe select atomic
-d-i partman/confirm_write_new_label boolean true
-d-i partman/choose_partition select finish
-d-i partman/confirm boolean true
-d-i partman/confirm_nooverwrite boolean true
-PARTMAN_CONFIG
-            ;;
-        free-space)
-            log "INFO" "Configuring preseed for free-space mode (create partitions in available space)"
-            log "WARN" "NOTE: Ubiquity has LIMITED partitioning preseed support - user may still see partition screen"
-            cat > "$partman_config_file" << 'PARTMAN_CONFIG'
-# Free-space mode: Create partitions in available space
-# NOTE: Ubiquity ignores most partman preseeds - these are best-effort
-d-i partman-auto/method string regular
-d-i partman-auto/choose_recipe select atomic
-d-i partman/confirm_write_new_label boolean true
-d-i partman/choose_partition select finish
-d-i partman/confirm boolean true
-d-i partman/confirm_nooverwrite boolean true
-PARTMAN_CONFIG
-            ;;
-        *)
-            log "WARN" "Unknown partition strategy: $strategy_mode - using safe partition mode"
-            cat > "$partman_config_file" << 'PARTMAN_CONFIG'
-# Default partition mode (best-effort for Ubiquity)
-d-i partman-auto/method string regular
-d-i partman-auto/choose_recipe select atomic
-d-i partman/confirm_write_new_label boolean true
-d-i partman/confirm boolean true
-d-i partman/confirm_nooverwrite boolean true
-PARTMAN_CONFIG
-            ;;
-    esac
-    
-    # Replace partitioning placeholder with strategy-specific config
-    log "DEBUG" "[PRESEED] Inserting partman config into preseed file..."
-    if ! sed -i '/PARTMAN_MODE_PLACEHOLDER/r '"$partman_config_file" "$preseed_file"; then
-        log "ERROR" "[PRESEED] Failed to insert partman config with sed"
-        rm -f "$partman_config_file"
-        return 1
-    fi
-    
-    if ! sed -i '/PARTMAN_MODE_PLACEHOLDER/d' "$preseed_file"; then
-        log "ERROR" "[PRESEED] Failed to delete placeholder with sed"
-        rm -f "$partman_config_file"
-        return 1
-    fi
-    log "DEBUG" "[PRESEED] Partman config insertion completed"
-    
-    rm -f "$partman_config_file"
-    
-    if ! chmod 644 "$preseed_file"; then
-        log "ERROR" "[PRESEED] Failed to set permissions on preseed file"
-        return 1
-    fi
-    log "DEBUG" "[PRESEED] Preseed file written successfully"
-    
-    log "SUCCESS" "Preseed file created at: /preseed.cfg"
-    log "INFO" "Partition strategy: $strategy_mode"
-    log "DEBUG" "[PRESEED] customize_preseed function completed successfully"
-}
-
-update_grub_for_preseed() {
-    log "INFO" "Updating GRUB boot parameters for automated installation..."
-    
-    # GRUB config is in the extracted ISO directory (not in squashfs)
-    # Location: .work/iso/boot/grub/grub.cfg
-    # Reference: https://wiki.ubuntu.com/UbiquityAutomation
-    #
-    # CRITICAL: Ubuntu Desktop ISOs use Casper (live boot) + Ubiquity (installer)
-    # For AUTOMATED installation, we need these boot parameters:
-    #
-    #   1. only-ubiquity    = Skip live desktop, boot directly to Ubiquity installer
-    #   2. automatic-ubiquity = Enable preseed automation (respect 'seen' flag)
-    #   3. noprompt         = Skip "please remove the disc" prompt after install
-    #   4. quiet splash     = Normal boot appearance
-    #
-    # WITHOUT automatic-ubiquity, Ubiquity IGNORES preseed values because it:
-    #   "ignores the 'seen' flag...by default" (Ubuntu wiki)
-    #
-    # Final boot line should look like:
-    #   linux /casper/vmlinuz file=/cdrom/preseed.cfg automatic-ubiquity only-ubiquity noprompt quiet splash ---
-    #
-    # CRITICAL: Must also update loopback.cfg for Ventoy/GRUB loopback boot!
-    # The loopback.cfg is used when booting the ISO via Ventoy or grub loopback
-    
-    local grub_cfg="${ISO_EXTRACT_DIR}/boot/grub/grub.cfg"
-    local loopback_cfg="${ISO_EXTRACT_DIR}/boot/grub/loopback.cfg"
-    
-    # Helper function to apply preseed modifications to a GRUB config file
-    apply_preseed_modifications() {
-        local cfg_file="$1"
-        local cfg_name="$2"
-        
-        if [ ! -f "$cfg_file" ]; then
-            log "WARN" "$cfg_name not found at: $cfg_file"
-            return 1
-        fi
-        
-        # CRITICAL: ISO extracted files are READ-ONLY by default!
-        # Make writable before attempting sed modifications
-        chmod +w "$cfg_file" 2>/dev/null || {
-            log "ERROR" "Cannot make $cfg_name writable - sed will silently fail!"
-            return 1
-        }
-        
-        log "DEBUG" "Modifying $cfg_name: $cfg_file"
-        log "DEBUG" "$cfg_name BEFORE modifications:"
-        grep "linux.*vmlinuz" "$cfg_file" 2>/dev/null | head -5 | while read -r line; do
-            log "DEBUG" "  $line"
-        done
-        
-        # Step 1: Update preseed path in ALL entries (from ubuntu.seed to preseed.cfg)
-        # This catches: file=/cdrom/preseed/ubuntu.seed -> file=/cdrom/preseed.cfg
-        sed -i 's|file=/cdrom/preseed/ubuntu\.seed|file=/cdrom/preseed.cfg|g' "$cfg_file"
-        
-        # Step 2: Replace maybe-ubiquity with automatic-ubiquity only-ubiquity noprompt
-        # CRITICAL: Ubuntu wiki states we need these parameters:
-        #   - only-ubiquity = Skip live desktop, boot directly to installer
-        #   - automatic-ubiquity = Enable preseed automation (respect 'seen' flag)
-        #   - noprompt = Skip "please remove the disc" usplash prompt
-        # Without automatic-ubiquity, preseed values are IGNORED!
-        # Reference: https://wiki.ubuntu.com/UbiquityAutomation
-        sed -i 's|maybe-ubiquity|automatic-ubiquity only-ubiquity noprompt|g' "$cfg_file"
-        
-        # Step 3: Add automation params to entries that have preseed but missing params
-        # Pattern: "file=/cdrom/preseed.cfg quiet" -> "file=/cdrom/preseed.cfg automatic-ubiquity only-ubiquity noprompt quiet"
-        sed -i 's|file=/cdrom/preseed\.cfg quiet|file=/cdrom/preseed.cfg automatic-ubiquity only-ubiquity noprompt quiet|g' "$cfg_file"
-        sed -i 's|file=/cdrom/preseed\.cfg iso-scan|file=/cdrom/preseed.cfg automatic-ubiquity only-ubiquity noprompt iso-scan|g' "$cfg_file"
-        
-        # Step 4: Handle nomodeset (safe graphics) entry specifically
-        sed -i 's|nomodeset file=/cdrom/preseed\.cfg quiet|nomodeset file=/cdrom/preseed.cfg automatic-ubiquity only-ubiquity noprompt quiet|g' "$cfg_file"
-        sed -i 's|nomodeset file=/cdrom/preseed\.cfg iso-scan|nomodeset file=/cdrom/preseed.cfg automatic-ubiquity only-ubiquity noprompt iso-scan|g' "$cfg_file"
-        
-        # Step 5: Update existing only-ubiquity (without automatic-ubiquity) to include all params
-        # This handles OEM install entry that already has only-ubiquity
-        sed -i 's|preseed\.cfg only-ubiquity|preseed.cfg automatic-ubiquity only-ubiquity noprompt|g' "$cfg_file"
-        
-        # Step 6: Clean up any duplicate parameters
-        sed -i 's|automatic-ubiquity automatic-ubiquity|automatic-ubiquity|g' "$cfg_file"
-        sed -i 's|only-ubiquity only-ubiquity|only-ubiquity|g' "$cfg_file"
-        sed -i 's|noprompt noprompt|noprompt|g' "$cfg_file"
-        
-        # Step 7: Add noprompt if it's missing but other params are present
-        # Check if line has automatic-ubiquity but missing noprompt
-        sed -i 's|automatic-ubiquity only-ubiquity quiet|automatic-ubiquity only-ubiquity noprompt quiet|g' "$cfg_file"
-        sed -i 's|automatic-ubiquity only-ubiquity iso-scan|automatic-ubiquity only-ubiquity noprompt iso-scan|g' "$cfg_file"
-        
-        log "DEBUG" "$cfg_name AFTER modifications:"
-        grep "linux.*vmlinuz" "$cfg_file" 2>/dev/null | head -5 | while read -r line; do
-            log "DEBUG" "  $line"
-        done
-        
-        # Verify the changes took effect - must have all THREE automation params
-        if grep -q "automatic-ubiquity" "$cfg_file" && grep -q "only-ubiquity" "$cfg_file" && grep -q "noprompt" "$cfg_file" && grep -q "file=/cdrom/preseed.cfg" "$cfg_file"; then
-            log "SUCCESS" "$cfg_name configured for automatic Ubiquity installation"
-            return 0
-        else
-            log "WARN" "$cfg_name update may have failed - missing automation parameters"
-            log "WARN" "  Has automatic-ubiquity: $(grep -c 'automatic-ubiquity' "$cfg_file" 2>/dev/null || echo 0)"
-            log "WARN" "  Has only-ubiquity: $(grep -c 'only-ubiquity' "$cfg_file" 2>/dev/null || echo 0)"
-            log "WARN" "  Has noprompt: $(grep -c 'noprompt' "$cfg_file" 2>/dev/null || echo 0)"
-            log "WARN" "  Has preseed.cfg: $(grep -c 'preseed.cfg' "$cfg_file" 2>/dev/null || echo 0)"
-            return 1
-        fi
-    }
-    
-    # Update main grub.cfg (used for direct BIOS/EFI boot)
-    apply_preseed_modifications "$grub_cfg" "grub.cfg"
-    local grub_result=$?
-    
-    # Update loopback.cfg (used for Ventoy and GRUB loopback boot)
-    # This is CRITICAL for users booting via Ventoy USB drives!
-    apply_preseed_modifications "$loopback_cfg" "loopback.cfg"
-    local loopback_result=$?
-    
-    if [ $grub_result -eq 0 ] && [ $loopback_result -eq 0 ]; then
-        log "SUCCESS" "Both grub.cfg and loopback.cfg configured for preseed"
-        log "DEBUG" "Boot parameters: file=/cdrom/preseed.cfg automatic-ubiquity only-ubiquity noprompt"
-    elif [ $grub_result -eq 0 ]; then
-        log "WARN" "grub.cfg updated but loopback.cfg failed - Ventoy boot may not use preseed"
-    else
-        log "ERROR" "GRUB configuration failed"
-    fi
-    
-    # Warn user if we detect other OSes in GRUB menu
-    if grep -iq "windows\|boot.*windows\|other os" "$grub_cfg" 2>/dev/null; then
-        log "WARN" "Detected other OSes in GRUB menu - they should not be affected by preseed changes"
-    fi
-}
 
 
 
@@ -2749,72 +1702,7 @@ EOF
     log "SUCCESS" "Git configured for: $git_name"
 }
 
-customize_power() {
-    log "INFO" "Configuring power management..."
-    
-    # shellcheck source=/dev/null
-    source "$SECRETS_FILE"
-    log "DEBUG" "Sourced secrets file for power config"
-    
-    # Read power settings with defaults
-    local power_mode="${POWER_MODE:-balanced}"
-    local lid_close_ac="${POWER_LID_CLOSE_AC:-suspend}"
-    local lid_close_battery="${POWER_LID_CLOSE_BATTERY:-suspend}"
-    local power_button="${POWER_BUTTON_ACTION:-interactive}"
-    local idle_ac="${POWER_IDLE_AC:-nothing}"
-    local idle_battery="${POWER_IDLE_BATTERY:-suspend}"
-    local idle_timeout="${POWER_IDLE_TIMEOUT:-900}"
-    local auto_power_saver="${AUTOMATIC_POWER_SAVER:-true}"
-    local auto_suspend="${AUTOMATIC_SUSPEND:-true}"
-    
-    log "DEBUG" "Power settings: mode=$power_mode, lid_ac=$lid_close_ac, lid_battery=$lid_close_battery, button=$power_button"
-    log "DEBUG" "Idle settings: ac=$idle_ac, battery=$idle_battery, timeout=$idle_timeout"
-    log "DEBUG" "Auto settings: power_saver=$auto_power_saver, suspend=$auto_suspend"
-    
-    # Power management uses dconf - add to the same system-wide database
-    # as the desktop settings (created by customize_desktop)
-    local dconf_db_dir="${SQUASHFS_DIR}/etc/dconf/db/local.d"
-    local dconf_file="${dconf_db_dir}/01-power-settings"
-    
-    # Ensure directory exists (should already exist from customize_desktop)
-    mkdir -p "$dconf_db_dir"
-    log "DEBUG" "Writing power dconf settings: $dconf_file"
-    
-    cat > "$dconf_file" <<EOF
-# Power management settings
-# Generated by emcomm-tools-customizer
 
-[org/gnome/settings-daemon/plugins/power]
-power-profile-daemon='${power_mode}'
-lid-close-ac-action='${lid_close_ac}'
-lid-close-battery-action='${lid_close_battery}'
-power-button-action='${power_button}'
-sleep-inactive-ac-type='${idle_ac}'
-sleep-inactive-battery-type='${idle_battery}'
-sleep-inactive-ac-timeout=${idle_timeout}
-sleep-inactive-battery-timeout=${idle_timeout}
-
-[org/gnome/settings-daemon/plugins/power/battery-saver]
-enable-battery-saver=${auto_power_saver}
-
-[org/gnome/desktop/session]
-auto-save-session-timeout=${auto_suspend}
-EOF
-    
-    # Recompile dconf database
-    log "DEBUG" "Recompiling dconf database..."
-    setup_chroot_mounts
-    trap 'cleanup_chroot_mounts' EXIT
-    
-    chroot "${SQUASHFS_DIR}" /usr/bin/dconf update 2>/dev/null || {
-        log "WARN" "dconf update failed - power settings may not apply correctly"
-    }
-    
-    cleanup_chroot_mounts
-    trap - EXIT
-    
-    log "SUCCESS" "Power management configured"
-}
 
 customize_timezone() {
     log "INFO" "Configuring system timezone..."
@@ -2854,18 +1742,20 @@ customize_additional_packages() {
     source "$SECRETS_FILE"
     log "DEBUG" "Sourced secrets file for package config"
     
-    # Core development packages (always installed)
-    local core_packages="code nodejs npm"
-    
-    # Additional packages from secrets.env
-    local additional_packages="${ADDITIONAL_PACKAGES:-}"
-    
-    # Combine core + additional packages
-    local all_user_packages="$core_packages"
-    if [ -n "$additional_packages" ]; then
-        all_user_packages="$all_user_packages $additional_packages"
-    fi
-    
+    # Hardcoded. These are build dependencies of the toolchain we ship, not a
+    # user preference, so they are no longer read from secrets.env.
+    #
+    # NOTE: "code" is deliberately NOT in this list. Ubuntu 22.10 has no 'code'
+    # package, and this function removes the Microsoft Edge repos a few lines below,
+    # so apt can never satisfy it -- the old `apt-get install code` here failed
+    # on every single build and the failure was swallowed by the `|| log WARN`
+    # on the install line. VS Code is installed from a .deb by install_vscode().
+    #
+    # Do NOT add anything ETC already ships. R7 provides thunderbird, vlc,
+    # python3.11 and rust natively; kiwix since R4; wsjtx/fldigi with PnP
+    # wiring. Installing over the top risks a version ETC does not expect.
+    local all_user_packages="nodejs npm"
+
     log "DEBUG" "Packages to install: $all_user_packages"
     
     # Install packages in chroot
@@ -2888,344 +1778,119 @@ customize_additional_packages() {
     log "INFO" "Updating package cache..."
     chroot "${SQUASHFS_DIR}" apt-get update 2>&1 | tail -5 | tee -a "$LOG_FILE"
     
-    # Install packages from standard repos (Edge not available in old-releases)
-    local all_packages="${all_user_packages}"
-    log "INFO" "Installing packages: $all_packages"
-    # Use -y to auto-confirm, -qq for less output
-    # Note: DO NOT quote $all_packages - we need word splitting for separate package names
-    if chroot "${SQUASHFS_DIR}" apt-get install -y -qq $all_packages 2>&1 | tail -10 | tee -a "$LOG_FILE"; then
-        log "SUCCESS" "Packages installed successfully"
+    # Install packages from standard repos.
+    # Guarded: with core_packages now empty and ADDITIONAL_PACKAGES unset, an
+    # unguarded `apt-get install` would run with no operands at all.
+    local all_packages="${all_user_packages# }"
+    if [ -n "$all_packages" ]; then
+        log "INFO" "Installing packages: $all_packages"
+        # Use -y to auto-confirm, -qq for less output
+        # Note: DO NOT quote $all_packages - we need word splitting for separate package names
+        if chroot "${SQUASHFS_DIR}" apt-get install -y -qq $all_packages 2>&1 | tail -10 | tee -a "$LOG_FILE"; then
+            log "SUCCESS" "Packages installed successfully"
+        else
+            log "WARN" "Some packages may have failed to install - see log for details"
+        fi
     else
-        log "WARN" "Some packages may have failed to install - see log for details"
+        log "DEBUG" "No additional apt packages requested"
     fi
-    
-    # === CHIRP Installation Setup ===
-    # Can't build CHIRP from source in chroot (numpy wheel build fails with old-releases)
-    # Install via post-install script that runs on first boot instead
-    log "INFO" "Setting up CHIRP installation for first boot..."
-    local chirp_install_script="${SQUASHFS_DIR}/usr/local/bin/install-chirp-first-boot.sh"
-    mkdir -p "$(dirname "$chirp_install_script")"
-    cat > "$chirp_install_script" <<'CHIRP_SCRIPT'
-#!/bin/bash
-# Install CHIRP on first boot - avoids build issues in chroot
-set -e
-MARKER="/var/lib/emcomm-chirp-installed"
-if [ -f "$MARKER" ]; then
-    exit 0
-fi
-apt-get update > /dev/null 2>&1 || true
-apt-get install -y python3-pip > /dev/null 2>&1 || true
-python3 -m pip install --upgrade pip setuptools wheel > /dev/null 2>&1 || true
-python3 -m pip install chirp > /dev/null 2>&1 && touch "$MARKER" || true
-CHIRP_SCRIPT
-    chmod +x "$chirp_install_script"
-    log "DEBUG" "CHIRP first-boot script created"
-    
-    # === Microsoft Edge Installation Setup ===
-    # Edge repo has GPG issues with old-releases, use post-install instead
-    log "INFO" "Setting up Microsoft Edge installation for first boot..."
-    local edge_install_script="${SQUASHFS_DIR}/usr/local/bin/install-edge-first-boot.sh"
-    mkdir -p "$(dirname "$edge_install_script")"
-    cat > "$edge_install_script" <<'EDGE_SCRIPT'
-#!/bin/bash
-# Install Microsoft Edge on first boot
-set -e
-MARKER="/var/lib/emcomm-edge-installed"
-if [ -f "$MARKER" ]; then
-    exit 0
-fi
-apt-get update > /dev/null 2>&1 || true
-# Try to install from Debian packages directly (avoids repo issues)
-wget -q https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_latest_amd64.deb -O /tmp/edge.deb 2>/dev/null && \
-    dpkg -i /tmp/edge.deb > /dev/null 2>&1 && rm -f /tmp/edge.deb && touch "$MARKER" || {
-    # Fallback: use apt with repo
-    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | apt-key add - > /dev/null 2>&1 || true
-    echo 'deb [arch=amd64] https://packages.microsoft.com/repos/edge stable main' > /etc/apt/sources.list.d/microsoft-edge.list
-    apt-get update > /dev/null 2>&1 || true
-    apt-get install -y microsoft-edge-stable > /dev/null 2>&1 && touch "$MARKER" || true
-}
-EDGE_SCRIPT
-    chmod +x "$edge_install_script"
-    log "DEBUG" "Edge first-boot script created"
-    
-    # Create systemd service to run both scripts on first boot
-    local first_boot_service="${SQUASHFS_DIR}/etc/systemd/system/emcomm-first-boot-apps.service"
-    mkdir -p "$(dirname "$first_boot_service")"
-    cat > "$first_boot_service" <<'SERVICE_EOF'
-[Unit]
-Description=EmComm Tools First Boot Application Installation
-After=network-online.target
-Wants=network-online.target
-ConditionPathExists=!/var/lib/emcomm-first-boot-apps-done
 
-[Service]
-Type=oneshot
-ExecStart=/bin/bash -c '/usr/local/bin/install-chirp-first-boot.sh && /usr/local/bin/install-edge-first-boot.sh && touch /var/lib/emcomm-first-boot-apps-done'
-RemainAfterExit=yes
-StandardOutput=journal
-StandardError=journal
+    # CHIRP, VS Code and anytone-cps are installed at BUILD time by their own
+    # functions below, not deferred to first boot. The old first-boot approach
+    # was removed because every path in it was broken:
+    #
+    #   - `pip install chirp` installs an unrelated 2013 BIOACOUSTICS package
+    #     that happens to own the name "chirp" on PyPI. It is not CHIRP the
+    #     radio programmer and never was.
+    #   - Microsoft Edge was installed by two competing code paths, one using
+    #     `apt-key`, which is deprecated and removed. Edge was never asked for;
+    #     ETC ships the Min browser.
+    #   - Every step ended in `|| true`, so all of the above failed silently
+    #     and the build still reported success.
+    #
+    # Installing at build time means a failure breaks the build loudly, here,
+    # instead of 40 minutes into a field deployment with no network.
 
-[Install]
-WantedBy=multi-user.target
-SERVICE_EOF
-    chroot "${SQUASHFS_DIR}" systemctl enable emcomm-first-boot-apps.service 2>/dev/null || log "WARN" "Could not enable systemd service"
-    log "DEBUG" "First-boot systemd service created and enabled"
-    
-    log "SUCCESS" "CHIRP and Microsoft Edge will be installed on first boot"
-    
     cleanup_chroot_mounts
     trap - EXIT
 }
 
 setup_first_login_packages() {
-    log "INFO" "Setting up first-login services (Anytone restoration, CHIRP, Microsoft Edge)..."
-    
-    # CRITICAL: Anytone radio config MUST be restored via systemd service on first boot
-    # (NOT via profile.d because bash profile scripts don't run reliably on GUI logins)
-    # Profile.d script alone was unreliable - replaced with systemd service that runs early
-    
-    local systemd_dir="${SQUASHFS_DIR}/etc/systemd/system"
-    local service_file="${systemd_dir}/emcomm-first-boot.service"
+    # Previously 270 lines that installed CHIRP and Microsoft Edge on first
+    # login via THREE overlapping mechanisms: two systemd services
+    # (emcomm-first-boot.service, emcomm-first-boot-apps.service) and an
+    # /etc/profile.d/99-install-chirp-edge.sh that was written twice -- once at
+    # build time, then overwritten at runtime by the service. They raced, they
+    # duplicated each other's work, and every failure path ended in `|| true`.
+    #
+    # CHIRP, VS Code and anytone-cps are now installed into the squashfs at
+    # build time. All that is left is re-asserting the active radio symlink,
+    # which is cheap, idempotent insurance in case anything downstream of the
+    # squashfs rewrites radios.d.
+    log "INFO" "Setting up first-boot active-radio guard..."
+
+    if [ "${ENABLE_ANYTONE_D578:-yes}" != "yes" ]; then
+        log "DEBUG" "ENABLE_ANYTONE_D578=no -- skipping first-boot radio guard"
+        return 0
+    fi
+
+    # Single profile since 7.0.2-1 -- the commode=0 "PTT only" variant was
+    # removed as a duplicate of stock ETC's digirig-mobile-no-cat.
+    local default_profile="anytone-d578uv.json"
+
     local service_script="${SQUASHFS_DIR}/usr/local/bin/emcomm-first-boot.sh"
-    local profile_d_script="${SQUASHFS_DIR}/etc/profile.d/99-install-chirp-edge.sh"
-    
-    mkdir -p "$systemd_dir"
-    
-    # === CREATE PROFILE.D SCRIPT AT BUILD TIME (Fallback) ===
-    # Even if systemd service fails, users can still get CHIRP/Edge on login
-    log "DEBUG" "Creating profile.d script for CHIRP/Edge installation (fallback)..."
-    mkdir -p "$(dirname "$profile_d_script")"
-    cat > "$profile_d_script" <<'PROFILE_EOF'
+    local service_file="${SQUASHFS_DIR}/etc/systemd/system/emcomm-first-boot.service"
+    mkdir -p "$(dirname "$service_script")" "$(dirname "$service_file")"
+
+    cat > "$service_script" <<FIRSTBOOT_EOF
 #!/bin/bash
-# Install CHIRP and Microsoft Edge on first user login
-# Fallback script in case systemd service doesn't run
-# Only runs for 'ubuntu' user, only once
-# CRITICAL: Ubuntu 22.10 is EOL - must fix apt sources first!
+# Re-assert the active radio symlink if it is missing or dangling.
+# customize_radio_configs() already set this at build time; this only covers
+# the case where something later replaced radios.d.
+set -uo pipefail
 
-MARKER_FILE="${HOME}/.etc-install-chirp-edge-done"
-if [ -f "$MARKER_FILE" ]; then
-    return 0 2>/dev/null || exit 0
-fi
-
-if [ "$(id -un)" != "ubuntu" ]; then
-    return 0
-fi
-
-# Only run in interactive shells
-[[ $- == *i* ]] || return 0
-
-# Run in background so it doesn't block login
-(
-    sleep 2  # Wait for system to settle after login
-    touch "$MARKER_FILE"
-    
-    echo ""
-    echo "====== EmComm Tools: Installing Packages ======"
-    echo ""
-    
-    # CRITICAL: Fix apt sources for Ubuntu 22.10 (Kinetic) EOL
-    # Archive has moved to old-releases.ubuntu.com
-    echo "Fixing apt sources for Ubuntu 22.10 (EOL)..."
-    if grep -q "archive.ubuntu.com" /etc/apt/sources.list 2>/dev/null; then
-        sudo sed -i 's/archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
-        sudo sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
-        echo "✓ Apt sources updated to old-releases.ubuntu.com"
-    fi
-    
-    echo "Updating package lists (this may take a minute)..."
-    if sudo apt-get update -qq 2>/dev/null; then
-        echo "✓ Package lists updated"
-        
-        # CHIRP
-        echo "Installing CHIRP..."
-        if sudo apt-get install -y -qq chirp 2>/dev/null; then
-            echo "✓ CHIRP installed"
-        else
-            echo "✗ CHIRP failed (can install manually: sudo apt-get install chirp)"
-        fi
-    else
-        echo "✗ apt-get update failed - check network connectivity"
-        echo "  Manual fix: sudo apt-get update && sudo apt-get install chirp"
-    fi
-    
-    # Microsoft Edge (downloaded directly, doesn't need apt sources)
-    echo "Installing Microsoft Edge..."
-    EDGE_DEB="/tmp/microsoft-edge-stable.deb"
-    if wget -q --timeout=30 --tries=3 "https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_latest_amd64.deb" -O "$EDGE_DEB" 2>/dev/null && [ -f "$EDGE_DEB" ] && [ -s "$EDGE_DEB" ]; then
-        if sudo dpkg -i "$EDGE_DEB" >/dev/null 2>&1; then
-            sudo apt-get install -y -f >/dev/null 2>&1
-            echo "✓ Microsoft Edge installed"
-        else
-            echo "✗ Edge dpkg install failed"
-        fi
-        rm -f "$EDGE_DEB"
-    else
-        echo "✗ Edge download failed (install from https://www.microsoft.com/edge)"
-    fi
-    
-    echo ""
-    echo "====== Package Installation Complete ======"
-    echo "Log: /var/log/emcomm-first-boot.log"
-    echo ""
-) &
-disown 2>/dev/null
-
-return 0 2>/dev/null || true
-PROFILE_EOF
-    chmod 755 "$profile_d_script"
-    log "SUCCESS" "Fallback profile.d script created at build time"
-    
-    mkdir -p "$systemd_dir"
-    
-    log "DEBUG" "Creating first-boot systemd service script: $service_script"
-    
-    # Create the executable script that systemd will run
-    cat > "$service_script" <<'FIRSTBOOT_SCRIPT_EOF'
-#!/bin/bash
-# EmComm Tools Customizer - First Boot Service
-# CRITICAL: Restores Anytone radio config BEFORE user login
-# Also installs CHIRP and Edge on first user login
-# Runs as root, early in boot process
-
-set -e
-
+RADIOS_DIR="/opt/emcomm-tools/conf/radios.d"
+PROFILE="${default_profile}"
 LOGFILE="/var/log/emcomm-first-boot.log"
+
 {
-    echo "[$(date)] EmComm first-boot service starting..."
-    
-    # === PHASE 1: Anytone Restoration (runs at boot, root access) ===
-    # This must happen early, before user login or ETC post-install resets it
-    
-    RADIOS_DIR="/opt/emcomm-tools/conf/radios.d"
-    MARKER_FILE="/var/lib/emcomm-first-boot-done"
-    
-    # Only run once
-    if [ -f "$MARKER_FILE" ]; then
-        echo "[$(date)] First-boot already completed (marker file exists)"
+    echo "[\$(date)] active-radio guard starting"
+
+    if [ ! -d "\${RADIOS_DIR}" ]; then
+        echo "[\$(date)] FAIL \${RADIOS_DIR} does not exist -- ETC not installed?"
+        exit 1
+    fi
+
+    if [ ! -e "\${RADIOS_DIR}/\${PROFILE}" ]; then
+        echo "[\$(date)] FAIL \${PROFILE} missing -- cannot set active radio"
+        exit 1
+    fi
+
+    # -e follows symlinks, so this is false for a dangling link too.
+    if [ -e "\${RADIOS_DIR}/active-radio.json" ]; then
+        echo "[\$(date)] OK active-radio.json already resolves; nothing to do"
         exit 0
     fi
-    
-    if [ -f "${RADIOS_DIR}/anytone-d578uv.json" ]; then
-        echo "[$(date)] Restoring Anytone D578UV as active radio..."
-        if ln -sf "${RADIOS_DIR}/anytone-d578uv.json" "${RADIOS_DIR}/active-radio.json" 2>&1; then
-            echo "[$(date)] ✓ Anytone D578UV linked as active-radio.json"
-        else
-            echo "[$(date)] ✗ Failed to link Anytone (may already be correct)"
-        fi
+
+    # Relative, deliberately: an absolute link would embed a build path.
+    if ln -sfn "\${PROFILE}" "\${RADIOS_DIR}/active-radio.json"; then
+        echo "[\$(date)] OK active radio -> \${PROFILE}"
     else
-        echo "[$(date)] ✗ Anytone radio config not found at ${RADIOS_DIR}/anytone-d578uv.json"
+        echo "[\$(date)] FAIL could not link active-radio.json"
+        exit 1
     fi
-    
-    # === PHASE 2: Schedule first-login package install ===
-    # Create profile.d script for CHIRP/Edge that runs on first user login
-    # (This is AFTER Anytone is already restored)
-    
-    mkdir -p /etc/profile.d
-    
-    cat > /etc/profile.d/99-install-chirp-edge.sh <<'PROFILE_EOF'
-#!/bin/bash
-# Install CHIRP and Microsoft Edge on first user login
-# Only runs for 'ubuntu' user, only once
-# CRITICAL: Ubuntu 22.10 is EOL - must fix apt sources first!
-
-MARKER_FILE="${HOME}/.etc-install-chirp-edge-done"
-if [ -f "$MARKER_FILE" ]; then
-    return 0 2>/dev/null || exit 0
-fi
-
-if [ "$(id -un)" != "ubuntu" ]; then
-    return 0
-fi
-
-# Only run in interactive shells
-[[ $- == *i* ]] || return 0
-
-# Run in background so it doesn't block login
-(
-    sleep 2  # Wait for system to settle after login
-    touch "$MARKER_FILE"
-    
-    echo ""
-    echo "====== EmComm Tools: Installing Packages ======"
-    echo ""
-    
-    # CRITICAL: Fix apt sources for Ubuntu 22.10 (Kinetic) EOL
-    # Archive has moved to old-releases.ubuntu.com
-    echo "Fixing apt sources for Ubuntu 22.10 (EOL)..."
-    if grep -q "archive.ubuntu.com" /etc/apt/sources.list 2>/dev/null; then
-        sudo sed -i 's/archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
-        sudo sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
-        echo "✓ Apt sources updated to old-releases.ubuntu.com"
-    fi
-    
-    echo "Updating package lists (this may take a minute)..."
-    if sudo apt-get update -qq 2>/dev/null; then
-        echo "✓ Package lists updated"
-        
-        # CHIRP
-        echo "Installing CHIRP..."
-        if sudo apt-get install -y -qq chirp 2>/dev/null; then
-            echo "✓ CHIRP installed"
-        else
-            echo "✗ CHIRP failed (can install manually: sudo apt-get install chirp)"
-        fi
-    else
-        echo "✗ apt-get update failed - check network connectivity"
-        echo "  Manual fix: sudo apt-get update && sudo apt-get install chirp"
-    fi
-    
-    # Microsoft Edge (downloaded directly, doesn't need apt sources)
-    echo "Installing Microsoft Edge..."
-    EDGE_DEB="/tmp/microsoft-edge-stable.deb"
-    if wget -q --timeout=30 --tries=3 "https://packages.microsoft.com/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_latest_amd64.deb" -O "$EDGE_DEB" 2>/dev/null && [ -f "$EDGE_DEB" ] && [ -s "$EDGE_DEB" ]; then
-        if sudo dpkg -i "$EDGE_DEB" >/dev/null 2>&1; then
-            sudo apt-get install -y -f >/dev/null 2>&1
-            echo "✓ Microsoft Edge installed"
-        else
-            echo "✗ Edge dpkg install failed"
-        fi
-        rm -f "$EDGE_DEB"
-    else
-        echo "✗ Edge download failed (install from https://www.microsoft.com/edge)"
-    fi
-    
-    echo ""
-    echo "====== Package Installation Complete ======"
-    echo "Log: /var/log/emcomm-first-boot.log"
-    echo ""
-) &
-disown 2>/dev/null
-
-return 0 2>/dev/null || true
-PROFILE_EOF
-    
-    chmod 755 /etc/profile.d/99-install-chirp-edge.sh
-    echo "[$(date)] Created /etc/profile.d/99-install-chirp-edge.sh for CHIRP/Edge installation"
-    
-    # === PHASE 3: Mark first-boot as complete ===
-    touch "$MARKER_FILE"
-    echo "[$(date)] ✓ First-boot service completed successfully"
-    
-} >> "$LOGFILE" 2>&1
-
-exit 0
-FIRSTBOOT_SCRIPT_EOF
-    
+} >> "\${LOGFILE}" 2>&1
+FIRSTBOOT_EOF
     chmod 755 "$service_script"
-    
-    log "DEBUG" "Creating systemd service file: $service_file"
-    
-    # Create the systemd service that calls the script
-    cat > "$service_file" <<'SYSTEMD_SERVICE_EOF'
+
+    cat > "$service_file" <<'SERVICE_EOF'
 [Unit]
-Description=EmComm Tools First Boot Setup
-After=network.target
-Before=getty.target
-DefaultDependencies=no
+Description=EmComm Tools Customizer active-radio guard
+After=local-fs.target
+ConditionPathExists=/opt/emcomm-tools/conf/radios.d
 
 [Service]
 Type=oneshot
-User=root
 ExecStart=/usr/local/bin/emcomm-first-boot.sh
 RemainAfterExit=yes
 StandardOutput=journal
@@ -3233,22 +1898,494 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-SYSTEMD_SERVICE_EOF
-    
-    chmod 644 "$service_file"
-    log "SUCCESS" "First-boot systemd service created"
-    log "DEBUG" "Service will run on first boot with root privileges"
-    log "DEBUG" "Logs available in: /var/log/emcomm-first-boot.log"
-    log "DEBUG" "User packages (CHIRP, Edge) installed on first login via profile.d"
-    
-    # Enable the service so it runs automatically on boot
-    log "DEBUG" "Enabling systemd service for first-boot..."
+SERVICE_EOF
+
     setup_chroot_mounts
     trap 'cleanup_chroot_mounts' EXIT
-    chroot "${SQUASHFS_DIR}" systemctl enable emcomm-first-boot.service 2>&1 | sed 's/^/  [systemctl] /' | tee -a "$LOG_FILE"
+    # No tee here: piping a chrooted command through tee under sudo has hung
+    # this build before. Append to the log directly.
+    if chroot "${SQUASHFS_DIR}" systemctl enable emcomm-first-boot.service 2>&1 | sed 's/^/  [systemctl] /' >> "$LOG_FILE"; then
+        log "SUCCESS" "active-radio guard service enabled (target: ${default_profile})"
+    else
+        log "WARN" "Could not enable emcomm-first-boot.service"
+    fi
     cleanup_chroot_mounts
     trap - EXIT
-    log "DEBUG" "Systemd service enabled"
+}
+
+# ============================================================================
+# Build-time application installs
+# ============================================================================
+# Each of these runs INSIDE the chroot and returns non-zero on real failure, so
+# main() can abort the build rather than shipping an ISO that silently lacks
+# the application. That is the opposite of the old first-boot scripts, which
+# swallowed every error.
+
+# Installer .debs live in cache/, which the operator fills during setup (see
+# QUICK_START.md). There are deliberately no path settings for them in
+# secrets.env: a path into ~/Downloads does not survive a reinstall, whereas
+# cache/*.deb is embedded in the ISO and comes back on the installed system.
+#
+# Retired settings, still honoured as a hint so an old secrets.env says why
+# nothing happened instead of silently changing behaviour.
+warn_retired_deb_settings() {
+    local v
+    for v in VSCODE_DEB GRIDTRACKER_DEB; do
+        if [ -n "${!v:-}" ]; then
+            log "WARN" "${v} is no longer used (ignored: ${!v})."
+            log "WARN" "  Put the .deb in ${CACHE_DIR}/ instead; delete ${v} from secrets.env."
+        fi
+    done
+}
+
+# Newest file in CACHE_DIR matching a glob, or nothing.
+newest_cached() {
+    find -L "$CACHE_DIR" -maxdepth 1 -name "$1" -type f -printf '%T@ %p\n' 2>/dev/null \
+        | sort -rn | head -1 | cut -d' ' -f2-
+}
+
+install_vscode() {
+    if [ "${ENABLE_VSCODE:-yes}" != "yes" ]; then
+        log "DEBUG" "ENABLE_VSCODE=no -- skipping VS Code"
+        return 0
+    fi
+
+    log "INFO" "Installing Visual Studio Code from .deb..."
+
+    # Ubuntu 22.10 has no 'code' package, so the first install has to be a
+    # .deb. After that, updates come through apt: the .deb's postinst adds
+    # Microsoft's VS Code repo (/etc/apt/sources.list.d/vscode.sources), and
+    # customize_additional_packages() removes only the EDGE repos, not this.
+    #
+    # Download the current stable; only if that fails, use the newest
+    # code_*_amd64.deb in cache/ (each successful download is kept there).
+    # This used to prefer a VSCODE_DEB path, so a .deb left in ~/Downloads
+    # months earlier won every build and the installed system opened with VS
+    # Code asking to update.
+    local staged="${SQUASHFS_DIR}/tmp/code.deb"
+    local url="https://update.code.visualstudio.com/latest/linux-deb-x64/stable"
+    local deb_src=""
+    log "INFO" "  Downloading the current VS Code from $url"
+    if wget -q --timeout=60 --tries=3 -O "$staged" "$url"; then
+        local v
+        v=$(dpkg-deb -f "$staged" Version 2>/dev/null || echo latest)
+        log "INFO" "  Downloaded VS Code ${v}"
+        mkdir -p "$CACHE_DIR"
+        cp "$staged" "${CACHE_DIR}/code_${v}_amd64.deb" 2>/dev/null || true
+    else
+        rm -f "$staged"
+        deb_src=$(newest_cached 'code_*_amd64.deb')
+        if [ -z "$deb_src" ]; then
+            log "ERROR" "VS Code download failed, and no code_*_amd64.deb in ${CACHE_DIR}"
+            return 1
+        fi
+        log "WARN" "VS Code download failed -- using cached $(basename "$deb_src"); it will offer to update"
+        cp "$deb_src" "$staged" || { log "ERROR" "Could not stage $deb_src"; return 1; }
+    fi
+
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+
+    # dpkg then `apt-get -f install` to pull the .deb's dependencies, which is
+    # the documented way to install a standalone .deb without a repo.
+    local rc=0
+    chroot "${SQUASHFS_DIR}" /bin/bash -c '
+        set -o pipefail
+        export DEBIAN_FRONTEND=noninteractive
+        dpkg -i /tmp/code.deb || apt-get install -y -f
+        command -v code >/dev/null
+    ' 2>&1 | tail -15 >> "$LOG_FILE" || rc=$?
+
+    rm -f "$staged"
+    cleanup_chroot_mounts
+    trap - EXIT
+
+    if [ "$rc" -ne 0 ]; then
+        log "ERROR" "VS Code install failed (rc=$rc)"
+        return 1
+    fi
+
+    # dpkg-query, not `code --version`: the chroot mounts are already torn down
+    # by this point, and VS Code refuses to run as root without extra flags.
+    local ver
+    ver=$(chroot "${SQUASHFS_DIR}" dpkg-query -W -f='${Version}' code 2>/dev/null || echo "unknown")
+    log "SUCCESS" "VS Code installed (version ${ver})"
+
+    # Name VS Code's secret store instead of letting it guess the desktop.
+    # When the guess or the keyring fails it falls back to weak storage, and
+    # when the keyring later works it cannot read what it stored before --
+    # which signs you out of GitHub, Copilot and Settings Sync. VS Code only
+    # writes argv.json when it is missing, so seeding it here is kept.
+    mkdir -p "${SQUASHFS_DIR}/etc/skel/.vscode"
+    cat > "${SQUASHFS_DIR}/etc/skel/.vscode/argv.json" <<'ARGV'
+// Seeded by emcomm-tools-customizer. VS Code reads this at startup.
+{
+	"password-store": "gnome-libsecret",
+	"enable-crash-reporter": true
+}
+ARGV
+    log "SUCCESS" "VS Code set to use the GNOME keyring (skel .vscode/argv.json)"
+    return 0
+}
+
+install_gh() {
+    if [ "${ENABLE_GH_CLI:-yes}" != "yes" ]; then
+        log "DEBUG" "ENABLE_GH_CLI=no -- skipping GitHub CLI"
+        return 0
+    fi
+
+    log "INFO" "Installing GitHub CLI..."
+
+    # Why the .deb and not apt: kinetic universe has gh 2.14.4+dfsg1-1, from
+    # mid-2022. For a tool whose entire job is talking to a remote API that has
+    # moved on considerably since, the current release is worth 15MB. apt is
+    # the fallback, so an offline or rate-limited build still gets a working gh.
+    #
+    # gh also solves git credentials on the installed system by itself:
+    #   gh auth login && gh auth setup-git
+    # registers gh as git's credential helper, so `git push` works in a plain
+    # terminal. That is deliberately NOT done at build time -- it would bake a
+    # personal token into a shared ISO.
+    #
+    # ALWAYS the latest release, resolved from the API. There is no pinned
+    # GH_CLI_VERSION, and a pin here was worse than useless: the URL was
+    #   /releases/latest/download/gh_<pinned>_linux_amd64.deb
+    # and GitHub's /latest/download/ path only serves filenames belonging to
+    # the CURRENT release. The pin therefore 404s the moment gh publishes a new
+    # version -- silently falling back to apt's three-year-old build. Verified:
+    # the same URL with any non-current version returns 404.
+    local staged="${SQUASHFS_DIR}/tmp/gh.deb"
+
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+
+    local url="" gh_tag=""
+    local api="https://api.github.com/repos/cli/cli/releases/latest"
+    local meta
+    if meta=$(curl -sf --max-time 30 "$api" 2>/dev/null); then
+        url=$(jq -r '.assets[]? | select(.name | test("linux_amd64\\.deb$")) | .browser_download_url' <<< "$meta" | head -1)
+        gh_tag=$(jq -r '.tag_name // empty' <<< "$meta")
+    fi
+
+    if [ -z "$url" ] || [ "$url" = "null" ]; then
+        log "WARN" "Could not resolve the latest gh .deb from the API -- using apt"
+        url=""
+    else
+        log "INFO" "  Latest gh release: ${gh_tag:-unknown}"
+    fi
+
+    local rc=0
+    if [ -n "$url" ] && wget -q --timeout=60 --tries=3 -O "$staged" "$url"; then
+        chroot "${SQUASHFS_DIR}" /bin/bash -c '
+            set -o pipefail
+            export DEBIAN_FRONTEND=noninteractive
+            dpkg -i /tmp/gh.deb || apt-get install -y -f
+            command -v gh >/dev/null
+        ' >> "$LOG_FILE" 2>&1 || rc=$?
+    else
+        [ -n "$url" ] && log "WARN" "gh .deb download failed"
+        log "WARN" "  Falling back to apt, which on kinetic is gh 2.14.4 (mid-2022)"
+        rc=1
+    fi
+
+    if [ "$rc" -ne 0 ]; then
+        rc=0
+        chroot "${SQUASHFS_DIR}" /bin/bash -c '
+            set -o pipefail
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get install -y -qq gh
+            command -v gh >/dev/null
+        ' >> "$LOG_FILE" 2>&1 || rc=$?
+    fi
+
+    rm -f "$staged"
+    cleanup_chroot_mounts
+    trap - EXIT
+
+    if [ "$rc" -ne 0 ]; then
+        log "WARN" "GitHub CLI install failed -- continuing without it"
+        return 1
+    fi
+
+    local ver
+    ver=$(chroot "${SQUASHFS_DIR}" dpkg-query -W -f='${Version}' gh 2>/dev/null || echo "unknown")
+    log "SUCCESS" "GitHub CLI installed (version ${ver})"
+    log "INFO" "  On the installed system: gh auth login && gh auth setup-git"
+    return 0
+}
+
+install_gridtracker() {
+    if [ "${ENABLE_GRIDTRACKER:-no}" != "yes" ]; then
+        log "DEBUG" "ENABLE_GRIDTRACKER=no -- skipping GridTracker"
+        return 0
+    fi
+
+    log "INFO" "Installing GridTracker 2 from .deb..."
+
+    # LOCAL FILE ONLY, by design. There is no URL to fall back to.
+    #
+    # GridTracker deprecated its Fedora COPR, Arch AUR and Debian repos for v2
+    # and publishes no stable "latest" download path. v2 ships a built-in
+    # updater that fetches a new .deb and upgrades through dpkg itself, so
+    # upstream's model is: download once by hand, let the app maintain itself.
+    #
+    # That is why et-os-addons' install-gridtracker.sh fails -- it pins
+    # GridTracker2-2.260416.1-amd64.deb, which now 404s. Any URL we substituted
+    # would rot the same way, so ENABLE_ETOSADDONS_GRIDTRACKER stays off and we
+    # install the file the operator put in cache/ instead.
+    #
+    # Baking in one version is fine and expected: GridTracker will offer to
+    # update itself on the installed system.
+    # From cache/ only: the newest GridTracker2-*.deb there. Put it there
+    # during setup; the ISO embeds it, so it is back after a reinstall.
+    local deb_src
+    deb_src=$(newest_cached 'GridTracker2-*.deb')
+    if [ -z "$deb_src" ]; then
+        log "WARN" "ENABLE_GRIDTRACKER=yes but no GridTracker2-*.deb in ${CACHE_DIR}"
+        log "WARN" "  Download it from gridtracker.org into ${CACHE_DIR}/"
+        return 1
+    fi
+    log "INFO" "  Using $(basename "$deb_src")"
+
+    local staged="${SQUASHFS_DIR}/tmp/gridtracker.deb"
+    cp "$deb_src" "$staged" || { log "WARN" "Could not stage $deb_src"; return 1; }
+
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+
+    local rc=0
+    chroot "${SQUASHFS_DIR}" /bin/bash -c '
+        set -o pipefail
+        export DEBIAN_FRONTEND=noninteractive
+        dpkg -i /tmp/gridtracker.deb || apt-get install -y -f
+        dpkg-query -W gridtracker2 >/dev/null
+    ' >> "$LOG_FILE" 2>&1 || rc=$?
+
+    rm -f "$staged"
+    cleanup_chroot_mounts
+    trap - EXIT
+
+    if [ "$rc" -ne 0 ]; then
+        log "WARN" "GridTracker install failed (rc=$rc) -- continuing"
+        return 1
+    fi
+
+    local ver
+    ver=$(chroot "${SQUASHFS_DIR}" dpkg-query -W -f='${Version}' gridtracker2 2>/dev/null || echo unknown)
+    log "SUCCESS" "GridTracker 2 installed (version ${ver})"
+    return 0
+}
+
+install_chirp() {
+    if [ "${ENABLE_CHIRP:-yes}" != "yes" ]; then
+        log "DEBUG" "ENABLE_CHIRP=no -- skipping CHIRP"
+        return 0
+    fi
+
+    local ref="${CHIRP_GIT_REF:-master}"
+    log "INFO" "Installing CHIRP from the official git repo (ref: ${ref})..."
+
+    # Why from git, and not any of the three obvious alternatives:
+    #
+    #   PyPI      -- `pip install chirp` is an unrelated 2013 bioacoustics
+    #                package. This is what the old code did, on all 3 paths.
+    #   chirpmyradio.com archive -- serves HTTP 403 to every non-browser
+    #                request (Cloudflare), so a build cannot fetch the wheel.
+    #   apt       -- kinetic ships CHIRP 20200227, six years stale, and it
+    #                predates support for most current radios.
+    #
+    # A venv with --system-site-packages is used rather than pipx because
+    # kinetic's pipx is 1.0.0 and its --system-site-packages handling is
+    # unreliable. The system wxPython (python3-wxgtk4.0) MUST be visible to the
+    # venv: building wxPython from source via pip is not viable here.
+
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+
+    local rc=0
+    chroot "${SQUASHFS_DIR}" /bin/bash -c "
+        set -euo pipefail
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get install -y -qq python3-wxgtk4.0 python3-venv python3-pip git
+        rm -rf /opt/chirp-venv
+        python3 -m venv --system-site-packages /opt/chirp-venv
+        /opt/chirp-venv/bin/pip install --upgrade pip wheel setuptools
+        /opt/chirp-venv/bin/pip install 'git+https://github.com/kk7ds/chirp.git@${ref}'
+        ln -sf /opt/chirp-venv/bin/chirp /usr/local/bin/chirp
+        /opt/chirp-venv/bin/chirp --help >/dev/null
+    " 2>&1 | tail -20 >> "$LOG_FILE" || rc=$?
+
+    cleanup_chroot_mounts
+    trap - EXIT
+
+    if [ "$rc" -ne 0 ]; then
+        log "ERROR" "CHIRP install failed (rc=$rc) -- see $LOG_FILE"
+        return 1
+    fi
+
+    # Desktop entry: CHIRP's own packaging does not provide one.
+    mkdir -p "${SQUASHFS_DIR}/usr/share/applications"
+    cat > "${SQUASHFS_DIR}/usr/share/applications/chirp.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=CHIRP
+GenericName=Radio programming
+Comment=Program memory channels on amateur radios
+Exec=/usr/local/bin/chirp
+Icon=utilities-terminal
+Terminal=false
+Categories=HamRadio;Utility;
+Keywords=chirp;radio;programming;memory;
+EOF
+
+    log "SUCCESS" "CHIRP installed to /opt/chirp-venv (ref ${ref})"
+    log "INFO" "  NOTE: CHIRP does not support AnyTone DMR radios -- use anytone-cps for the D578/D890"
+    return 0
+}
+
+install_anytone_cps() {
+    if [ "${ENABLE_ANYTONE_CPS:-yes}" != "yes" ]; then
+        log "DEBUG" "ENABLE_ANYTONE_CPS=no -- skipping anytone-cps"
+        return 0
+    fi
+
+    log "INFO" "Building anytone-cps (xbenkozx)..."
+
+    # Open-source CPS for AnyTone DMR radios. This matters because CHIRP does
+    # not support AnyTone DMR radios at all, so without this there is no Linux
+    # path to program the D578UVIII or D890UV.
+    #
+    # ALPHA software: D878UVII is the tested target; D890UV is listed but
+    # untested upstream. A build failure here is therefore NOT fatal to the
+    # ISO -- we warn and continue, because the radio still works for CAT and
+    # packet without its programming software. Every other install in this
+    # section is fatal; this one is deliberately not.
+    #
+    # It needs Qt6, not Qt5. The 7.0.2-1 build installed qtbase5-dev and friends
+    # and failed at configure with
+    #   "Could not find a package configuration file provided by Qt6"
+    # Its CMakeLists require Qt6 COMPONENTS Core Gui Widgets SerialPort
+    # Multimedia; every one is packaged in kinetic universe, at 6.3.1.
+    #
+    # Note the Qt6 serial port dev package is libqt6serialport6-dev, NOT
+    # qt6-serialport-dev, which does not exist in this release.
+    #
+    # Residual risk: kinetic's Qt6 is 6.3.1 from 2022. If upstream moves to a
+    # newer Qt6 API this will fail again -- hence still best-effort.
+
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+
+    local rc=0
+    chroot "${SQUASHFS_DIR}" /bin/bash -c '
+        set -euo pipefail
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get install -y -qq git cmake build-essential pkg-config \
+            qt6-base-dev qt6-tools-dev qt6-tools-dev-tools \
+            libqt6serialport6-dev qt6-multimedia-dev
+        rm -rf /usr/local/src/anytone-cps
+        git clone --depth 1 https://github.com/xbenkozx/anytone-cps.git \
+            /usr/local/src/anytone-cps
+        cd /usr/local/src/anytone-cps
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        cmake --build build -j"$(nproc)"
+        # Upstream has no install target defined at all stages of development,
+        # so fall back to copying whatever executable the build produced.
+        cmake --install build 2>/dev/null || {
+            bin=$(find build -maxdepth 2 -type f -executable \
+                    -name "*anytone*" -o -maxdepth 2 -type f -executable -name "*cps*" \
+                  | head -1)
+            [ -n "$bin" ] || { echo "no executable produced"; exit 1; }
+            install -m 755 "$bin" /usr/local/bin/anytone-cps
+        }
+        command -v anytone-cps >/dev/null || [ -x /usr/local/bin/anytone-cps ]
+    ' 2>&1 | tail -25 >> "$LOG_FILE" || rc=$?
+
+    cleanup_chroot_mounts
+    trap - EXIT
+
+    if [ "$rc" -ne 0 ]; then
+        log "WARN" "anytone-cps build failed (rc=$rc) -- continuing without it."
+        log "WARN" "  It is alpha upstream; the ISO is still fully usable."
+        log "WARN" "  Build it later on the installed system from /usr/local/src/anytone-cps."
+        return 0
+    fi
+
+    ET_ROOT="$SQUASHFS_DIR" customize_anytone_cps_launcher
+
+    log "SUCCESS" "anytone-cps built and installed"
+    return 0
+}
+
+install_hamlib_anytone() {
+    if [ "${ENABLE_HAMLIB_ANYTONE:-yes}" != "yes" ]; then
+        log "WARN" "ENABLE_HAMLIB_ANYTONE=no -- the D578UVIII profiles will NOT work."
+        log "WARN" "  Stock Hamlib has no AnyTone backend, so rigctld rejects model 37001."
+        return 0
+    fi
+
+    log "INFO" "Building the AnyTone Hamlib backend into the ISO (this takes ~10 min)..."
+
+    # THIS IS THE FIX FOR THE HEADLINE BUG. customize_radio_configs() writes
+    # radio profiles pinned to Hamlib model 37001 (RIG_MODEL_ATD578UVIII), but
+    # nothing in this build had ever installed a Hamlib that knows that model.
+    # ETC ships stock Hamlib 4.5, which has no AnyTone backend whatsoever, so
+    # every ISO this script produced had working-looking radio profiles and no
+    # CAT control and no PTT.
+    #
+    # build-hamlib-anytone.sh is run INSIDE the chroot rather than
+    # reimplemented here, so the ISO and the live system get byte-identical
+    # Hamlib treatment -- including the symlink manifest that makes --revert
+    # work on the installed system.
+
+    local staged_repo="${SQUASHFS_DIR}/tmp/customizer"
+    mkdir -p "$staged_repo/lib"
+    cp "${SCRIPT_DIR}/build-hamlib-anytone.sh" "$staged_repo/" \
+        || { log "ERROR" "Could not stage build-hamlib-anytone.sh"; return 1; }
+    cp "${SCRIPT_DIR}/lib/common.sh" "$staged_repo/lib/" \
+        || { log "ERROR" "Could not stage lib/common.sh"; return 1; }
+    chmod +x "$staged_repo/build-hamlib-anytone.sh"
+
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+
+    local rc=0
+    chroot "${SQUASHFS_DIR}" /bin/bash -c '
+        set -uo pipefail
+        export DEBIAN_FRONTEND=noninteractive
+        cd /tmp/customizer
+        ./build-hamlib-anytone.sh
+    ' 2>&1 | tail -30 >> "$LOG_FILE" || rc=$?
+
+    # Confirm the backend is really there. The script self-verifies, but this
+    # build has shipped a broken Hamlib before, so check independently.
+    local models=""
+    if [ "$rc" -eq 0 ]; then
+        models=$(chroot "${SQUASHFS_DIR}" /bin/bash -c 'rigctl -l 2>/dev/null' | grep -i anytone || true)
+    fi
+
+    rm -rf "$staged_repo"
+    cleanup_chroot_mounts
+    trap - EXIT
+
+    if [ "$rc" -ne 0 ]; then
+        log "ERROR" "Hamlib AnyTone build failed (rc=$rc) -- see $LOG_FILE"
+        log "ERROR" "  Without it the D578UVIII has no CAT control and no PTT."
+        log "ERROR" "  Set ENABLE_HAMLIB_ANYTONE=no to build an ISO anyway."
+        return 1
+    fi
+
+    if [ -z "$models" ]; then
+        log "ERROR" "Hamlib built, but no AnyTone model is registered."
+        log "ERROR" "  rigctld would reject model ${ANYTONE_MODEL_ID:-37001}."
+        return 1
+    fi
+
+    log "SUCCESS" "AnyTone Hamlib backend present in ISO:"
+    while IFS= read -r line; do
+        [ -n "$line" ] && log "INFO" "    $(tr -s ' ' <<< "$line")"
+    done <<< "$models"
+    return 0
 }
 
 
@@ -3583,106 +2720,40 @@ EOF
     log "INFO" "  Run ~/add-ons/wikipedia/create-my-wikipedia.sh after first boot"
 }
 
-install_gridtracker() {
-    log "INFO" "Installing GridTracker 2..."
-    
-    local gridtracker_url="https://download2.gridtracker.org/GridTracker2-2.250901.0-amd64.deb"
-    local tmp_file="${SQUASHFS_DIR}/tmp/gridtracker-tmp.deb"
-    
-    mkdir -p "${SQUASHFS_DIR}/tmp"
-    
-    # Download GridTracker DEB
-    if ! chroot "${SQUASHFS_DIR}" bash -c "curl -s -L -o /tmp/gridtracker-tmp.deb --fail '$gridtracker_url'"; then
-        log "WARN" "GridTracker download failed - skipping"
-        return 0
-    fi
-    
-    # Install DEB
-    if chroot "${SQUASHFS_DIR}" dpkg -i /tmp/gridtracker-tmp.deb 2>&1 | tee -a "$LOG_FILE"; then
-        log "SUCCESS" "GridTracker 2 installed"
-    else
-        log "WARN" "GridTracker installation had issues"
-    fi
-    
-    rm -f "$tmp_file"
+
+
+
+
+# install_kiwix() was REMOVED. ETC has shipped kiwix natively since R4, and
+# installing kiwix-tools over the top risked a different version than the one
+# ETC's own launcher and et-index integration expect. setup_wikipedia_tools()
+# is separate and still needed -- it builds small targeted ZIM files, which is
+# not what ETC's bundled kiwix collections do.
+
+# ---------------------------------------------------------------------------
+# chroot-mount wrappers.
+#
+# These four installers assume the chroot is already mounted. main() used to
+# wrap each one in its own setup/cleanup_chroot_mounts + trap, inline, four
+# times over. Wrapping them here keeps main()'s step table uniform -- every
+# entry is just a function name -- and guarantees the mounts are torn down
+# even when the installer returns non-zero.
+# ---------------------------------------------------------------------------
+_with_chroot_mounts() {
+    local fn="$1" rc=0
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+    "$fn" || rc=$?
+    cleanup_chroot_mounts
+    trap - EXIT
+    return "$rc"
 }
 
-install_wsjtx_improved() {
-    log "INFO" "Installing WSJT-X Improved..."
-    
-    local wsjtx_url="https://downloads.sourceforge.net/project/wsjt-x-improved/WSJT-X_v2.8.0/Linux/wsjtx_2.8.0_improved_PLUS_250501_amd64.deb"
-    local tmp_file="${SQUASHFS_DIR}/tmp/wsjtx-tmp.deb"
-    
-    mkdir -p "${SQUASHFS_DIR}/tmp"
-    
-    # Download WSJT-X DEB
-    if ! chroot "${SQUASHFS_DIR}" bash -c "curl -L -o /tmp/wsjtx-tmp.deb --fail '$wsjtx_url'"; then
-        log "WARN" "WSJT-X Improved download failed - skipping"
-        return 0
-    fi
-    
-    # Remove old docs to avoid conflicts
-    rm -rf "${SQUASHFS_DIR}/usr/share/doc/wsjtx"
-    
-    # Install DEB and fix dependencies
-    chroot "${SQUASHFS_DIR}" bash -c "dpkg -i /tmp/wsjtx-tmp.deb; apt install --fix-broken -y -qq" 2>&1 | tail -5 | tee -a "$LOG_FILE"
-    
-    # Customize desktop file to use et-wsjtx wrapper
-    local desktop_file="${SQUASHFS_DIR}/usr/share/applications/wsjtx.desktop"
-    if [ -f "$desktop_file" ]; then
-        if ! grep -q "Exec=et-wsjtx" "$desktop_file"; then
-            sed -i "s/^Exec=.*$/Exec=et-wsjtx start/" "$desktop_file"
-        fi
-    fi
-    
-    log "SUCCESS" "WSJT-X Improved installed"
-    rm -f "$tmp_file"
-}
+# et-os-addons now EXECS upstream's installers in the chroot rather than just
+# copying files, so it needs /dev, /proc, /sys and a resolv.conf for the
+# downloads. It did not need mounts when it was a pure file copy.
+integrate_etosaddons_wrapped() { _with_chroot_mounts integrate_etosaddons_features; }
 
-install_qsstv() {
-    log "INFO" "Installing QSSTV (SSTV transmission/reception)..."
-    
-    local qsstv_url="https://www.qsl.net/on4qz/qsstv/qsstv109.tgz"
-    local tmp_dir="${SQUASHFS_DIR}/tmp/qsstv-build"
-    
-    mkdir -p "$tmp_dir"
-    
-    # Download QSSTV source
-    if ! chroot "${SQUASHFS_DIR}" bash -c "cd /tmp && curl -L -o qsstv.tgz --fail '$qsstv_url'"; then
-        log "WARN" "QSSTV download failed - skipping"
-        return 0
-    fi
-    
-    # Extract and build (simplified - requires build tools in chroot)
-    if chroot "${SQUASHFS_DIR}" bash -c "cd /tmp && tar -xzf qsstv.tgz && cd qsstv* && ./configure --prefix=/usr && make && make install" 2>&1 | tail -10 | tee -a "$LOG_FILE"; then
-        log "SUCCESS" "QSSTV installed"
-    else
-        log "WARN" "QSSTV build had issues - may need manual setup"
-    fi
-}
-
-install_xygrib() {
-    log "INFO" "Installing XYGrib (weather/GRIB data)..."
-    
-    # XYGrib is available from standard repos
-    if chroot "${SQUASHFS_DIR}" apt-get install -y -qq xygrib 2>&1 | tail -3 | tee -a "$LOG_FILE"; then
-        log "SUCCESS" "XYGrib installed"
-    else
-        log "WARN" "XYGrib installation had issues"
-    fi
-}
-
-install_kiwix() {
-    log "INFO" "Installing Kiwix (offline Wikipedia/docs)..."
-    
-    # Kiwix is available from snap or repos
-    # Try apt first
-    if chroot "${SQUASHFS_DIR}" apt-get install -y -qq kiwix-tools 2>&1 | tail -3 | tee -a "$LOG_FILE"; then
-        log "SUCCESS" "Kiwix installed via apt"
-    else
-        log "WARN" "Kiwix via apt had issues - skipping"
-    fi
-}
 
 setup_wifi_diagnostics() {
     log "INFO" "Creating WiFi diagnostic tools..."
@@ -4001,21 +3072,28 @@ embed_cache_files() {
         log "DEBUG" "No ETC tarball found in cache"
     fi
     
-    # Copy Wine backup if present
-    local wine_backup
-    wine_backup=$(find "$CACHE_DIR" -maxdepth 1 -name "etc-wine-backup*.tar.gz" -type f | sort -r | head -1)
-    if [ -n "$wine_backup" ] && [ -f "$wine_backup" ]; then
-        log "DEBUG" "Copying Wine backup to embedded cache..."
-        cp -v "$wine_backup" "$target_cache/"
-        log "SUCCESS" "Wine backup embedded"
-    else
-        log "DEBUG" "No Wine backup found in cache"
-    fi
-    
+    # Installer .debs: only the NEWEST of each, or every build's VS Code
+    # download (~100MB apiece) would pile up in the image. GridTracker has no
+    # download URL, so this copy is what survives a reinstall.
+    local deb pat
+    for pat in 'code_*_amd64.deb' 'GridTracker2-*.deb'; do
+        deb=$(newest_cached "$pat")
+        [ -n "$deb" ] || continue
+        cp "$deb" "$target_cache/" && log "SUCCESS" "Embedded $(basename "$deb")"
+    done
+
+    # The Wine backup is NOT copied here. restore_user_backup() already
+    # stages it under ${STAGED_BACKUP_DIR_REL}; copying it again doubled the
+    # largest file in the image.
+
     # Copy secrets.env for future builds
     if [ -f "$SECRETS_FILE" ]; then
         log "DEBUG" "Copying secrets.env to embedded cache..."
         cp -v "$SECRETS_FILE" "$target_cache/"
+        # Root-only. It holds WiFi PSKs and the Winlink password; cp gave it
+        # the source's mode, which was world-readable on the installed system.
+        chown root:root "$target_cache/secrets.env"
+        chmod 600 "$target_cache/secrets.env"
         log "SUCCESS" "secrets.env embedded for future builds"
     else
         log "DEBUG" "No secrets.env found"
@@ -4038,8 +3116,10 @@ EmComm Tools Customizer - Build Manifest
 Build Date: $(date +'%Y-%m-%d %H:%M:%S %Z')
 Build Mode: $RELEASE_MODE
 ETC Version: $RELEASE_TAG
+ETC Semver: ${VERSION:-unknown}  (this customizer targets ${ETC_TARGET_VERSION})
+Customizer: ${CUSTOMIZER_VERSION}
 Ubuntu ISO: $UBUNTU_ISO_FILE
-Script Version: $(git -C "$SCRIPT_DIR" describe --tags --always 2>/dev/null || echo 'unknown')
+Git Revision: $(git -c "safe.directory=${SCRIPT_DIR}" -C "$SCRIPT_DIR" describe --tags --always --dirty 2>/dev/null || echo 'unknown')
 
 Configuration Summary:
 - Callsign: ${CALLSIGN:-N0CALL}
@@ -4101,116 +3181,219 @@ EOF
     log "SUCCESS" "Cache files and build logs embedded (use -m for minimal build without cache)"
 }
 
+embed_customizer_scripts() {
+    # Ship this repository's tracked files in the image, so post-install.sh
+    # and apply-to-live-system.sh are on the installed system without cloning
+    # anything. Runs for minimal builds too: it is public code.
+    #
+    # Only `git ls-files` output is copied, so secrets.env, cache/, output/,
+    # logs/ and .work/ -- all gitignored -- can never be included.
+    local dest="${SQUASHFS_DIR}/opt/emcomm-tools-customizer"
+    # The build runs as root on a checkout the user owns; git >= 2.35.2
+    # refuses that ("dubious ownership") unless the directory is trusted.
+    local -a g=(git -c "safe.directory=${SCRIPT_DIR}" -C "$SCRIPT_DIR")
+    if ! "${g[@]}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        log "WARN" "${SCRIPT_DIR} is not a git checkout -- cannot tell tracked files from secrets; not embedding scripts"
+        return 1
+    fi
+    rm -rf "$dest"
+    mkdir -p "$dest"
+    if ! "${g[@]}" ls-files -z \
+         | (cd "$SCRIPT_DIR" && tar --null -T - -cf -) \
+         | tar -xf - -C "$dest"; then
+        log "ERROR" "Could not copy the customizer scripts into the image"
+        return 1
+    fi
+    if [ -e "${dest}/secrets.env" ]; then
+        rm -f "${dest}/secrets.env"
+        log "ERROR" "secrets.env is tracked by git -- removed from the image; untrack it: git rm --cached secrets.env"
+        return 1
+    fi
+    "${g[@]}" describe --tags --always --dirty > "${dest}/.customizer-revision" 2>/dev/null || true
+    chmod -R a+rX "$dest"
+    log "SUCCESS" "Customizer scripts embedded at /opt/emcomm-tools-customizer"
+    log "INFO" "  On the installed system: /opt/emcomm-tools-customizer/post-install.sh"
+}
+
 verify_customizations() {
-    # Final verification of all critical customizations BEFORE ISO creation
-    # This catches issues that would otherwise only be discovered after booting
+    # Final verification of all critical customizations BEFORE spending 20-40
+    # minutes compressing a squashfs we are going to throw away.
+    #
+    # Three of the old checks tested for things this build DELIBERATELY no
+    # longer does, so they fired on every single run and trained the reader to
+    # ignore the whole section:
+    #
+    #   - a "wrapper-rigctld.sh patched for Anytone preservation" marker.
+    #     lib/customize-radio.sh documents at length why that patch is wrong:
+    #     it guarded do_full_auto(), which is never called. Always ERROR.
+    #   - /etc/profile.d/99-install-chirp-edge.sh, which no longer exists
+    #     because CHIRP is installed at build time and Edge was dropped.
+    #   - /etc/udev/rules.d/99-emcomm-tools-cat.rules, which customize-radio
+    #     deliberately does not create; the stock DigiRig rule already maps
+    #     /dev/et-cat, and the 99- rule let an unrelated USB serial device
+    #     steal it.
     log "INFO" "=== VERIFYING CRITICAL CUSTOMIZATIONS ==="
-    
+
     local errors=0
     local warnings=0
-    
-    # 1. Verify wrapper-rigctld.sh is patched for Anytone preservation
-    log "INFO" "Checking Anytone radio preservation patch..."
-    local wrapper_script="${SQUASHFS_DIR}/opt/emcomm-tools/sbin/wrapper-rigctld.sh"
-    if [ -f "$wrapper_script" ]; then
-        if grep -q "Anytone D578UV is configured - preserving configuration" "$wrapper_script"; then
-            log "SUCCESS" "  ✓ wrapper-rigctld.sh patched for Anytone preservation"
+    local etc_conf="${SQUASHFS_DIR}/opt/emcomm-tools/conf"
+
+    _vc_ok()   { log "SUCCESS" "  [ OK ] $1"; }
+    _vc_err()  { log "ERROR"   "  [FAIL] $1"; errors=$((errors + 1)); }
+    _vc_warn() { log "WARN"    "  [WARN] $1"; warnings=$((warnings + 1)); }
+
+    # --- 1. The AnyTone Hamlib backend ------------------------------------
+    # This is the check that would have caught the headline bug: every ISO
+    # this script built had D578UVIII radio profiles pinned to Hamlib model
+    # 37001 and a Hamlib that had never heard of model 37001.
+    log "INFO" "Checking AnyTone Hamlib backend..."
+    if [ "${ENABLE_HAMLIB_ANYTONE:-yes}" != "yes" ]; then
+        _vc_warn "ENABLE_HAMLIB_ANYTONE=no -- D578UVIII will have no CAT and no PTT"
+    else
+        local anytone_models=""
+        anytone_models=$(chroot "${SQUASHFS_DIR}" /bin/bash -c 'rigctl -l 2>/dev/null' 2>/dev/null \
+                         | grep -i anytone || true)
+        if [ -n "$anytone_models" ]; then
+            _vc_ok "Hamlib knows AnyTone: $(head -1 <<< "$anytone_models" | tr -s ' ')"
         else
-            log "ERROR" "  ✗ wrapper-rigctld.sh NOT patched! Radio will be overwritten on boot!"
-            ((errors++))
+            _vc_err "Hamlib has NO AnyTone backend -- rigctld will reject model 37001"
+        fi
+    fi
+
+    # --- 2. Radio profiles and the active symlink -------------------------
+    log "INFO" "Checking radio profiles..."
+    local anytone_config="${etc_conf}/radios.d/anytone-d578uv.json"
+    if [ -f "$anytone_config" ]; then
+        if command -v jq >/dev/null 2>&1 && ! jq -e . "$anytone_config" >/dev/null 2>&1; then
+            _vc_err "anytone-d578uv.json exists but is not valid JSON"
+        else
+            _vc_ok "anytone-d578uv.json present and parses"
         fi
     else
-        log "WARN" "  ⚠ wrapper-rigctld.sh not found (may be okay if ETC version changed)"
-        ((warnings++))
+        _vc_err "anytone-d578uv.json NOT found"
     fi
-    
-    # 2. Verify active-radio.json symlink points to Anytone
-    log "INFO" "Checking active-radio.json symlink..."
-    local active_radio="${SQUASHFS_DIR}/opt/emcomm-tools/conf/radios.d/active-radio.json"
+
+    local active_radio="${etc_conf}/radios.d/active-radio.json"
     if [ -L "$active_radio" ]; then
         local target
         target=$(readlink "$active_radio")
-        if [[ "$target" =~ anytone ]]; then
-            log "SUCCESS" "  ✓ active-radio.json → $target"
+        # Must be RELATIVE: an absolute link would embed the build machine's
+        # squashfs path and dangle on the installed system.
+        case "$target" in
+            /*) _vc_err "active-radio.json is an ABSOLUTE symlink ($target) -- will dangle once installed" ;;
+            *anytone*)
+                if [ -e "$active_radio" ]; then
+                    _vc_ok "active-radio.json -> $target"
+                else
+                    _vc_err "active-radio.json -> $target, which does not resolve"
+                fi
+                ;;
+            *) _vc_warn "active-radio.json -> $target (not an AnyTone profile)" ;;
+        esac
+    else
+        _vc_err "active-radio.json is not a symlink"
+    fi
+
+    # --- 3. D890UV Bluetooth TNC ------------------------------------------
+    if [ "${ENABLE_ANYTONE_D890_TNC:-yes}" = "yes" ]; then
+        log "INFO" "Checking D890UV Bluetooth TNC..."
+        if [ -f "${etc_conf}/radios.d/anytone-d890.bt.json" ]; then
+            _vc_ok "anytone-d890.bt.json present"
         else
-            log "WARN" "  ⚠ active-radio.json points to: $target (not Anytone)"
-            ((warnings++))
+            _vc_warn "anytone-d890.bt.json missing"
         fi
-    else
-        log "WARN" "  ⚠ active-radio.json is not a symlink"
-        ((warnings++))
+        if [ -x "${SQUASHFS_DIR}/opt/emcomm-tools/bin/et-anytone-d890" ]; then
+            _vc_ok "et-anytone-d890 installed and executable"
+        else
+            _vc_warn "et-anytone-d890 missing or not executable"
+        fi
     fi
-    
-    # 3. Verify anytone-d578uv.json exists
-    log "INFO" "Checking Anytone radio config file..."
-    local anytone_config="${SQUASHFS_DIR}/opt/emcomm-tools/conf/radios.d/anytone-d578uv.json"
-    if [ -f "$anytone_config" ]; then
-        log "SUCCESS" "  ✓ anytone-d578uv.json exists"
-    else
-        log "ERROR" "  ✗ anytone-d578uv.json NOT found!"
-        ((errors++))
+
+    # --- 4. Applications --------------------------------------------------
+    log "INFO" "Checking applications..."
+    if [ "${ENABLE_VSCODE:-yes}" = "yes" ]; then
+        if [ -x "${SQUASHFS_DIR}/usr/bin/code" ] || [ -x "${SQUASHFS_DIR}/usr/share/code/bin/code" ]; then
+            _vc_ok "VS Code installed"
+        else
+            _vc_err "VS Code NOT installed (apt can never supply 'code' on 22.10)"
+        fi
     fi
-    
-    # 4. Verify lsb-release has CUSTOMIZED
+
+    if [ "${ENABLE_CHIRP:-yes}" = "yes" ]; then
+        if [ -x "${SQUASHFS_DIR}/opt/chirp-venv/bin/chirp" ]; then
+            _vc_ok "CHIRP installed in /opt/chirp-venv"
+        else
+            _vc_err "CHIRP NOT installed"
+        fi
+    fi
+
+    # Best-effort steps, so warnings -- but say so at build time rather than
+    # leaving it to be discovered on the installed system.
+    if [ -x "${SQUASHFS_DIR}/usr/bin/gh" ]; then
+        _vc_ok "GitHub CLI installed"
+    else
+        _vc_warn "GitHub CLI (gh) NOT installed"
+    fi
+    if [ -x "${SQUASHFS_DIR}/opt/emcomm-tools-customizer/post-install.sh" ]; then
+        _vc_ok "Customizer scripts at /opt/emcomm-tools-customizer"
+    else
+        _vc_warn "Customizer scripts NOT embedded -- post-install.sh will need a clone"
+    fi
+    local staged
+    staged=$(find "${SQUASHFS_DIR}${STAGED_BACKUP_DIR_REL}" -maxdepth 1 -name 'etc-*-backup-*.tar.gz' 2>/dev/null | wc -l)
+    if [ "$staged" -gt 0 ]; then
+        _vc_ok "${staged} backup archive(s) staged at ${STAGED_BACKUP_DIR_REL}"
+    else
+        _vc_warn "No backup archives staged -- post-install.sh --restore will have nothing to restore"
+    fi
+
+    if [ "${ENABLE_ANYTONE_CPS:-yes}" = "yes" ]; then
+        # Best-effort upstream, so only a warning.
+        if [ -x "${SQUASHFS_DIR}/usr/local/bin/anytone-cps" ]; then
+            _vc_ok "anytone-cps installed"
+        else
+            _vc_warn "anytone-cps not built (alpha upstream; ISO still usable)"
+        fi
+    fi
+
+    # --- 5. Release branding ----------------------------------------------
     log "INFO" "Checking release info..."
     local lsb_release="${SQUASHFS_DIR}/etc/lsb-release"
     if [ -f "$lsb_release" ]; then
         if grep -q "CUSTOMIZED" "$lsb_release"; then
-            local description
-            description=$(grep "DISTRIB_DESCRIPTION" "$lsb_release" | cut -d= -f2 | tr -d '"')
-            log "SUCCESS" "  ✓ Release: $description"
+            _vc_ok "Release: $(grep DISTRIB_DESCRIPTION "$lsb_release" | cut -d= -f2 | tr -d '"')"
         else
-            log "ERROR" "  ✗ lsb-release does NOT contain 'CUSTOMIZED'!"
-            log "DEBUG" "    Current value: $(grep 'DISTRIB_DESCRIPTION' "$lsb_release")"
-            ((errors++))
+            _vc_err "lsb-release does not contain 'CUSTOMIZED'"
         fi
     else
-        log "ERROR" "  ✗ lsb-release file not found!"
-        ((errors++))
+        _vc_err "lsb-release not found"
     fi
-    
-    # 5. Verify profile.d script for CHIRP/Edge exists
-    log "INFO" "Checking CHIRP/Edge installation script..."
-    local profile_script="${SQUASHFS_DIR}/etc/profile.d/99-install-chirp-edge.sh"
-    if [ -f "$profile_script" ]; then
-        if grep -q "old-releases.ubuntu.com" "$profile_script"; then
-            log "SUCCESS" "  ✓ CHIRP/Edge script exists with apt source fix"
-        else
-            log "WARN" "  ⚠ CHIRP/Edge script exists but missing apt source fix"
-            ((warnings++))
-        fi
+
+    # --- 6. The active-radio guard service --------------------------------
+    log "INFO" "Checking first-boot guard..."
+    if [ -f "${SQUASHFS_DIR}/etc/systemd/system/emcomm-first-boot.service" ]; then
+        _vc_ok "emcomm-first-boot.service present"
     else
-        log "WARN" "  ⚠ CHIRP/Edge profile.d script not found"
-        ((warnings++))
+        _vc_warn "emcomm-first-boot.service not found"
     fi
-    
-    # 6. Verify first-boot systemd service
-    log "INFO" "Checking first-boot systemd service..."
-    local service_file="${SQUASHFS_DIR}/etc/systemd/system/emcomm-first-boot.service"
-    if [ -f "$service_file" ]; then
-        log "SUCCESS" "  ✓ emcomm-first-boot.service exists"
-    else
-        log "WARN" "  ⚠ First-boot service not found"
-        ((warnings++))
+
+    # --- 7. Secrets must NOT leak into a shareable ISO --------------------
+    # embed_cache_files() deliberately copies secrets.env into the ISO so the
+    # installed system can rebuild itself. That is useful and intended, but it
+    # means the ISO contains a Winlink password and WiFi PSKs -- worth saying
+    # out loud once per build rather than discovering it after sharing it.
+    if [ -f "${SQUASHFS_DIR}/opt/emcomm-customizer-cache/secrets.env" ]; then
+        log "WARN" "  [NOTE] This ISO embeds secrets.env (WiFi PSK, Winlink password)."
+        log "WARN" "         Do not share it. Use -m for a minimal ISO without it."
     fi
-    
-    # 7. Verify udev rules for CAT device
-    log "INFO" "Checking CAT udev rules..."
-    local udev_rules="${SQUASHFS_DIR}/etc/udev/rules.d/99-emcomm-tools-cat.rules"
-    if [ -f "$udev_rules" ]; then
-        log "SUCCESS" "  ✓ CAT udev rules exist"
-    else
-        log "WARN" "  ⚠ CAT udev rules not found"
-        ((warnings++))
-    fi
-    
-    # Summary
+
+    # --- Summary ----------------------------------------------------------
     log "INFO" ""
     log "INFO" "=== VERIFICATION SUMMARY ==="
     if [ $errors -gt 0 ]; then
-        log "ERROR" "  ERRORS: $errors (build may produce broken ISO)"
+        log "ERROR" "  ERRORS:   $errors"
     else
-        log "SUCCESS" "  ERRORS: 0"
+        log "SUCCESS" "  ERRORS:   0"
     fi
     if [ $warnings -gt 0 ]; then
         log "WARN" "  WARNINGS: $warnings (review above)"
@@ -4218,14 +3401,21 @@ verify_customizations() {
         log "SUCCESS" "  WARNINGS: 0"
     fi
     log "INFO" ""
-    
-    # Return error code if there were critical failures
+
+    # Fail BEFORE rebuilding the squashfs. The old version returned 0
+    # unconditionally with "Build will continue but ISO may not work
+    # correctly", which is the worst of both worlds: 40 minutes of
+    # compression, then an ISO known to be broken. An error here means
+    # something required for radio operation is missing.
     if [ $errors -gt 0 ]; then
-        log "ERROR" "Critical errors detected! Review logs before proceeding."
-        log "INFO" "Build will continue but ISO may not work correctly."
+        log "ERROR" "Refusing to build an ISO with $errors critical error(s)."
+        log "ERROR" "Fix the above, or re-run with the relevant ENABLE_* set to 'no'"
+        log "ERROR" "if you genuinely want an ISO without that capability."
+        return 1
     fi
-    
-    return 0  # Don't fail the build, just warn
+
+    log "SUCCESS" "All critical customizations verified"
+    return 0
 }
 
 create_build_manifest() {
@@ -4278,32 +3468,15 @@ EOF
 # ============================================================================
 
 rebuild_squashfs() {
-    # Source secrets for compression setting
-    # shellcheck source=/dev/null
-    source "$SECRETS_FILE"
-    
-    # Compression options: zstd (default), xz, gzip, lz4
-    local compression="${SQUASHFS_COMPRESSION:-zstd}"
-    
-    # Validate compression option
-    case "$compression" in
-        xz|zstd|gzip|lz4)
-            ;;
-        *)
-            log "WARN" "Unknown compression '$compression', using zstd"
-            compression="zstd"
-            ;;
-    esac
-    
-    # Estimate build time based on compression
-    local time_estimate
-    case "$compression" in
-        xz)   time_estimate="80-120 minutes" ;;
-        zstd) time_estimate="15-25 minutes" ;;
-        gzip) time_estimate="30-45 minutes" ;;
-        lz4)  time_estimate="5-10 minutes" ;;
-    esac
-    
+    # Hardcoded as of 7.0.2-1: this is a build-tooling detail, not operator
+    # configuration, so it no longer comes from secrets.env.
+    #
+    # zstd is the right default by a wide margin here. xz saves maybe 10% on an
+    # image that is already mostly incompressible (the embedded Ubuntu ISO and
+    # the offline map tilesets) in exchange for roughly 80 extra minutes.
+    local compression="zstd"
+    local time_estimate="15-25 minutes"
+
     log "INFO" "Rebuilding squashfs filesystem (compression: $compression, estimated: $time_estimate)..."
     
     local new_squashfs="${WORK_DIR}/filesystem.squashfs.new"
@@ -4473,442 +3646,77 @@ rebuild_iso() {
     log "SUCCESS" "ISO created: $OUTPUT_ISO"
     log "INFO" "Copy to Ventoy/Balena Etcher: cp \"$OUTPUT_ISO\" /media/\$USER/Ventoy/"
 }
-
 # ============================================================================
 # Ventoy Configuration Generator
 # ============================================================================
-# CRITICAL: Ventoy does NOT use the ISO's grub.cfg boot parameters!
-# When booting via Ventoy, the automatic-ubiquity and preseed parameters
-# in our ISO's grub.cfg are IGNORED. Ventoy has its own boot system.
+# Ventoy does not use the ISO's grub.cfg, so booting a plain ISO from Ventoy
+# just gets Ventoy's own menu. That is fine -- the installer walkthrough is what
+# we want.
 #
-# To enable automated installation with Ventoy, we must:
-#   1. Create ventoy.json with auto_install and boot_conf plugins
-#   2. Copy preseed.cfg to the output directory for placement on Ventoy USB
-#   3. Provide clear instructions for setting up the Ventoy USB
-#
-# Reference: https://www.ventoy.net/en/plugin_autoinstall.html
+# v1 used this path to inject `automatic-ubiquity only-ubiquity` and a
+# preseed.cfg via Ventoy's auto_install plugin, which reproduced the automated
+# partitioning through a second door even after the ISO's own preseed was gone.
+# That is deliberately not done any more: no auto_install block, no preseed,
+# no conf_replace of loopback.cfg.
 
 generate_ventoy_config() {
-    log "INFO" "Generating Ventoy configuration for automated installation..."
-    
+    log "INFO" "Generating Ventoy helper files..."
+
     local iso_filename
     iso_filename=$(basename "$OUTPUT_ISO")
     local ventoy_dir="${OUTPUT_DIR}/ventoy"
-    
-    # Create ventoy directory in output
     mkdir -p "$ventoy_dir"
-    
-    # Copy preseed.cfg from ISO work directory
-    local preseed_src="${ISO_EXTRACT_DIR}/preseed.cfg"
-    local preseed_dst="${ventoy_dir}/preseed.cfg"
-    
-    if [ -f "$preseed_src" ]; then
-        cp "$preseed_src" "$preseed_dst"
-        log "DEBUG" "Copied preseed.cfg to $preseed_dst"
-    else
-        log "WARN" "Preseed file not found at $preseed_src - Ventoy auto-install may not work"
-    fi
-    
-    # Generate ventoy.json
-    local ventoy_json="${ventoy_dir}/ventoy.json"
-    
-    cat > "$ventoy_json" <<EOF
+
+    # Menu-mode preference only. No auto_install, no preseed template.
+    cat > "${ventoy_dir}/ventoy.json" <<EOF
 {
     "control": [
         { "VTOY_DEFAULT_MENU_MODE": "1" }
-    ],
-    "auto_install": [
-        {
-            "image": "/${iso_filename}",
-            "template": "/ventoy/preseed.cfg"
-        }
-    ],
-    "conf_replace": [
-        {
-            "image": "/${iso_filename}",
-            "org": "/boot/grub/loopback.cfg",
-            "new": "/ventoy/loopback.cfg"
-        }
     ]
 }
 EOF
-    log "DEBUG" "Generated ventoy.json at $ventoy_json"
-    
-    # Generate a custom loopback.cfg with automation parameters
-    # This replaces the ISO's loopback.cfg when booted via Ventoy
-    local loopback_cfg="${ventoy_dir}/loopback.cfg"
-    cat > "$loopback_cfg" <<'EOF'
-# Ventoy-compatible loopback.cfg for EmComm Tools automated installation
-# This file is injected by Ventoy to enable preseed automation
-#
-# CRITICAL: Ventoy sets ${iso_path} and ${vtoy_iso_part} automatically
-# We use file= to point to the preseed on the Ventoy USB drive
+    log "DEBUG" "Generated ventoy.json (no auto-install)"
 
-set timeout=5
-set default=0
-
-menuentry "Install EmComm Tools (Automated)" {
-    linux /casper/vmlinuz file=/cdrom/preseed.cfg automatic-ubiquity only-ubiquity noprompt quiet splash --- 
-    initrd /casper/initrd
-}
-
-menuentry "Install EmComm Tools (Safe Graphics - Automated)" {
-    linux /casper/vmlinuz nomodeset file=/cdrom/preseed.cfg automatic-ubiquity only-ubiquity noprompt quiet splash ---
-    initrd /casper/initrd
-}
-
-menuentry "Try EmComm Tools without installing" {
-    linux /casper/vmlinuz maybe-ubiquity quiet splash ---
-    initrd /casper/initrd
-}
-
-menuentry "Check disc for defects" {
-    linux /casper/vmlinuz integrity-check quiet splash ---
-    initrd /casper/initrd
-}
-EOF
-    log "DEBUG" "Generated custom loopback.cfg at $loopback_cfg"
-    
-    # Generate README for Ventoy setup
-    local ventoy_readme="${ventoy_dir}/README.txt"
-    cat > "$ventoy_readme" <<EOF
+    cat > "${ventoy_dir}/README.txt" <<EOF
 ============================================================
    EmComm Tools Custom ISO - Ventoy Setup (OPTIONAL)
 ============================================================
 
-NOTE: If you're writing the ISO directly with dd, you DON'T need
-any of these files! The ISO works correctly when written with:
+You do not need any of these files to use this ISO. Copying the
+.iso onto a Ventoy USB stick is enough -- Ventoy will list it in
+its boot menu.
 
-   sudo dd if=<iso-file> of=/dev/sdX bs=4M status=progress conv=fsync
+WHAT CHANGED IN v2.0.0
 
-This directory is ONLY needed if you're using Ventoy.
+Earlier versions shipped a ventoy.json auto_install block and a
+preseed.cfg here, which drove the Ubuntu installer unattended and
+partitioned the disk without asking. That has been removed.
 
-WHY VENTOY NEEDS EXTRA CONFIG:
-------------------------------
-Ventoy has its own boot system that IGNORES the ISO's grub.cfg 
-boot parameters. Without these files, Ventoy won't pass the 
-preseed and automation parameters to the installer.
+You now get the standard Ubuntu / EmComm Tools installer, and you
+choose the target disk and partition layout yourself.
 
-QUICK SETUP (run this script):
-------------------------------
-   ./copy-to-ventoy.sh /path/to/ventoy/mount
+HOW TO USE
 
-MANUAL SETUP STEPS:
--------------------
+  1. Install Ventoy on a USB stick (once):  https://www.ventoy.net
+  2. Copy ${iso_filename} to the stick.
+  3. Boot the stick, pick the ISO from Ventoy's menu.
+  4. Run through the installer as normal.
 
-1. Copy the ISO to your Ventoy USB:
-   cp "${OUTPUT_ISO}" /path/to/ventoy/
-
-2. Create the ventoy directory on your Ventoy USB:
-   mkdir -p /path/to/ventoy/ventoy
-
-3. Copy all files from this directory to the Ventoy USB:
-   cp -r ${ventoy_dir}/* /path/to/ventoy/ventoy/
-
-Final structure on Ventoy USB:
-   /your-ventoy-mount/
-   ├── ${iso_filename}
-   └── ventoy/
-       ├── ventoy.json
-       ├── preseed.cfg
-       ├── loopback.cfg
-       └── README.txt
-
-4. Safely eject and boot from the Ventoy USB
-
-WHAT THIS DOES:
----------------
-- ventoy.json: Tells Ventoy to use preseed.cfg for auto-installation
-- preseed.cfg: Contains your user account, timezone, and partition settings
-- loopback.cfg: Boot menu with automation parameters
-
-NOTE: Partitioning still requires confirmation in the installer due to
-Ubuntu Desktop (Ubiquity) limitations with preseed automation.
-
-============================================================
-Generated by EmComm Tools Customizer on $(date)
-============================================================
+Optional: copy ventoy.json to the /ventoy/ directory on the stick
+if you prefer Ventoy's tree-style menu.
 EOF
-    log "DEBUG" "Generated README at $ventoy_readme"
-    
-    # Generate convenience copy script
-    local copy_script="${OUTPUT_DIR}/copy-to-ventoy.sh"
-    cat > "$copy_script" <<EOF
-#!/bin/bash
-# Copy EmComm Tools ISO and Ventoy config to a Ventoy USB drive
-# Generated by EmComm Tools Customizer
-#
-# NOTE: This is only needed if using Ventoy. If you write the ISO
-# directly with dd, it works without any extra config files.
-
-set -e
-
-VENTOY_MOUNT="\$1"
-SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
-ISO_FILE="${OUTPUT_ISO}"
-VENTOY_DIR="\${SCRIPT_DIR}/ventoy"
-
-echo "========================================"
-echo "EmComm Tools - Copy to Ventoy (Optional)"
-echo "========================================"
-echo ""
-
-if [[ -z "\$VENTOY_MOUNT" ]]; then
-    echo "Usage: \$0 <VENTOY_MOUNT_PATH>"
-    echo ""
-    echo "Example: \$0 /media/\$USER/Ventoy"
-    echo "         \$0 /mnt/usb"
-    echo ""
-    echo "This script copies the ISO and Ventoy config files."
-    echo "Only needed if using Ventoy (not for dd-written USB)."
-    exit 1
-fi
-
-# Check if target exists
-if [[ ! -d "\$VENTOY_MOUNT" ]]; then
-    echo "ERROR: Target path not found: \$VENTOY_MOUNT"
-    echo ""
-    echo "Make sure your Ventoy USB is mounted first!"
-    exit 1
-fi
-
-# Check for ISO file
-if [[ ! -f "\$ISO_FILE" ]]; then
-    echo "ERROR: ISO file not found: \$ISO_FILE"
-    exit 1
-fi
-
-# Check for ventoy config directory
-if [[ ! -d "\$VENTOY_DIR" ]]; then
-    echo "ERROR: Ventoy config directory not found: \$VENTOY_DIR"
-    exit 1
-fi
-
-echo "Source ISO: \$ISO_FILE"
-echo "Source config: \$VENTOY_DIR"
-echo "Target: \$VENTOY_MOUNT"
-echo ""
-
-# Copy ISO
-echo "Copying ISO (this may take a few minutes)..."
-cp -v "\$ISO_FILE" "\$VENTOY_MOUNT/"
-echo ""
-
-# Create ventoy directory and copy config
-echo "Copying Ventoy configuration..."
-mkdir -p "\$VENTOY_MOUNT/ventoy"
-cp -v "\$VENTOY_DIR/"* "\$VENTOY_MOUNT/ventoy/"
-echo ""
-
-# Sync to ensure all data is written
-echo "Syncing..."
-sync
-echo ""
-
-echo "========================================"
-echo "SUCCESS! Files copied to Ventoy USB"
-echo "========================================"
-echo ""
-echo "You can now safely eject the USB and boot from it."
-echo ""
-echo "When you boot, select '${iso_filename}' from the Ventoy menu."
-echo "The installer will run in semi-automated mode."
-echo ""
-EOF
-    chmod +x "$copy_script"
-    log "DEBUG" "Generated copy script at $copy_script"
-    
-    log "SUCCESS" "Ventoy configuration generated at: $ventoy_dir (for Ventoy users only)"
+    log "DEBUG" "Generated Ventoy README"
+    log "SUCCESS" "Ventoy helper files in ${ventoy_dir}"
 }
 
 # ============================================================================
 # USB Write Functions
 # ============================================================================
 
-# Detect and select a USB device interactively
-# Returns the selected device path in the global variable SELECTED_USB_DEVICE
-select_usb_device() {
-    # Auto-detect single USB device without interactive prompts
-    # If exactly one USB device found, use it
-    # If multiple or none, fail with clear error message
-    
-    local devices=()
-    
-    # Find removable block devices (USB drives)
-    while IFS= read -r line; do
-        local dev_name dev_tran dev_rm
-        dev_name=$(echo "$line" | awk '{print $1}')
-        dev_tran=$(echo "$line" | awk '{print $2}')
-        dev_rm=$(echo "$line" | awk '{print $3}')
-        
-        # Skip if not a disk
-        [[ -z "$dev_name" ]] && continue
-        
-        # Skip nvme devices (system drives)
-        [[ "$dev_name" == nvme* ]] && continue
-        
-        # Include if removable=1 OR transport is usb
-        if [[ "$dev_rm" == "1" ]] || [[ "$dev_tran" == "usb" ]]; then
-            devices+=("/dev/$dev_name")
-        fi
-    done < <(lsblk -d -n -o NAME,TRAN,RM 2>/dev/null | grep -E "^sd|^hd")
-    
-    # Check results
-    if [[ ${#devices[@]} -eq 0 ]]; then
-        log "ERROR" "No USB devices detected. Plug in a USB drive or specify --write-to /dev/sdX explicitly"
-        return 1
-    elif [[ ${#devices[@]} -gt 1 ]]; then
-        log "ERROR" "Multiple USB devices detected. Specify which one explicitly: --write-to /dev/sdb"
-        echo "  Available devices:" >&2
-        for dev in "${devices[@]}"; do
-            echo "    $dev" >&2
-        done
-        return 1
-    fi
-    
-    # Exactly one device found
-    SELECTED_USB_DEVICE="${devices[0]}"
-    log "INFO" "Auto-detected USB device: $SELECTED_USB_DEVICE"
-    return 0
-}
-
-# Write ISO directly to USB with dd and eject when complete
-# This is the RECOMMENDED method - preserves grub.cfg boot parameters
-write_to_usb() {
-    local device="$1"
-    local iso_file="$2"
-    
-    # If device is empty or "auto", run interactive selection
-    if [[ -z "$device" ]] || [[ "$device" == "auto" ]]; then
-        if ! select_usb_device; then
-            return 1
-        fi
-        device="$SELECTED_USB_DEVICE"
-    fi
-    
-    # Validate device parameter (should not happen after selection, but safety check)
-    if [[ -z "$device" ]]; then
-        log "ERROR" "No USB device specified for --write-to"
-        return 1
-    fi
-    
-    # Validate ISO file
-    if [[ ! -f "$iso_file" ]]; then
-        log "ERROR" "ISO file not found: $iso_file"
-        return 1
-    fi
-    
-    # Safety checks for device
-    if [[ ! -b "$device" ]]; then
-        log "ERROR" "Not a block device: $device"
-        log "ERROR" "Expected something like /dev/sdb, /dev/sdc, etc."
-        return 1
-    fi
-    
-    # Prevent writing to nvme drives (likely system drives)
-    if [[ "$device" == *nvme* ]]; then
-        log "ERROR" "Refusing to write to NVMe device: $device"
-        log "ERROR" "NVMe devices are typically system drives, not USB devices"
-        return 1
-    fi
-    
-    # Prevent writing to partition (should be whole disk like /dev/sdb, not /dev/sdb1)
-    if [[ "$device" =~ [0-9]$ ]]; then
-        log "ERROR" "Device appears to be a partition: $device"
-        log "ERROR" "Use the whole disk device (e.g., /dev/sdb not /dev/sdb1)"
-        return 1
-    fi
-    
-    # Get device info for confirmation
-    local device_name
-    device_name=$(basename "$device")
-    local device_size=""
-    local device_model=""
-    
-    if [[ -f "/sys/block/${device_name}/size" ]]; then
-        local size_sectors
-        size_sectors=$(cat "/sys/block/${device_name}/size" 2>/dev/null || echo "0")
-        device_size="$((size_sectors * 512 / 1024 / 1024 / 1024))GB"
-    fi
-    
-    if [[ -f "/sys/block/${device_name}/device/model" ]]; then
-        device_model=$(cat "/sys/block/${device_name}/device/model" 2>/dev/null | xargs)
-    fi
-    
-    # Confirm with user (this is destructive!)
-    echo ""
-    echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║   Writing ISO to USB: $device                                ║"
-    echo "╚══════════════════════════════════════════════════════════════╝"
-    echo ""
-    echo "  Device: $device"
-    [[ -n "$device_size" ]] && echo "  Size:   $device_size"
-    [[ -n "$device_model" ]] && echo "  Model:  $device_model"
-    echo ""
-    echo "  ISO:    $(basename "$iso_file")"
-    echo "  Size:   $(du -h "$iso_file" | cut -f1)"
-    echo ""
-    
-    # Check if device has mounted partitions
-    local mounted_parts
-    mounted_parts=$(mount | grep "^${device}" | awk '{print $1 " mounted at " $3}' || true)
-    if [[ -n "$mounted_parts" ]]; then
-        echo "  MOUNTED PARTITIONS DETECTED - UNMOUNTING:"
-        echo "$mounted_parts" | sed 's/^/    /'
-        echo ""
-        log "INFO" "Unmounting partitions on $device..."
-        # Unmount all partitions on this device
-        for part in $(mount | grep "^${device}" | awk '{print $1}'); do
-            log "DEBUG" "Unmounting $part"
-            if ! umount "$part" 2>/dev/null; then
-                log "ERROR" "Failed to unmount $part"
-                log "ERROR" "Please manually unmount before running build"
-                return 1
-            fi
-        done
-        log "SUCCESS" "All partitions unmounted"
-        echo ""
-    fi
-    
-    # Write ISO with dd
-    log "INFO" "Writing ISO to $device (this will take several minutes)..."
-    log "INFO" "You can monitor progress in the terminal"
-    echo ""
-    
-    if ! dd if="$iso_file" of="$device" bs=4M status=progress conv=fsync 2>&1; then
-        log "ERROR" "Failed to write ISO to $device"
-        return 1
-    fi
-    
-    echo ""
-    log "SUCCESS" "ISO written to $device"
-    
-    # Sync to ensure all data is flushed
-    log "INFO" "Syncing data..."
-    sync
-    
-    # Eject the device
-    log "INFO" "Ejecting $device..."
-    if eject "$device" 2>/dev/null; then
-        log "SUCCESS" "USB device ejected - safe to remove!"
-    else
-        log "WARN" "Could not auto-eject device. Please eject manually before removing."
-    fi
-    
-    echo ""
-    echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║   ✅ USB WRITE COMPLETE                                       ║"
-    echo "╚══════════════════════════════════════════════════════════════╝"
-    echo ""
-    echo "  Your bootable USB is ready!"
-    echo "  Insert into target computer and boot from USB."
-    echo ""
-    
-    return 0
-}
-
-# Copy ISO and Ventoy config to a mounted Ventoy USB
-# Use this ONLY if you prefer Ventoy over dd
+# Copy the ISO and Ventoy helper files to a mounted Ventoy USB.
+# This is a plain file copy onto an already-mounted filesystem. It is the only
+# USB-related function left in this script -- the dd writer and its USB
+# auto-detection were removed in v2.0.0.
 copy_to_ventoy() {
     local ventoy_mount="$1"
     local iso_file="$2"
@@ -4973,12 +3781,12 @@ copy_to_ventoy() {
     echo ""
     echo "  Files copied to Ventoy USB:"
     echo "    - $(basename "$iso_file")"
-    echo "    - ventoy/ventoy.json"
-    echo "    - ventoy/preseed.cfg"
-    echo "    - ventoy/loopback.cfg"
+    echo "    - ventoy/ventoy.json   (menu preference only)"
+    echo "    - ventoy/README.txt"
     echo ""
     echo "  You can safely eject the USB and boot from it."
-    echo "  Select the ISO from Ventoy's boot menu."
+    echo "  Select the ISO from Ventoy's boot menu, then run through the"
+    echo "  normal installer. You choose the disk and partition layout."
     echo ""
     
     return 0
@@ -5006,6 +3814,47 @@ cleanup_work_dir() {
 # Main
 # ============================================================================
 
+# A system installed from a non-minimal ISO carries everything the next build
+# needs in /opt/emcomm-customizer-cache. Reuse it automatically, so a build on
+# that system with a fresh clone downloads nothing and needs no setup:
+#
+#   *.iso *.tar.gz *.deb   symlinked into cache/. They are read-only inputs,
+#                          so a link to the root-owned copy is enough.
+#   secrets.env            COPIED to the repo, owned by you, mode 600. A
+#                          symlink would point at a root-owned file you could
+#                          not edit without sudo. As your own 600 file it is
+#                          private to you and editable with no sudo at all.
+#
+# This is what carries secrets.env forward across reinstalls even though it
+# is gitignored: repo -> ISO (/opt, root-only) -> repo on the installed
+# system -> the next ISO. Edits you make reach the next ISO you build.
+seed_cache_from_embedded() {
+    local src=/opt/emcomm-customizer-cache f n=0
+    [ -d "$src" ] || return 0
+    local owner="${SUDO_USER:-$(id -un)}"
+
+    if [ ! -d "$CACHE_DIR" ]; then
+        mkdir -p "$CACHE_DIR"
+        chown "$owner": "$CACHE_DIR" 2>/dev/null || true
+    fi
+    for f in "$src"/*.iso "$src"/*.tar.gz "$src"/*.deb; do
+        [ -f "$f" ] || continue
+        [ -e "${CACHE_DIR}/$(basename "$f")" ] && continue
+        ln -s "$f" "${CACHE_DIR}/" && n=$((n + 1))
+    done
+    [ "$n" -gt 0 ] && log "INFO" "Reusing ${n} file(s) from ${src} (linked into ${CACHE_DIR})"
+
+    if [ ! -e "$SECRETS_FILE" ] && [ -f "$src/secrets.env" ]; then
+        if install -o "$owner" -m 600 "$src/secrets.env" "$SECRETS_FILE" 2>/dev/null; then
+            log "SUCCESS" "Restored secrets.env from this system's ISO -> ${SECRETS_FILE} (yours, mode 600)"
+            log "INFO" "  Edit it there; the next ISO embeds your edited copy."
+        else
+            log "WARN" "Could not copy $src/secrets.env (needs sudo) -- run the build with sudo"
+        fi
+    fi
+    return 0
+}
+
 main() {
     echo ""
     echo "╔══════════════════════════════════════════════════════════════╗"
@@ -5017,6 +3866,10 @@ main() {
     log "INFO" "Build started at $(date)"
     log "INFO" "Log file: $LOG_FILE"
     
+    # Before prerequisites: on an installed system this restores secrets.env,
+    # which check_prerequisites requires.
+    seed_cache_from_embedded
+
     # Check prerequisites
     if ! check_prerequisites; then
         exit 2
@@ -5073,132 +3926,130 @@ main() {
     log "INFO" ""
     log "INFO" "=== Applying Customizations ==="
     log "DEBUG" "Starting customization phase..."
-    
-    # Note: et-os-addons overlay NO LONGER applied as a separate layer
-    # Instead, we integrate specific functionality directly into our build steps
-    # to avoid overwrites and maintain control over execution order
-    
-    log "DEBUG" "Step 1/14: customize_hostname"
-    customize_hostname
-    log "DEBUG" "Step 1/14: customize_hostname COMPLETED"
-    
-    log "DEBUG" "Step 2/14: restore_user_backup"
-    restore_user_backup        # Restore user configs from backup (user: fast with timeout, wine: deferred to first login)
-    log "DEBUG" "Step 2/14: restore_user_backup COMPLETED"
-    
-    log "DEBUG" "Step 3/14: customize_wifi"
-    customize_wifi
-    log "DEBUG" "Step 3/14: customize_wifi COMPLETED"
-    
-    log "DEBUG" "Step 4/14: customize_desktop"
-    customize_desktop
-    log "DEBUG" "Step 4/14: customize_desktop COMPLETED"
-    
-    log "DEBUG" "Step 4a/14: update_release_info"
-    update_release_info
-    log "DEBUG" "Step 4a/14: update_release_info COMPLETED"
-    
-    log "DEBUG" "Step 5/14: customize_aprs"
-    customize_aprs
-    log "DEBUG" "Step 5/14: customize_aprs COMPLETED"
-    
-    log "DEBUG" "Step 6/14: customize_radio_configs"
-    customize_radio_configs
-    log "DEBUG" "Step 6/14: customize_radio_configs COMPLETED"
-    
-    log "DEBUG" "Step 6a/14: integrate_etosaddons_features"
-    integrate_etosaddons_features
-    log "DEBUG" "Step 6a/14: integrate_etosaddons_features COMPLETED"
-    
-    log "DEBUG" "Step 7/14: customize_user_and_autologin"
-    customize_user_and_autologin
-    log "DEBUG" "Step 7/14: customize_user_and_autologin COMPLETED"
-    
-    log "DEBUG" "Step 8/14: customize_preseed"
-    customize_preseed
-    log "DEBUG" "Step 8/14: customize_preseed COMPLETED"
-    
 
+    # Point the shared lib/ modules at the unpacked squashfs. On a live system
+    # apply-to-live-system.sh sets ET_ROOT=/ instead; everything else is
+    # identical, which is the whole point of lib/.
+    #
+    # ET_BACKUP_DIR stays empty here: the squashfs is rebuilt from scratch every
+    # run, so backing up files inside it would be pointless.
+    export ET_ROOT="$SQUASHFS_DIR"
+    export ET_PREFIX="/opt/emcomm-tools"
+    export ET_BACKUP_DIR=""
+    export ET_DRY_RUN=0
+    export ADDONS_CACHE="${CACHE_DIR}/et-os-addons"
+    # So upstream installer output lands in the build log, not just the terminal.
+    export ET_ADDONS_LOG="$LOG_FILE"
+
+    # The lib/ modules read their settings from the environment, so secrets must
+    # be loaded before any of them run.
+    if [ -f "$SECRETS_FILE" ]; then
+        # shellcheck source=/dev/null
+        source "$SECRETS_FILE"
+        log "DEBUG" "Loaded settings from $SECRETS_FILE"
+    fi
+
+    # ------------------------------------------------------------------------
+    # Customization sequence. Each entry is "label|mode|function".
+    #
+    # Numbering is derived, not hand-written. The old sequence was labelled by
+    # hand and had drifted into "Step 15/14", two different "Step 15"s and a
+    # "Step 22/22" that was a no-op log line -- which made the build log
+    # actively misleading about where a failure happened.
+    #
+    # fatal       -- a non-zero return aborts the build. Use when shipping the
+    #                ISO without this step would produce a broken radio setup.
+    # best-effort -- a non-zero return is logged and the build continues. Use
+    #                for optional third-party apps whose upstream URLs rot.
+    # ------------------------------------------------------------------------
+    local -a STEPS=(
+        "hostname|fatal|customize_hostname"
+        "user backup restore|best-effort|restore_user_backup"
+        "wifi|best-effort|customize_wifi"
+        "desktop|best-effort|customize_desktop"
+        "release info|best-effort|update_release_info"
+        "timezone|best-effort|customize_timezone"
+        "APRS|fatal|customize_aprs"
+        "D578UVIII radio profiles|fatal|customize_radio_configs"
+        "D890UV Bluetooth TNC|best-effort|customize_anytone_d890_tnc"
+        "snapshot stock backup|best-effort|snapshot_stock_user_backup"
+        "et-os-addons|best-effort|integrate_etosaddons_wrapped"
+        # MUST run AFTER et-os-addons. build-hamlib-anytone.sh installs the
+        # CowboyPilot fork to --prefix=/usr/local, and because ETC symlinks
+        # /usr/local/include/hamlib into /opt/hamlib, `make install` writes
+        # THROUGH that symlink and replaces ETC's Hamlib 4.5 headers with
+        # Hamlib 5's. Hamlib 5 made struct rig_state opaque -- rig.h now only
+        # forward-declares it and exposes state_addr instead.
+        #
+        # et-os-addons builds QSSTV from source against libhamlib++-dev, and
+        # QSSTV's rig/rigcontrol.cpp reads rig->state directly. With the fork's
+        # headers in place that is 15+ errors and QSSTV never installs. Running
+        # the addons first lets it compile against stock 4.5.
+        #
+        # build-hamlib-anytone.sh's own header documents this hazard for Dire
+        # Wolf; the same trap applies to anything compiled afterwards.
+        "AnyTone Hamlib backend|fatal|install_hamlib_anytone"
+        "backup manifest|best-effort|customize_user_backup_manifest"
+        "user and autologin|fatal|customize_user_and_autologin"
+        "Pat Winlink|best-effort|customize_pat"
+        "Wikipedia tools|best-effort|setup_wikipedia_tools"
+        "wifi diagnostics|best-effort|setup_wifi_diagnostics"
+        "git config|best-effort|customize_git_config"
+        "active-radio guard|best-effort|setup_first_login_packages"
+        "additional apt packages|best-effort|customize_additional_packages"
+        "VS Code|fatal|install_vscode"
+        "CHIRP|fatal|install_chirp"
+        "GridTracker 2|best-effort|install_gridtracker"
+        "GitHub CLI|best-effort|install_gh"
+        "anytone-cps|best-effort|install_anytone_cps"
+        "VS Code workspace|best-effort|setup_vscode_workspace"
+        "embed cache files|best-effort|embed_cache_files"
+        "embed customizer scripts|best-effort|embed_customizer_scripts"
+        "build manifest|best-effort|create_build_manifest"
+    )
+
+    local total=${#STEPS[@]}
+    local n=0 entry label mode fn rc
+    for entry in "${STEPS[@]}"; do
+        n=$((n + 1))
+        IFS='|' read -r label mode fn <<< "$entry"
+
+        log "INFO" "[${n}/${total}] ${label}"
+        rc=0
+        "$fn" || rc=$?
+
+        if [ "$rc" -eq 0 ]; then
+            log "DEBUG" "[${n}/${total}] ${label} -- OK"
+            continue
+        fi
+
+        if [ "$mode" = "fatal" ]; then
+            log "ERROR" "[${n}/${total}] ${label} FAILED (rc=${rc}) -- aborting build."
+            log "ERROR" "  This step is required for a working radio setup."
+            log "ERROR" "  Full log: $LOG_FILE"
+            return 1
+        fi
+
+        log "WARN" "[${n}/${total}] ${label} failed (rc=${rc}) -- continuing."
+        FAILED_OPTIONAL_STEPS+=("$label")
+    done
+
+    if [ ${#FAILED_OPTIONAL_STEPS[@]} -gt 0 ]; then
+        log "WARN" "Optional steps that did not complete: ${FAILED_OPTIONAL_STEPS[*]}"
+        log "WARN" "The ISO is usable; these are non-essential extras."
+    fi
     
-    log "DEBUG" "Step 10/14: customize_pat"
-    customize_pat
-    log "DEBUG" "Step 10/14: customize_pat COMPLETED"
-    
-    log "DEBUG" "Step 11/14: setup_wikipedia_tools"
-    setup_wikipedia_tools
-    log "DEBUG" "Step 11/14: setup_wikipedia_tools COMPLETED"
-    
-    log "DEBUG" "Step 12/14: setup_wifi_diagnostics"
-    setup_wifi_diagnostics
-    log "DEBUG" "Step 12/14: setup_wifi_diagnostics COMPLETED"
-    
-    log "DEBUG" "Step 13/14: customize_git_config"
-    customize_git_config
-    log "DEBUG" "Step 13/14: customize_git_config COMPLETED"
-    
-    log "DEBUG" "Step 13a/14: setup_first_login_packages"
-    setup_first_login_packages
-    log "DEBUG" "Step 13a/14: setup_first_login_packages COMPLETED"
-    
-    log "DEBUG" "Step 14/14: setup_vscode_workspace"
-    setup_vscode_workspace
-    log "DEBUG" "Step 14/14: setup_vscode_workspace COMPLETED"
-    
-    log "DEBUG" "Step 15/14: customize_additional_packages"
-    customize_additional_packages
-    log "DEBUG" "Step 15/14: customize_additional_packages COMPLETED"
-    
-    log "DEBUG" "Step 15/19: install_gridtracker"
-    setup_chroot_mounts
-    trap 'cleanup_chroot_mounts' EXIT
-    install_gridtracker
-    cleanup_chroot_mounts
-    trap - EXIT
-    log "DEBUG" "Step 15/19: install_gridtracker COMPLETED"
-    
-    log "DEBUG" "Step 16/19: install_wsjtx_improved"
-    setup_chroot_mounts
-    trap 'cleanup_chroot_mounts' EXIT
-    install_wsjtx_improved
-    cleanup_chroot_mounts
-    trap - EXIT
-    log "DEBUG" "Step 16/19: install_wsjtx_improved COMPLETED"
-    
-    log "DEBUG" "Step 17/19: install_qsstv"
-    setup_chroot_mounts
-    trap 'cleanup_chroot_mounts' EXIT
-    install_qsstv
-    cleanup_chroot_mounts
-    trap - EXIT
-    log "DEBUG" "Step 17/19: install_qsstv COMPLETED"
-    
-    log "DEBUG" "Step 18/19: install_xygrib_and_kiwix"
-    setup_chroot_mounts
-    trap 'cleanup_chroot_mounts' EXIT
-    install_xygrib
-    install_kiwix
-    cleanup_chroot_mounts
-    trap - EXIT
-    log "DEBUG" "Step 18/19: install_xygrib_and_kiwix COMPLETED"
-    
-    log "DEBUG" "Step 19/19: embed_cache_files"
-    embed_cache_files
-    log "DEBUG" "Step 19/19: embed_cache_files COMPLETED"
-    
-    log "DEBUG" "Step 20/22: create_build_manifest"
-    create_build_manifest
-    log "DEBUG" "Step 20/22: create_build_manifest COMPLETED"
-    
-    log "DEBUG" "Step 21/22: update_grub_for_preseed"
-    update_grub_for_preseed
-    log "DEBUG" "Step 21/22: update_grub_for_preseed COMPLETED"
-    
-    log "DEBUG" "Step 22/22: Final cleanup"
-    log "DEBUG" "Step 22/22: Final cleanup COMPLETED"
-    
-    # VERIFY all customizations before ISO creation
-    verify_customizations
-    
+    # create_build_manifest now runs as the last entry in STEPS above.
+
+    # VERIFY all customizations before spending 20-40 minutes on the squashfs.
+    # Mounts are needed because the Hamlib check execs rigctl inside the chroot.
+    # A non-zero return aborts here, deliberately -- see verify_customizations.
+    if ! _with_chroot_mounts verify_customizations; then
+        log "ERROR" "Verification failed -- no ISO was built."
+        log "INFO"  "The unpacked squashfs is preserved at ${SQUASHFS_DIR} for inspection."
+        exit 1
+    fi
+
     # Rebuild ISO
     log "INFO" ""
     log "INFO" "=== Rebuilding ISO ==="
@@ -5212,21 +4063,12 @@ main() {
         exit 1
     fi
     
-    # Generate Ventoy configuration files (optional - only needed if using Ventoy)
-    # When booting via dd-written USB, the ISO's grub.cfg works correctly.
-    # Ventoy ignores ISO boot parameters, so it needs separate config files.
+    # Generate Ventoy helper files (optional - only useful with Ventoy)
     generate_ventoy_config
     
-    # Write to USB if --write-to specified (recommended method)
-    if [[ -n "$WRITE_TO_USB" ]]; then
-        log "INFO" ""
-        log "INFO" "=== Writing ISO to USB Device ==="
-        if ! write_to_usb "$WRITE_TO_USB" "$OUTPUT_ISO"; then
-            log "ERROR" "USB write failed"
-            exit 1
-        fi
-    # Copy to Ventoy if --ventoy specified (alternative method)
-    elif [[ -n "$VENTOY_MOUNT" ]]; then
+    # Copy to Ventoy if --ventoy specified (a plain file copy -- this script
+    # never writes to a block device; see CHANGELOG for why dd was removed)
+    if [[ -n "$VENTOY_MOUNT" ]]; then
         log "INFO" ""
         log "INFO" "=== Copying to Ventoy USB ==="
         if ! copy_to_ventoy "$VENTOY_MOUNT" "$OUTPUT_ISO"; then
@@ -5246,29 +4088,29 @@ main() {
     echo ""
     log "SUCCESS" "Custom ISO: $OUTPUT_ISO"
     
-    # Show appropriate next steps based on what was done
-    if [[ -n "$WRITE_TO_USB" ]]; then
-        log "INFO" "USB device ready at: $WRITE_TO_USB"
-    elif [[ -n "$VENTOY_MOUNT" ]]; then
+    # Next steps. This script deliberately does not write to any block device.
+    if [[ -n "$VENTOY_MOUNT" ]]; then
         log "SUCCESS" "Copied to Ventoy at: $VENTOY_MOUNT"
     else
-        # No USB write requested - show manual instructions
         log "INFO" ""
-        log "INFO" "=== Next Steps: Write ISO to USB ==="
+        log "INFO" "=== Next Steps: Put the ISO on a USB stick ==="
         log "INFO" ""
-        log "INFO" "OPTION 1 - Write directly (recommended):"
-        log "INFO" "  # Find your USB device (BE CAREFUL - this erases the drive!)"
-        log "INFO" "  lsblk"
+        log "INFO" "Use whichever tool you trust. Ventoy is the safest -- it is a"
+        log "INFO" "plain file copy onto an already-prepared stick, so there is no"
+        log "INFO" "device path to get wrong:"
+        log "INFO" "  ${OUTPUT_DIR}/copy-to-ventoy.sh /media/\$USER/Ventoy"
         log "INFO" ""
-        log "INFO" "  # Write ISO to USB (replace sdX with your device)"
+        log "INFO" "Or use a GUI writer (balenaEtcher, GNOME Disks, Rufus), which"
+        log "INFO" "shows you the target drive by name and size before writing."
+        log "INFO" ""
+        log "INFO" "If you use dd, run it yourself and check the device twice:"
+        log "INFO" "  lsblk -o NAME,SIZE,MODEL,TRAN,MOUNTPOINT"
         log "INFO" "  sudo dd if=\"$OUTPUT_ISO\" of=/dev/sdX bs=4M status=progress conv=fsync"
         log "INFO" ""
-        log "INFO" "  # Safely eject"
-        log "INFO" "  sudo eject /dev/sdX"
-        log "INFO" ""
-        log "INFO" "OPTION 2 - Use Ventoy (requires extra config):"
-        log "INFO" "  Ventoy ignores ISO boot params, so use the copy script:"
-        log "INFO" "  ${OUTPUT_DIR}/copy-to-ventoy.sh /media/\$USER/Ventoy"
+        log "INFO" "=== Installing ==="
+        log "INFO" "Boot the stick and run the normal Ubuntu/ETC installer walkthrough."
+        log "INFO" "You choose the disk and partition layout yourself -- this ISO ships"
+        log "INFO" "no preseed and no automated partitioning."
     fi
     log "INFO" ""
     log "INFO" "Build log: $LOG_FILE"
@@ -5318,17 +4160,12 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --write-to)
-            # Check if next arg is a device path or another option/missing
-            if [[ $# -ge 2 ]] && [[ "${2:-}" != -* ]]; then
-                WRITE_TO_USB="$2"
-                log "INFO" "ISO will be written to USB device: $WRITE_TO_USB"
-                shift 2
-            else
-                # No device specified - will auto-detect after build
-                WRITE_TO_USB="auto"
-                log "INFO" "ISO will be written to USB (device auto-detect after build)"
-                shift
-            fi
+            echo "ERROR: --write-to was removed in v2.0.0." >&2
+            echo "" >&2
+            echo "It dd'd the ISO to a block device, and used bare it auto-detected" >&2
+            echo "which device to write. Write the ISO yourself with Ventoy, a GUI" >&2
+            echo "writer, or your own dd -- see the end of the build output." >&2
+            exit 1
             ;;
         --ventoy)
             VENTOY_MOUNT="${2:-}"
