@@ -417,7 +417,7 @@ GRID_SQUARE="CN87"             # Maidenhead grid locator
 
 # === User Account ===
 USER_USERNAME=""                # Linux username (defaults to lowercase CALLSIGN)
-USER_PASSWORD=""                # Password (leave blank to keep ETC default)
+USER_PASSWORD=""                # Ignored: the installer sets your password
 ENABLE_AUTOLOGIN="no"          # "yes" or "no" - default is NO (password prompt)
 
 # === System ===
