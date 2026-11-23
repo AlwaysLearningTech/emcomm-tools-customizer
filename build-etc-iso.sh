@@ -2130,6 +2130,70 @@ install_gh() {
     return 0
 }
 
+install_gridtracker() {
+    if [ "${ENABLE_GRIDTRACKER:-no}" != "yes" ]; then
+        log "DEBUG" "ENABLE_GRIDTRACKER=no -- skipping GridTracker"
+        return 0
+    fi
+
+    log "INFO" "Installing GridTracker 2 from .deb..."
+
+    # LOCAL FILE ONLY, by design. There is no URL to fall back to.
+    #
+    # GridTracker deprecated its Fedora COPR, Arch AUR and Debian repos for v2
+    # and publishes no stable "latest" download path. v2 ships a built-in
+    # updater that fetches a new .deb and upgrades through dpkg itself, so
+    # upstream's model is: download once by hand, let the app maintain itself.
+    #
+    # That is why et-os-addons' install-gridtracker.sh fails -- it pins
+    # GridTracker2-2.260416.1-amd64.deb, which now 404s. Any URL we substituted
+    # would rot the same way, so ENABLE_ETOSADDONS_GRIDTRACKER stays off and we
+    # install the file the operator downloaded instead.
+    #
+    # Baking in one version is fine and expected: GridTracker will offer to
+    # update itself on the installed system.
+    local deb_src="${GRIDTRACKER_DEB:-}"
+
+    if [ -z "$deb_src" ]; then
+        log "WARN" "ENABLE_GRIDTRACKER=yes but GRIDTRACKER_DEB is not set"
+        log "WARN" "  Download it from gridtracker.org and point GRIDTRACKER_DEB at the .deb"
+        return 1
+    fi
+
+    if [ ! -f "$deb_src" ]; then
+        log "WARN" "GRIDTRACKER_DEB not found: $deb_src"
+        return 1
+    fi
+
+    local staged="${SQUASHFS_DIR}/tmp/gridtracker.deb"
+    cp "$deb_src" "$staged" || { log "WARN" "Could not stage $deb_src"; return 1; }
+
+    setup_chroot_mounts
+    trap 'cleanup_chroot_mounts' EXIT
+
+    local rc=0
+    chroot "${SQUASHFS_DIR}" /bin/bash -c '
+        set -o pipefail
+        export DEBIAN_FRONTEND=noninteractive
+        dpkg -i /tmp/gridtracker.deb || apt-get install -y -f
+        dpkg-query -W gridtracker2 >/dev/null
+    ' >> "$LOG_FILE" 2>&1 || rc=$?
+
+    rm -f "$staged"
+    cleanup_chroot_mounts
+    trap - EXIT
+
+    if [ "$rc" -ne 0 ]; then
+        log "WARN" "GridTracker install failed (rc=$rc) -- continuing"
+        return 1
+    fi
+
+    local ver
+    ver=$(chroot "${SQUASHFS_DIR}" dpkg-query -W -f='${Version}' gridtracker2 2>/dev/null || echo unknown)
+    log "SUCCESS" "GridTracker 2 installed (version ${ver})"
+    return 0
+}
+
 install_chirp() {
     if [ "${ENABLE_CHIRP:-yes}" != "yes" ]; then
         log "DEBUG" "ENABLE_CHIRP=no -- skipping CHIRP"
@@ -3833,6 +3897,7 @@ main() {
         "additional apt packages|best-effort|customize_additional_packages"
         "VS Code|fatal|install_vscode"
         "CHIRP|fatal|install_chirp"
+        "GridTracker 2|best-effort|install_gridtracker"
         "GitHub CLI|best-effort|install_gh"
         "anytone-cps|best-effort|install_anytone_cps"
         "VS Code workspace|best-effort|setup_vscode_workspace"
