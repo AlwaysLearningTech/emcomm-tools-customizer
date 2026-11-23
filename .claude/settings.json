@@ -42,7 +42,9 @@
       "Read(//home/david/.config/Code/User/globalStorage/github.vscode-pull-request-github/**)",
       "Read(//home/david/.config/Code/User/globalStorage/**)",
       "Bash(awk '{print $5, $9}')",
-      "Read(//home/david/.local/share/keyrings/**)"
+      "Read(//home/david/.local/share/keyrings/**)",
+      "Bash(sudo -n true)",
+      "Bash(exit 1)"
     ],
     "deny": [
       "Bash(dd *)",

@@ -149,10 +149,28 @@ _addons_run() {
 
     # stdin from /dev/null: an unexpected apt or unzip prompt must fail rather
     # than block a two-hour unattended build waiting on a terminal.
-    if [ "$ET_ROOT" = "/" ]; then
-        bash -c "$env_prefix" </dev/null
+    #
+    # Output goes to ET_ADDONS_LOG when the caller sets it. The first build
+    # shipped without this and every installer's output went to the terminal
+    # only -- so when QSSTV and GridTracker failed, the log held nothing but
+    # "failed (rc=N)" and the causes had to be reconstructed from outside.
+    local log_to="${ET_ADDONS_LOG:-/dev/null}"
+    if [ "$log_to" = "/dev/null" ]; then
+        # No log configured (live path): let it reach the terminal.
+        if [ "$ET_ROOT" = "/" ]; then
+            bash -c "$env_prefix" </dev/null
+        else
+            chroot "$ET_ROOT" /bin/bash -c "$env_prefix" </dev/null
+        fi
     else
-        chroot "$ET_ROOT" /bin/bash -c "$env_prefix" </dev/null
+        {
+            echo "----- ${base} : $(date '+%F %T') -----"
+            if [ "$ET_ROOT" = "/" ]; then
+                bash -c "$env_prefix" </dev/null 2>&1
+            else
+                chroot "$ET_ROOT" /bin/bash -c "$env_prefix" </dev/null 2>&1
+            fi
+        } >> "$log_to"
     fi
 }
 

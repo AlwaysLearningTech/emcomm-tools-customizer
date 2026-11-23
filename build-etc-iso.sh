@@ -1103,11 +1103,21 @@ restore_user_backup() {
 
         # Intersect the allowlist with what the archive actually holds: tar
         # errors out on a member that is not present.
+        #
+        # The prefix group is (\./)? -- an OPTIONAL "./", since tar may or may
+        # not prefix members with it. It must NOT be `\./?`, which means a
+        # LITERAL dot followed by an optional slash: every path in this list
+        # already starts with a dot (.config, .local), so that pattern demanded
+        # "./.config" or "..config" and matched nothing at all. The first build
+        # skipped the entire skel restore because of it.
+        #
+        # Dots in the path are escaped so ".config" cannot match "Xconfig".
         local -a present=()
-        local listing p
+        local listing p esc
         listing=$(tar tzf "$user_backup" 2>/dev/null)
         for p in "${skel_paths[@]}"; do
-            if grep -qE "^\./?${p}(/|$)" <<< "$listing"; then
+            esc=$(sed 's/[.[\*^$]/\\&/g' <<< "$p")
+            if grep -qE "^(\./)?${esc}(/|\$)" <<< "$listing"; then
                 present+=("$p")
             fi
         done
@@ -2204,6 +2214,18 @@ install_anytone_cps() {
     # ISO -- we warn and continue, because the radio still works for CAT and
     # packet without its programming software. Every other install in this
     # section is fatal; this one is deliberately not.
+    #
+    # It needs Qt6, not Qt5. The 7.0.2-1 build installed qtbase5-dev and friends
+    # and failed at configure with
+    #   "Could not find a package configuration file provided by Qt6"
+    # Its CMakeLists require Qt6 COMPONENTS Core Gui Widgets SerialPort
+    # Multimedia; every one is packaged in kinetic universe, at 6.3.1.
+    #
+    # Note the Qt6 serial port dev package is libqt6serialport6-dev, NOT
+    # qt6-serialport-dev, which does not exist in this release.
+    #
+    # Residual risk: kinetic's Qt6 is 6.3.1 from 2022. If upstream moves to a
+    # newer Qt6 API this will fail again -- hence still best-effort.
 
     setup_chroot_mounts
     trap 'cleanup_chroot_mounts' EXIT
@@ -2212,8 +2234,9 @@ install_anytone_cps() {
     chroot "${SQUASHFS_DIR}" /bin/bash -c '
         set -euo pipefail
         export DEBIAN_FRONTEND=noninteractive
-        apt-get install -y -qq git cmake build-essential \
-            qtbase5-dev qttools5-dev-tools libqt5serialport5-dev pkg-config
+        apt-get install -y -qq git cmake build-essential pkg-config \
+            qt6-base-dev qt6-tools-dev qt6-tools-dev-tools \
+            libqt6serialport6-dev qt6-multimedia-dev
         rm -rf /usr/local/src/anytone-cps
         git clone --depth 1 https://github.com/xbenkozx/anytone-cps.git \
             /usr/local/src/anytone-cps
@@ -3763,6 +3786,8 @@ main() {
     export ET_BACKUP_DIR=""
     export ET_DRY_RUN=0
     export ADDONS_CACHE="${CACHE_DIR}/et-os-addons"
+    # So upstream installer output lands in the build log, not just the terminal.
+    export ET_ADDONS_LOG="$LOG_FILE"
 
     # The lib/ modules read their settings from the environment, so secrets must
     # be loaded before any of them run.
