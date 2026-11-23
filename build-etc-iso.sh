@@ -1738,7 +1738,7 @@ customize_additional_packages() {
     # user preference, so they are no longer read from secrets.env.
     #
     # NOTE: "code" is deliberately NOT in this list. Ubuntu 22.10 has no 'code'
-    # package, and this function removes the Microsoft repos a few lines below,
+    # package, and this function removes the Microsoft Edge repos a few lines below,
     # so apt can never satisfy it -- the old `apt-get install code` here failed
     # on every single build and the failure was swallowed by the `|| log WARN`
     # on the install line. VS Code is installed from a .deb by install_vscode().
@@ -1945,42 +1945,40 @@ install_vscode() {
 
     log "INFO" "Installing Visual Studio Code from .deb..."
 
-    # Ubuntu 22.10 has no 'code' package and this build removes the Microsoft
-    # apt repos, so a .deb is the only way in. Prefer a local file (the user
-    # usually already has one) and fall back to downloading the current stable.
-    local deb_src="${VSCODE_DEB:-}"
+    # Ubuntu 22.10 has no 'code' package, so the first install has to be a
+    # .deb. After that, updates come through apt: the .deb's postinst adds
+    # Microsoft's VS Code repo (/etc/apt/sources.list.d/vscode.sources), and
+    # customize_additional_packages() removes only the EDGE repos, not this.
+    #
+    # Order: download the current stable, then VSCODE_DEB, then the newest
+    # copy in cache/ (which can come from the ISO's embedded cache). The
+    # download used to come LAST, after VSCODE_DEB: a .deb left in ~/Downloads
+    # months ago won every time, and the installed system opened with VS
+    # Code asking to update itself.
     local staged="${SQUASHFS_DIR}/tmp/code.deb"
-
-    # Order: VSCODE_DEB, then the current download, then the newest copy in
-    # cache/ (which came from a previous build, possibly via the embedded
-    # cache) as an offline fallback.
-    if [ -n "$deb_src" ] && [ -f "$deb_src" ]; then
-        log "INFO" "  Using local .deb: $deb_src"
+    local url="https://update.code.visualstudio.com/latest/linux-deb-x64/stable"
+    local deb_src=""
+    log "INFO" "  Downloading the current VS Code from $url"
+    if wget -q --timeout=60 --tries=3 -O "$staged" "$url"; then
+        local v
+        v=$(dpkg-deb -f "$staged" Version 2>/dev/null || echo latest)
+        log "INFO" "  Downloaded VS Code ${v}"
+        mkdir -p "$CACHE_DIR"
+        cp "$staged" "${CACHE_DIR}/code_${v}_amd64.deb" 2>/dev/null || true
+    else
+        rm -f "$staged"
+        if [ -n "${VSCODE_DEB:-}" ] && [ -f "${VSCODE_DEB}" ]; then
+            deb_src="$VSCODE_DEB"
+        else
+            deb_src=$(newest_cached 'code_*_amd64.deb')
+        fi
+        if [ -z "$deb_src" ]; then
+            log "ERROR" "VS Code download failed, and no VSCODE_DEB or cached code_*.deb"
+            return 1
+        fi
+        log "WARN" "VS Code download failed -- using $(basename "$deb_src"); it will offer to update"
         cp "$deb_src" "$staged" || { log "ERROR" "Could not stage $deb_src"; return 1; }
         cache_installer_deb "$deb_src"
-    else
-        if [ -n "$deb_src" ]; then
-            log "WARN" "VSCODE_DEB set but not found: $deb_src -- falling back to download"
-        fi
-        local url="https://update.code.visualstudio.com/latest/linux-deb-x64/stable"
-        log "INFO" "  Downloading VS Code from $url"
-        if wget -q --timeout=60 --tries=3 -O "$staged" "$url"; then
-            # Name it the way Microsoft does, so newest_cached sorts sanely.
-            local v
-            v=$(dpkg-deb -f "$staged" Version 2>/dev/null || echo latest)
-            mkdir -p "$CACHE_DIR"
-            cp "$staged" "${CACHE_DIR}/code_${v}_amd64.deb" 2>/dev/null || true
-        else
-            rm -f "$staged"
-            local cached; cached=$(newest_cached 'code_*_amd64.deb')
-            if [ -n "$cached" ]; then
-                log "WARN" "VS Code download failed -- using cached $(basename "$cached")"
-                cp "$cached" "$staged" || { log "ERROR" "Could not stage $cached"; return 1; }
-            else
-                log "ERROR" "VS Code download failed and no cached code_*.deb in ${CACHE_DIR}"
-                return 1
-            fi
-        fi
     fi
 
     setup_chroot_mounts
@@ -3818,6 +3816,24 @@ cleanup_work_dir() {
 # Main
 # ============================================================================
 
+# A system installed from a non-minimal ISO carries the Ubuntu ISO, the ETC
+# tarball and the installer .debs in /opt/emcomm-customizer-cache. Link them
+# into cache/ so a rebuild there downloads nothing -- GridTracker in
+# particular has no URL to download from. Automatic, not a post-install step:
+# a build with an empty cache/ on such a system should just work.
+seed_cache_from_embedded() {
+    local src=/opt/emcomm-customizer-cache f n=0
+    [ -d "$src" ] || return 0
+    mkdir -p "$CACHE_DIR"
+    for f in "$src"/*.iso "$src"/*.tar.gz "$src"/*.deb; do
+        [ -f "$f" ] || continue
+        [ -e "${CACHE_DIR}/$(basename "$f")" ] && continue
+        ln -s "$f" "${CACHE_DIR}/" && n=$((n + 1))
+    done
+    [ "$n" -gt 0 ] && log "INFO" "Reusing ${n} file(s) from ${src} (linked into ${CACHE_DIR})"
+    return 0
+}
+
 main() {
     echo ""
     echo "╔══════════════════════════════════════════════════════════════╗"
@@ -3833,6 +3849,8 @@ main() {
     if ! check_prerequisites; then
         exit 2
     fi
+
+    seed_cache_from_embedded
     
     # Capture fresh user backup from running system BEFORE build
     log "INFO" "Capturing fresh user backup from running system..."

@@ -21,7 +21,6 @@
 #   ./post-install.sh --restore       # restore user backup into $HOME
 #   ./post-install.sh --restore-wine  # also restore the Wine/VARA prefix
 #   ./post-install.sh --chirp         # install CHIRP
-#   ./post-install.sh --link-cache    # point the repo's cache/ at the ISO's embedded cache
 #   ./post-install.sh --all           # everything except the Wine restore
 #   ./post-install.sh --everything    # everything, including the Wine restore
 #   ./post-install.sh --help
@@ -269,46 +268,6 @@ install_chirp() {
 }
 
 # ============================================================================
-# Build cache: reuse what the ISO embedded
-# ============================================================================
-# A non-minimal ISO carries the Ubuntu ISO, the ETC tarball and the installer
-# .debs (VS Code, GridTracker) in /opt/emcomm-customizer-cache, so this system
-# can build its own next ISO without downloading 4GB -- and GridTracker has no
-# download URL at all. build-etc-iso.sh reads them from the repo's cache/, so
-# symlink them there rather than copying gigabytes.
-#
-# The VS Code keyring setting is NOT here: the ISO build seeds
-# /etc/skel/.vscode/argv.json, so every installed account already has it.
-link_embedded_cache() {
-    log_info "=== Linking the embedded build cache ==="
-    local src=/opt/emcomm-customizer-cache dest="${SCRIPT_DIR}/cache"
-    if [ ! -d "$src" ]; then
-        log_info "No embedded cache at $src (minimal build) -- nothing to link"
-        return 0
-    fi
-    if [ ! -w "$SCRIPT_DIR" ]; then
-        log_warn "${SCRIPT_DIR} is not writable (the copy under /opt is read-only)."
-        log_warn "  Clone the repo and run this from the clone to set up a build cache."
-        return 0
-    fi
-    mkdir -p "$dest"
-    local f n=0
-    for f in "$src"/*.iso "$src"/*.tar.gz "$src"/*.deb; do
-        [ -f "$f" ] || continue
-        if [ -e "$dest/$(basename "$f")" ]; then
-            log_info "  already present: $(basename "$f")"
-        else
-            ln -s "$f" "$dest/" && n=$((n + 1)) && log_info "  linked $(basename "$f")"
-        fi
-    done
-    log_success "Linked ${n} file(s) into ${dest}"
-    if [ -f "$src/secrets.env" ] && [ ! -e "${SCRIPT_DIR}/secrets.env" ]; then
-        log_info "This ISO's settings are in $src/secrets.env. To reuse them:"
-        log_info "  sudo install -o \$USER -m 600 $src/secrets.env ${SCRIPT_DIR}/secrets.env"
-    fi
-}
-
-# ============================================================================
 # Menu
 # ============================================================================
 show_menu() {
@@ -320,12 +279,11 @@ show_menu() {
     echo "  3) Restore user backup AND Wine/VARA prefix"
     echo "  4) Configure Python tools"
     echo "  5) Install CHIRP (skipped if the ISO already has it)"
-    echo "  6) Link the ISO's embedded files into cache/ (for the next build)"
-    echo "  7) Everything (1-6, including the Wine/VARA restore)"
-    echo "  8) Everything except the Wine/VARA restore"
-    echo "  9) Exit"
+    echo "  6) Everything (1-5, including the Wine/VARA restore)"
+    echo "  7) Everything except the Wine/VARA restore"
+    echo "  8) Exit"
     echo ""
-    read -r -p "Choose (1-9): " choice
+    read -r -p "Choose (1-8): " choice
 
     case "$choice" in
         1) verify_system || true ;;
@@ -333,10 +291,9 @@ show_menu() {
         3) RESTORE_WINE=1; restore_user_backup ;;
         4) install_python_tools ;;
         5) install_chirp ;;
-        6) link_embedded_cache ;;
-        7) RESTORE_WINE=1; run_all ;;
-        8) run_all ;;
-        9) log_info "Exiting"; exit 0 ;;
+        6) RESTORE_WINE=1; run_all ;;
+        7) run_all ;;
+        8) log_info "Exiting"; exit 0 ;;
         *) log_error "Invalid choice"; show_menu; return ;;
     esac
 
@@ -359,7 +316,6 @@ run_all() {
     restore_user_backup; echo
     install_python_tools; echo
     install_chirp; echo
-    link_embedded_cache; echo
     verify_system || true
 }
 
@@ -374,7 +330,6 @@ while [ $# -gt 0 ]; do
         --restore-wine) MODE=restore; RESTORE_WINE=1; shift ;;
         --python-tools) MODE=python; shift ;;
         --chirp)        MODE=chirp; shift ;;
-        --link-cache)   MODE=linkcache; shift ;;
         --all)          MODE=all; shift ;;
         --everything)   MODE=all; RESTORE_WINE=1; shift ;;
         -d|--dir)       BACKUP_DIRS=("$2"); shift 2 ;;
@@ -390,7 +345,6 @@ case "$MODE" in
     restore) restore_user_backup; exit $? ;;
     python)  install_python_tools; exit $? ;;
     chirp)   install_chirp; exit $? ;;
-    linkcache) link_embedded_cache; exit $? ;;
     all)     run_all ;;
     "")      show_menu ;;
 esac

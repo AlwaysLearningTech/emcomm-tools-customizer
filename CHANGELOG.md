@@ -46,8 +46,16 @@ so every account starts with it. No post-install step is needed.
 Both installed from a path in `~/Downloads` and kept no copy, so rebuilding on
 the installed system had neither (GridTracker has no download URL). Every
 installer .deb is now kept in `cache/` and embedded in the ISO; GridTracker
-falls back to the newest cached copy, and VS Code to a cached copy when the
-download fails.
+falls back to the newest cached copy.
+
+### Fixed — VS Code shipped out of date
+
+`VSCODE_DEB` took priority over the download, so a `.deb` left in
+`~/Downloads` won every build: the ISO shipped 1.132 while 1.147 was current,
+and VS Code opened asking to update. The download now comes first;
+`VSCODE_DEB` and the cache are offline fallbacks. Updates afterwards come from
+VS Code's own apt repo, which the build keeps (only Edge's repos are removed,
+despite a comment saying otherwise).
 
 ### Fixed — `ENABLE_AUTOLOGIN=yes` never did anything
 
@@ -66,8 +74,10 @@ The build searched only `$HOME` and `cache/` for backups. It now also searches
   (`git ls-files` only, so `secrets.env` cannot be included), so the installed
   system needs no clone to run `post-install.sh`.
 - `post-install.sh`: "Everything" menu option and `--everything`, which include
-  the Wine restore; `--link-cache` symlinks the ISO's embedded Ubuntu ISO, ETC
-  tarball and installer .debs into the repo's `cache/` for the next build.
+  the Wine restore.
+- The build links `/opt/emcomm-customizer-cache` (Ubuntu ISO, ETC tarball,
+  .debs) into `cache/` automatically, so a rebuild on an installed system
+  downloads nothing.
 - Verification reports VS Code, gh, CHIRP, gnome-keyring, the embedded cache
   and staged backups, and warns on two WiFi profiles for one SSID.
 - Build verification warns when gh, the embedded scripts or the staged backups

@@ -34,7 +34,6 @@ scripts are already at `/opt/emcomm-tools-customizer/` -- no clone needed:
 ./post-install.sh --restore        # restore etc-user-backup into $HOME
 ./post-install.sh --restore-wine   # also the Wine/VARA prefix
 ./post-install.sh --chirp          # install CHIRP (skipped if the ISO has it)
-./post-install.sh --link-cache     # reuse the ISO's embedded files for the next build
 ./post-install.sh --everything     # all of the above, Wine included
 ./post-install.sh                  # interactive menu
 ```
