@@ -3883,10 +3883,24 @@ main() {
         "timezone|best-effort|customize_timezone"
         "APRS|fatal|customize_aprs"
         "D578UVIII radio profiles|fatal|customize_radio_configs"
-        "AnyTone Hamlib backend|fatal|install_hamlib_anytone"
         "D890UV Bluetooth TNC|best-effort|customize_anytone_d890_tnc"
         "snapshot stock backup|best-effort|snapshot_stock_user_backup"
         "et-os-addons|best-effort|integrate_etosaddons_wrapped"
+        # MUST run AFTER et-os-addons. build-hamlib-anytone.sh installs the
+        # CowboyPilot fork to --prefix=/usr/local, and because ETC symlinks
+        # /usr/local/include/hamlib into /opt/hamlib, `make install` writes
+        # THROUGH that symlink and replaces ETC's Hamlib 4.5 headers with
+        # Hamlib 5's. Hamlib 5 made struct rig_state opaque -- rig.h now only
+        # forward-declares it and exposes state_addr instead.
+        #
+        # et-os-addons builds QSSTV from source against libhamlib++-dev, and
+        # QSSTV's rig/rigcontrol.cpp reads rig->state directly. With the fork's
+        # headers in place that is 15+ errors and QSSTV never installs. Running
+        # the addons first lets it compile against stock 4.5.
+        #
+        # build-hamlib-anytone.sh's own header documents this hazard for Dire
+        # Wolf; the same trap applies to anything compiled afterwards.
+        "AnyTone Hamlib backend|fatal|install_hamlib_anytone"
         "backup manifest|best-effort|customize_user_backup_manifest"
         "user and autologin|fatal|customize_user_and_autologin"
         "Pat Winlink|best-effort|customize_pat"
