@@ -618,107 +618,49 @@ The build automatically installs:
 - **VS Code** - editor
 - **Node.js & npm** - JavaScript development
 - **git** - version control
-- **CHIRP** - Radio programming software (installed via pipx with official wheel from https://archive.chirpmyradio.com/)
+- **CHIRP** - Radio programming software (built from `github.com/kk7ds/chirp` into `/opt/chirp-venv`)
 
 The apt package list is hardcoded in `customize_additional_packages()`; it is a build dependency set, not a preference.
 
-**Note on CHIRP**: Ubuntu 22.10 repos have outdated CHIRP packages. The build uses the official installation method (pipx with downloaded wheel) as documented at https://chirpmyradio.com/projects/chirp/wiki/ChirpOnLinux.
+**Note on CHIRP**: Ubuntu 22.10's CHIRP is from 2020, PyPI's `chirp` is an unrelated bioacoustics package, and archive.chirpmyradio.com refuses non-browser downloads, so the build installs from git. CHIRP does not support AnyTone DMR radios; use anytone-cps for those.
 
-### Automatic Backup Restoration
+### Backup Restoration
 
-**FULLY AUTOMATED DURING BUILD** ✅
+Backups are found automatically at build time and **staged** in the ISO; your
+home directory is restored on the installed system by `post-install.sh`.
 
-If you place backup files in the `cache/` directory before building, they are **automatically** restored during ISO customization with proper timeout handling:
+At build time, the newest `etc-user-backup-*.tar.gz` and
+`etc-wine-backup-*.tar.gz` are taken from your home directory or `cache/`:
 
-- `cache/etc-user-backup-*.tar.gz` → User configs extracted to ISO immediately (~30-60 seconds)
-  - Includes: `~/.config/emcomm-tools`, `~/.local/share`, documents, desktop settings
-  - Extracted directly into `/etc/skel` during build (applied to new users)
-  
-- `cache/etc-wine-backup-*.tar.gz` → Wine prefix auto-restored on **first login** (deferred from build)
-  - VARA registry and prefix data available immediately after first login
-  - Deferred to avoid hanging during ISO build (Wine prefix extraction is slow)
+- **ETC configuration only** (`.config/emcomm-tools`, `.local/share/emcomm-tools`,
+  `.local/share/pat`, Reticulum, Partyline) is extracted into `/etc/skel`, so the
+  account the installer creates starts with your callsign, grid and Pat setup.
+  Documents, message logs and other personal data are deliberately **not** put
+  in skel -- skel is copied into every account.
+- **Both full archives** are staged once at
+  `/opt/emcomm-customizer-cache/backups/`.
 
-**Automation Details:**
-
-- **User backup**: Uses `timeout 300 tar xzf ... --checkpoint=.1000 --checkpoint-action=dot`
-  - 300-second timeout prevents hangs on large backups (611MB+)
-  - Progress tracking shows extraction status (every 1000 files = one dot)
-  - Extracted during build (fast, doesn't block other customizations)
-
-- **Wine backup**: Copied to `~/.etc-backups/` during build
-  - `~/.etc-backups/00-restore-wine-backup.sh` auto-runs on first login
-  - Restores Wine prefix to `~/.wine32` from backup tarball
-  - Runs asynchronously (doesn't block desktop startup)
-
-**How to Use:**
-
-1. Create backups from existing ETC installation:
+On the installed system, run as yourself (not sudo):
 
 ```bash
-# On existing ETC system:
-et-user-backup                    # Creates cache/etc-user-backup-*.tar.gz
-
-# If you also want Wine/VARA settings:
-et-user-backup --wine            # Includes .wine32 (creates ~600MB backup)
-
-# Copy to your build machine's cache/
-scp user@etc-machine:cache/etc-*-backup*.tar.gz ./cache/
+/opt/emcomm-tools-customizer/post-install.sh --restore        # user backup
+/opt/emcomm-tools-customizer/post-install.sh --restore-wine   # also ~/.wine32 (asks first)
+/opt/emcomm-tools-customizer/post-install.sh --everything     # every task, Wine included
 ```
 
-2. Run build - backups are extracted automatically:
+The Wine restore overwrites `~/.wine32`, including VARA and its licence, so it
+is never automatic and always asks.
+
+ISOs built before 7.0.2-2 staged the archives in `~/.etc-backups/` instead and
+did not embed the scripts. Clone the repo on those systems; current
+`post-install.sh` searches `~/.etc-backups/` as well.
+
+**Restoring by hand:**
 
 ```bash
-./build-etc-iso.sh -r stable
-# User backup: extracts during build (watch for progress dots)
-# Wine backup: copied to ~/.etc-backups/, restores on first login
+tar xzf etc-user-backup-*.tar.gz -C ~/   # user config
+tar xzf etc-wine-backup-*.tar.gz -C ~/   # Wine prefix
 ```
-
-3. Boot the ISO - all user settings + Wine/VARA auto-restored
-
-**What Gets Restored:**
-
-From user backup:
-
-- `~/.config/emcomm-tools/` - ETC configuration (callsign, grid, user.json)
-- `~/.local/share/emcomm-tools/` - Maps, tilesets, application data
-- `~/.local/share/pat/` - Winlink Pat settings (mailbox passwords, aliases)
-- `~/.local/share/WSJT-X/` - WSJT-X settings and logs
-- `~/Documents/` - Your documents folder
-- `~/.navit/` - Navigation bookmarks and maps
-- `~/my-maps/` - Custom map data
-- `~/YAAC/` - YAAC configuration
-
-From Wine backup (optional):
-
-- `~/.wine32/` - Entire Wine 32-bit prefix (VARA HF/FM with installed licenses)
-
-**Technical Details:**
-
-- User backup extraction: Uses tar with `--checkpoint` for progress tracking
-- Timeout: 300 seconds (5 minutes) - if extraction takes longer, partial restore is used
-- Wine backup: Large file (500MB+) is NOT extracted during ISO build; instead it's copied to `~/.etc-backups/` and restored automatically on first user login
-- No blocking: Wine extraction deferred to first login avoids "hanging" during ISO build
-
-**Alternative: Manual Restoration (if backups not in cache/)**
-
-If you didn't place backups in the cache/ directory before building, you can restore manually after the OS boots:
-
-```bash
-# Copy backup to home directory
-cp /path/to/etc-user-backup-*.tar.gz ~
-
-# Restore user configuration only
-tar xzf ~/etc-user-backup-*.tar.gz -C ~/
-
-# Or restore with Wine prefix
-tar xzf ~/etc-user-backup-*.tar.gz -C ~/   # user config
-tar xzf ~/etc-wine-backup-*.tar.gz -C ~/   # Wine prefix
-```
-
-
-
-
-
 
 ### APRS Configuration (Automatic)
 

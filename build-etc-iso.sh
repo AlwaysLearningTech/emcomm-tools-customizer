@@ -1141,17 +1141,17 @@ restore_user_backup() {
             fi
         fi
 
-        # Stash the FULL archive for restoring personal data into a real home
-        # directory later, which `./post-install.sh --restore` does. Everything
+        # Stage the FULL archive for restoring personal data into a real home
+        # directory later, which `post-install.sh --restore` does. Everything
         # outside the allowlist above lives only here, never in skel.
-        local skel_backups="${SQUASHFS_DIR}/etc/skel/.etc-backups"
-        mkdir -p "$skel_backups"
-        if cp "$user_backup" "${skel_backups}/$(basename "$user_backup")"; then
-            log "SUCCESS" "Full backup staged for post-install restore into \$HOME"
-            log "INFO" "  On the installed system: ./post-install.sh --restore"
-        else
-            log "WARN" "Could not stage the full backup into /etc/skel/.etc-backups"
-        fi
+        #
+        # This used to go to /etc/skel/.etc-backups. Two things were wrong with
+        # that: post-install.sh never searched ~/.etc-backups, so it reported
+        # "No backup archives found" on every install; and skel is copied into
+        # EVERY new home, so the multi-GB Wine archive was duplicated per user.
+        # One root-owned copy under /opt, found by post-install.sh, fixes both.
+        stage_backup_archive "$user_backup" || \
+            log "WARN" "Could not stage the full backup into ${STAGED_BACKUP_DIR}"
 
         # Verify extraction
         if [ -d "$skel_dir/.config/emcomm-tools" ]; then
@@ -1165,45 +1165,37 @@ restore_user_backup() {
         fi
     fi
     
-    # Wine backup handling
-    # .wine32 is very large (500MB+) and should be restored post-install
-    # Create a restore script that will extract it automatically on first login
+    # Wine backup: staged once, restored on demand by
+    # `post-install.sh --restore-wine`. It overwrites ~/.wine32 (VARA and its
+    # licence), so it is never extracted automatically. The old first-login
+    # restore-wine.sh was never wired to anything and never ran.
     if [ -n "$wine_backup" ]; then
-        log "INFO" "Wine backup found - setting up automatic restoration..."
-        
-        # Copy the wine backup to /etc/skel for post-login restoration
-        local skel_backups="${SQUASHFS_DIR}/etc/skel/.etc-backups"
-        mkdir -p "$skel_backups"
-        
-        local wine_backup_dest="${skel_backups}/$(basename "$wine_backup")"
-        log "DEBUG" "Copying Wine backup to: $wine_backup_dest"
-        
-        # Copy with progress indication
-        cp -v "$wine_backup" "$wine_backup_dest" | tee -a "$LOG_FILE"
-        
-        # Create a one-time restore script
-        local restore_script="${SQUASHFS_DIR}/etc/skel/.config/emcomm-tools/restore-wine.sh"
-        mkdir -p "$(dirname "$restore_script")"
-        
-        cat > "$restore_script" <<'WINE_RESTORE'
-#!/bin/bash
-# Auto-restore Wine backup on first login (self-deleting)
-BACKUP_FILE="${HOME}/.etc-backups/$(basename "${1:-}")"
-if [ -f "$BACKUP_FILE" ]; then
-    echo "Restoring Wine/VARA configuration from backup..."
-    if tar xzf "$BACKUP_FILE" -C "$HOME"; then
-        echo "✓ Wine backup restored successfully"
-        rm -f "$BACKUP_FILE"
-        rm -f "$0"  # Self-delete
-    else
-        echo "✗ Failed to restore Wine backup"
+        if stage_backup_archive "$wine_backup"; then
+            log "INFO" "  On the installed system: post-install.sh --restore-wine"
+        else
+            log "WARN" "Could not stage the Wine backup into ${STAGED_BACKUP_DIR}"
+        fi
     fi
-fi
-WINE_RESTORE
-        chmod 755 "$restore_script"
-        
-        log "SUCCESS" "Wine backup will be restored automatically on first login"
+}
+
+# Where backups are staged inside the image. post-install.sh searches this.
+STAGED_BACKUP_DIR_REL="/opt/emcomm-customizer-cache/backups"
+
+stage_backup_archive() {
+    local src="$1"
+    STAGED_BACKUP_DIR="${SQUASHFS_DIR}${STAGED_BACKUP_DIR_REL}"
+    mkdir -p "$STAGED_BACKUP_DIR"
+    chmod 755 "$STAGED_BACKUP_DIR"
+    local dest="${STAGED_BACKUP_DIR}/$(basename "$src")"
+    if cp "$src" "$dest"; then
+        # Readable by the installed user, who is created later by the
+        # installer and so cannot own it here. See CLAUDE.md: a non-minimal
+        # ISO is already personal and not shareable.
+        chmod 644 "$dest"
+        log "SUCCESS" "Staged $(basename "$src") ($(du -h "$dest" | cut -f1)) at ${STAGED_BACKUP_DIR_REL}"
+        return 0
     fi
+    return 1
 }
 
 customize_hostname() {
@@ -3090,17 +3082,10 @@ embed_cache_files() {
         log "DEBUG" "No ETC tarball found in cache"
     fi
     
-    # Copy Wine backup if present
-    local wine_backup
-    wine_backup=$(find "$CACHE_DIR" -maxdepth 1 -name "etc-wine-backup*.tar.gz" -type f | sort -r | head -1)
-    if [ -n "$wine_backup" ] && [ -f "$wine_backup" ]; then
-        log "DEBUG" "Copying Wine backup to embedded cache..."
-        cp -v "$wine_backup" "$target_cache/"
-        log "SUCCESS" "Wine backup embedded"
-    else
-        log "DEBUG" "No Wine backup found in cache"
-    fi
-    
+    # The Wine backup is NOT copied here. restore_user_backup() already
+    # stages it under ${STAGED_BACKUP_DIR_REL}; copying it again doubled the
+    # largest file in the image.
+
     # Copy secrets.env for future builds
     if [ -f "$SECRETS_FILE" ]; then
         log "DEBUG" "Copying secrets.env to embedded cache..."
@@ -3130,7 +3115,7 @@ ETC Version: $RELEASE_TAG
 ETC Semver: ${VERSION:-unknown}  (this customizer targets ${ETC_TARGET_VERSION})
 Customizer: ${CUSTOMIZER_VERSION}
 Ubuntu ISO: $UBUNTU_ISO_FILE
-Git Revision: $(git -C "$SCRIPT_DIR" describe --tags --always --dirty 2>/dev/null || echo 'unknown')
+Git Revision: $(git -c "safe.directory=${SCRIPT_DIR}" -C "$SCRIPT_DIR" describe --tags --always --dirty 2>/dev/null || echo 'unknown')
 
 Configuration Summary:
 - Callsign: ${CALLSIGN:-N0CALL}
@@ -3190,6 +3175,40 @@ Build date: $(date +'%Y-%m-%d %H:%M:%S')
 EOF
     
     log "SUCCESS" "Cache files and build logs embedded (use -m for minimal build without cache)"
+}
+
+embed_customizer_scripts() {
+    # Ship this repository's tracked files in the image, so post-install.sh
+    # and apply-to-live-system.sh are on the installed system without cloning
+    # anything. Runs for minimal builds too: it is public code.
+    #
+    # Only `git ls-files` output is copied, so secrets.env, cache/, output/,
+    # logs/ and .work/ -- all gitignored -- can never be included.
+    local dest="${SQUASHFS_DIR}/opt/emcomm-tools-customizer"
+    # The build runs as root on a checkout the user owns; git >= 2.35.2
+    # refuses that ("dubious ownership") unless the directory is trusted.
+    local -a g=(git -c "safe.directory=${SCRIPT_DIR}" -C "$SCRIPT_DIR")
+    if ! "${g[@]}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        log "WARN" "${SCRIPT_DIR} is not a git checkout -- cannot tell tracked files from secrets; not embedding scripts"
+        return 1
+    fi
+    rm -rf "$dest"
+    mkdir -p "$dest"
+    if ! "${g[@]}" ls-files -z \
+         | (cd "$SCRIPT_DIR" && tar --null -T - -cf -) \
+         | tar -xf - -C "$dest"; then
+        log "ERROR" "Could not copy the customizer scripts into the image"
+        return 1
+    fi
+    if [ -e "${dest}/secrets.env" ]; then
+        rm -f "${dest}/secrets.env"
+        log "ERROR" "secrets.env is tracked by git -- removed from the image; untrack it: git rm --cached secrets.env"
+        return 1
+    fi
+    "${g[@]}" describe --tags --always --dirty > "${dest}/.customizer-revision" 2>/dev/null || true
+    chmod -R a+rX "$dest"
+    log "SUCCESS" "Customizer scripts embedded at /opt/emcomm-tools-customizer"
+    log "INFO" "  On the installed system: /opt/emcomm-tools-customizer/post-install.sh"
 }
 
 verify_customizations() {
@@ -3302,6 +3321,26 @@ verify_customizations() {
         else
             _vc_err "CHIRP NOT installed"
         fi
+    fi
+
+    # Best-effort steps, so warnings -- but say so at build time rather than
+    # leaving it to be discovered on the installed system.
+    if [ -x "${SQUASHFS_DIR}/usr/bin/gh" ]; then
+        _vc_ok "GitHub CLI installed"
+    else
+        _vc_warn "GitHub CLI (gh) NOT installed"
+    fi
+    if [ -x "${SQUASHFS_DIR}/opt/emcomm-tools-customizer/post-install.sh" ]; then
+        _vc_ok "Customizer scripts at /opt/emcomm-tools-customizer"
+    else
+        _vc_warn "Customizer scripts NOT embedded -- post-install.sh will need a clone"
+    fi
+    local staged
+    staged=$(find "${SQUASHFS_DIR}${STAGED_BACKUP_DIR_REL}" -maxdepth 1 -name 'etc-*-backup-*.tar.gz' 2>/dev/null | wc -l)
+    if [ "$staged" -gt 0 ]; then
+        _vc_ok "${staged} backup archive(s) staged at ${STAGED_BACKUP_DIR_REL}"
+    else
+        _vc_warn "No backup archives staged -- post-install.sh --restore will have nothing to restore"
     fi
 
     if [ "${ENABLE_ANYTONE_CPS:-yes}" = "yes" ]; then
@@ -3916,6 +3955,7 @@ main() {
         "anytone-cps|best-effort|install_anytone_cps"
         "VS Code workspace|best-effort|setup_vscode_workspace"
         "embed cache files|best-effort|embed_cache_files"
+        "embed customizer scripts|best-effort|embed_customizer_scripts"
         "build manifest|best-effort|create_build_manifest"
     )
 

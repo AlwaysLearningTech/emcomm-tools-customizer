@@ -21,7 +21,8 @@ sudo ./apply-to-live-system.sh --verify   # or
 
 ### Restoring your backups
 
-`post-install.sh` searches `$HOME` first, then the repo's `cache/`:
+`post-install.sh` takes the newest archive from `/opt/emcomm-customizer-cache/backups/`
+(where the ISO stages them), `$HOME`, `~/.etc-backups/` (older ISOs) and the repo's `cache/`:
 
 ```bash
 ./post-install.sh --restore        # user config only

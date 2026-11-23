@@ -21,13 +21,14 @@
 #   ./post-install.sh --restore       # restore user backup into $HOME
 #   ./post-install.sh --restore-wine  # also restore the Wine/VARA prefix
 #   ./post-install.sh --chirp         # install CHIRP
+#   ./post-install.sh --vscode        # fix VS Code's "OS keyring" warning
 #   ./post-install.sh --all           # everything except the Wine restore
+#   ./post-install.sh --everything    # everything, including the Wine restore
 #   ./post-install.sh --help
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VERSION="2.0.0"
 VERBOSE="${VERBOSE:-0}"
 
 ET_ROOT="/"
@@ -45,10 +46,20 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $*"; }
 log_warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
-# Backup search path. v1 used "$SCRIPT_DIR/../cache", which resolves OUTSIDE the
-# repository (…/github/cache) and so never found anything. Search $HOME first,
-# since that is where et-user-backup writes, then the repo's own cache/.
-BACKUP_DIRS=("$HOME" "${SCRIPT_DIR}/cache")
+# Backup search path, newest archive wins across all of them:
+#   /opt/emcomm-customizer-cache/backups  where the ISO build stages them
+#   $HOME                                 where et-user-backup writes
+#   $HOME/.etc-backups                    where ISOs before 7.0.2-2 staged them
+#                                         (via /etc/skel) -- and this script
+#                                         never looked, so restore always
+#                                         reported "No backup archives found"
+#   <repo>/cache                          a build machine's cache
+BACKUP_DIRS=(
+    "/opt/emcomm-customizer-cache/backups"
+    "$HOME"
+    "$HOME/.etc-backups"
+    "${SCRIPT_DIR}/cache"
+)
 RESTORE_WINE=0
 
 # ============================================================================
@@ -96,7 +107,9 @@ restore_user_backup() {
     wine_backup=$(find_backup 'etc-wine-backup-*.tar.gz')
 
     if [ -z "$user_backup" ] && [ -z "$wine_backup" ]; then
-        log_warn "No backup archives found"
+        log_warn "No backup archives found (looked for etc-user-backup-*.tar.gz"
+        log_warn "and etc-wine-backup-*.tar.gz in the directories above)."
+        log_warn "If you have one elsewhere: ./post-install.sh --restore -d /path/to/dir"
         return 0
     fi
 
@@ -140,7 +153,7 @@ restore_user_backup() {
             fi
         else
             log_info "Wine backup available (${size}): $(basename "$wine_backup")"
-            log_info "  Restore it with: ./post-install.sh --restore-wine"
+            log_info "  Restore it with: $0 --restore-wine"
         fi
     fi
 
@@ -180,6 +193,14 @@ install_chirp() {
     # Check for OUR venv, not just a `chirp` on PATH. A previous version of
     # this script installed PyPI's unrelated "chirp" package, so a bare
     # `command -v chirp` can succeed while CHIRP is not actually present.
+    # The ISO build installs CHIRP system-wide in /opt/chirp-venv, linked from
+    # /usr/local/bin/chirp. Earlier versions of this check only knew about the
+    # per-user venv, so on every installed ISO they warned about "a chirp not
+    # from this script" and built a second copy into $HOME.
+    if [ -x /opt/chirp-venv/bin/chirp ]; then
+        log_success "CHIRP already installed system-wide at /opt/chirp-venv (by the ISO build)"
+        return 0
+    fi
     if [ -x "${HOME}/.local/share/chirp-venv/bin/chirp" ]; then
         log_success "CHIRP already installed at ~/.local/share/chirp-venv"
         return 0
@@ -248,6 +269,48 @@ install_chirp() {
 }
 
 # ============================================================================
+# VS Code: "OS keyring couldn't be identified"
+# ============================================================================
+# VS Code picks its secret store by guessing the desktop from
+# XDG_CURRENT_DESKTOP. When the guess fails it warns that the OS keyring is
+# not available and falls back to weak storage, and signing in (GitHub,
+# Copilot, Settings Sync) does not persist. The documented fix is to name the
+# store explicitly in ~/.vscode/argv.json. gnome-keyring is part of the Ubuntu
+# desktop and ETC does not remove it, but check rather than assume.
+configure_vscode_keyring() {
+    log_info "=== Configuring VS Code keyring ==="
+    if ! command -v code >/dev/null 2>&1; then
+        log_info "VS Code not installed -- nothing to do"
+        return 0
+    fi
+    if ! command -v gnome-keyring-daemon >/dev/null 2>&1; then
+        log_error "gnome-keyring is not installed, so there is no keyring to use."
+        log_error "  sudo apt-get install gnome-keyring libsecret-1-0   -- then re-run this"
+        return 1
+    fi
+
+    local argv="$HOME/.vscode/argv.json"
+    mkdir -p "$HOME/.vscode"
+    if [ ! -f "$argv" ]; then
+        printf '{\n    "password-store": "gnome-libsecret"\n}\n' > "$argv"
+        log_success "Created $argv with password-store=gnome-libsecret"
+    elif grep -q '"password-store"' "$argv"; then
+        log_success "$argv already sets password-store: $(grep '"password-store"' "$argv" | tr -s ' ')"
+    else
+        # argv.json is JSONC (comments allowed), so a JSON parser would choke
+        # on VS Code's own file. Insert the key after the first opening brace.
+        cp "$argv" "${argv}.bak"
+        if sed -i '0,/{/s//{\n    "password-store": "gnome-libsecret",/' "$argv"; then
+            log_success "Added password-store=gnome-libsecret to $argv (backup: argv.json.bak)"
+        else
+            log_error "Could not edit $argv"; return 1
+        fi
+    fi
+    log_info "Fully quit VS Code (all windows) and start it again for this to apply."
+    log_info "If autologin is on, the keyring may ask for your login password once."
+}
+
+# ============================================================================
 # Menu
 # ============================================================================
 show_menu() {
@@ -258,11 +321,13 @@ show_menu() {
     echo "  2) Restore user backup into \$HOME"
     echo "  3) Restore user backup AND Wine/VARA prefix"
     echo "  4) Configure Python tools"
-    echo "  5) Install CHIRP"
-    echo "  6) Run 1, 2, 4 and 5"
-    echo "  7) Exit"
+    echo "  5) Install CHIRP (skipped if the ISO already has it)"
+    echo "  6) Fix VS Code keyring warning"
+    echo "  7) Everything (1-6, including the Wine/VARA restore)"
+    echo "  8) Everything except the Wine/VARA restore"
+    echo "  9) Exit"
     echo ""
-    read -r -p "Choose (1-7): " choice
+    read -r -p "Choose (1-9): " choice
 
     case "$choice" in
         1) verify_system || true ;;
@@ -270,9 +335,10 @@ show_menu() {
         3) RESTORE_WINE=1; restore_user_backup ;;
         4) install_python_tools ;;
         5) install_chirp ;;
-        6) verify_system || true; echo; restore_user_backup; echo
-           install_python_tools; echo; install_chirp ;;
-        7) log_info "Exiting"; exit 0 ;;
+        6) configure_vscode_keyring ;;
+        7) RESTORE_WINE=1; run_all ;;
+        8) run_all ;;
+        9) log_info "Exiting"; exit 0 ;;
         *) log_error "Invalid choice"; show_menu; return ;;
     esac
 
@@ -287,7 +353,17 @@ show_menu() {
     fi
 }
 
-show_help() { sed -n '3,25p' "$0"; }
+show_help() { sed -n '3,27p' "$0"; }
+
+# Every task, in order. Restore runs before verify so the verify output
+# reflects the restored configuration.
+run_all() {
+    restore_user_backup; echo
+    install_python_tools; echo
+    install_chirp; echo
+    configure_vscode_keyring; echo
+    verify_system || true
+}
 
 # ============================================================================
 check_not_root
@@ -300,10 +376,12 @@ while [ $# -gt 0 ]; do
         --restore-wine) MODE=restore; RESTORE_WINE=1; shift ;;
         --python-tools) MODE=python; shift ;;
         --chirp)        MODE=chirp; shift ;;
+        --vscode)       MODE=vscode; shift ;;
         --all)          MODE=all; shift ;;
+        --everything)   MODE=all; RESTORE_WINE=1; shift ;;
         -d|--dir)       BACKUP_DIRS=("$2"); shift 2 ;;
         -v|--verbose)   VERBOSE=1; shift ;;
-        -V|--version)   echo "post-install.sh ${VERSION}"; exit 0 ;;
+        -V|--version)   echo "post-install.sh ${CUSTOMIZER_VERSION}"; exit 0 ;;
         -h|--help)      show_help; exit 0 ;;
         *) log_error "Unknown option: $1"; show_help; exit 1 ;;
     esac
@@ -314,11 +392,7 @@ case "$MODE" in
     restore) restore_user_backup; exit $? ;;
     python)  install_python_tools; exit $? ;;
     chirp)   install_chirp; exit $? ;;
-    all)
-        verify_system || true
-        echo; restore_user_backup
-        echo; install_python_tools
-        echo; install_chirp
-        exit $? ;;
+    vscode)  configure_vscode_keyring; exit $? ;;
+    all)     run_all ;;
     "")      show_menu ;;
 esac

@@ -24,7 +24,7 @@
 # model so currency is obvious. See CLAUDE.md.
 # ---------------------------------------------------------------------------
 ETC_TARGET_VERSION="7.0.2"
-CUSTOMIZER_REVISION="1"
+CUSTOMIZER_REVISION="2"
 CUSTOMIZER_VERSION="${ETC_TARGET_VERSION}-${CUSTOMIZER_REVISION}"
 
 ET_ROOT="${ET_ROOT:-/}"

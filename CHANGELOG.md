@@ -1,5 +1,43 @@
 # Changelog
 
+## 7.0.2-2 (ETC R7) — Backups that actually restore; scripts ship in the ISO
+
+### Fixed — `post-install.sh --restore` never found the staged backups
+
+The build staged both full archives in `/etc/skel/.etc-backups`, so they landed
+in `~/.etc-backups/` on the installed system. `post-install.sh` searched only
+`$HOME` (depth 1) and the repo's `cache/`, so every install reported
+"No backup archives found". Archives are now staged once at
+`/opt/emcomm-customizer-cache/backups/`, and `post-install.sh` searches that,
+`$HOME`, `~/.etc-backups/` (for ISOs built before this release) and `cache/`.
+
+### Fixed — the Wine backup was in the image twice
+
+`restore_user_backup()` copied it into skel and `embed_cache_files()` copied it
+again into `/opt/emcomm-customizer-cache`. On the installed system the skel
+copy was then duplicated into every new home directory. It is now staged once.
+The first-login `restore-wine.sh` was never called by anything and is removed;
+the Wine restore stays manual, because it overwrites `~/.wine32` and VARA.
+
+### Fixed — `post-install.sh` built a second CHIRP
+
+The ISO installs CHIRP in `/opt/chirp-venv`; `install_chirp` only recognised
+the per-user venv, warned about "a chirp not from this script" and built
+another one. It now recognises the system install.
+
+### Added
+
+- The repo's tracked files are embedded at `/opt/emcomm-tools-customizer`
+  (`git ls-files` only, so `secrets.env` cannot be included), so the installed
+  system needs no clone to run `post-install.sh`.
+- `post-install.sh`: "Everything" menu option and `--everything`, which include
+  the Wine restore; `--vscode` sets `password-store` in `~/.vscode/argv.json`
+  for VS Code's "OS keyring couldn't be identified" warning.
+- Verification reports VS Code, gh, CHIRP, gnome-keyring, the embedded cache
+  and staged backups, and warns on two WiFi profiles for one SSID.
+- Build verification warns when gh, the embedded scripts or the staged backups
+  are missing.
+
 ## 7.0.2-1 (ETC R7) — Target ETC R7; fix the applications that were never installed
 
 Retargets the build at **EmComm Tools Community R7 (7.0.2)** and fixes a set of

@@ -205,6 +205,60 @@ verify_system() {
         _v_info "Cannot read $nmdir (needs root) -- skipping"
     fi
 
+    # Two profiles for one SSID. The ISO ships one profile per WIFI_SSID_* in
+    # secrets.env; choosing a network on the installer's WiFi page while
+    # running from the live USB makes NetworkManager add a SECOND profile for
+    # the same SSID ("Name 1"), which the installer then copies to disk.
+    # nmcli reads the SSID (not the PSK) without root.
+    if command -v nmcli >/dev/null 2>&1; then
+        local dups
+        dups=$(nmcli -t -f UUID,TYPE connection show 2>/dev/null \
+               | awk -F: '$2=="802-11-wireless"{print $1}' \
+               | while read -r u; do nmcli -g 802-11-wireless.ssid connection show "$u" 2>/dev/null; done \
+               | sort | uniq -d)
+        if [ -n "$dups" ]; then
+            _v_warn "More than one saved profile for: $(paste -sd, <<< "$dups") -- see: nmcli connection show"
+        fi
+    fi
+
+    # ---------------------------------------------------------- applications
+    _v_head "6b. Applications and embedded files"
+    command -v code >/dev/null 2>&1 && _v_pass "VS Code installed" \
+                                    || _v_warn "VS Code NOT installed"
+    if command -v gh >/dev/null 2>&1; then
+        _v_pass "GitHub CLI: $(gh --version 2>/dev/null | head -1)"
+    else
+        _v_warn "GitHub CLI (gh) NOT installed"
+    fi
+    if [ -x /opt/chirp-venv/bin/chirp ]; then
+        _v_pass "CHIRP installed system-wide (/opt/chirp-venv)"
+    elif [ -x "${VERIFY_USER_HOME:-$HOME}/.local/share/chirp-venv/bin/chirp" ]; then
+        _v_pass "CHIRP installed for this user (~/.local/share/chirp-venv)"
+    else
+        _v_warn "CHIRP NOT installed"
+    fi
+    command -v gnome-keyring-daemon >/dev/null 2>&1 \
+        && _v_pass "gnome-keyring installed" \
+        || _v_warn "gnome-keyring NOT installed -- VS Code cannot store sign-ins"
+
+    local cache=/opt/emcomm-customizer-cache
+    if [ -d "$cache" ]; then
+        _v_pass "Embedded cache: $cache ($(du -sh "$cache" 2>/dev/null | cut -f1))"
+        local f
+        for f in "$cache"/*.iso "$cache"/backups/*.tar.gz; do
+            [ -f "$f" ] && _v_info "  $(basename "$f") ($(du -h "$f" | cut -f1))"
+        done
+    else
+        _v_info "No embedded cache at $cache (minimal build, or built before it existed)"
+    fi
+    local old_stage="${VERIFY_USER_HOME:-$HOME}/.etc-backups"
+    if [ -d "$old_stage" ]; then
+        _v_info "Backups staged by an older ISO in $old_stage ($(du -sh "$old_stage" 2>/dev/null | cut -f1)) -- post-install.sh --restore reads them"
+    fi
+    [ -x /opt/emcomm-tools-customizer/post-install.sh ] \
+        && _v_pass "Customizer scripts at /opt/emcomm-tools-customizer" \
+        || _v_info "Customizer scripts not embedded (ISO built before 7.0.2-2)"
+
     # ---------------------------------------------------------------- addons
     _v_head "7. et-os-addons"
     local a present=0 missing=0

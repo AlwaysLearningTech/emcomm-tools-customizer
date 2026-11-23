@@ -26,13 +26,16 @@ reverse — everything else this script does is file-only and fully reversible.
 `~/.config/emcomm-tools/user.json` if ETC is already configured.
 
 Then the user-level half, **without sudo** (it writes to your home directory and
-will refuse to run as root):
+will refuse to run as root). On a system installed from one of these ISOs the
+scripts are already at `/opt/emcomm-tools-customizer/` -- no clone needed:
 
 ```bash
 ./post-install.sh --verify         # check everything
 ./post-install.sh --restore        # restore etc-user-backup into $HOME
 ./post-install.sh --restore-wine   # also the Wine/VARA prefix
-./post-install.sh --chirp          # install CHIRP
+./post-install.sh --chirp          # install CHIRP (skipped if the ISO has it)
+./post-install.sh --vscode         # fix VS Code's "OS keyring" warning
+./post-install.sh --everything     # all of the above, Wine included
 ./post-install.sh                  # interactive menu
 ```
 
