@@ -25,14 +25,49 @@ The ISO installs CHIRP in `/opt/chirp-venv`; `install_chirp` only recognised
 the per-user venv, warned about "a chirp not from this script" and built
 another one. It now recognises the system install.
 
+### Fixed — `secrets.env` was readable by every account
+
+`embed_cache_files()` copied it into `/opt/emcomm-customizer-cache` with the
+source's mode, which landed as 644 on the installed system: WiFi PSKs and the
+Winlink password, readable by any user. It is now root-owned, mode 600, and
+verification fails on an installed system where it is not. On a system from
+an earlier ISO: `sudo chmod 600 /opt/emcomm-customizer-cache/secrets.env`.
+
+### Fixed — VS Code signed out of GitHub/Copilot/Settings Sync
+
+VS Code guesses its secret store from the desktop session, and falls back to
+weak storage when the guess or the keyring fails. When the keyring later
+works, what it stored before is unreadable, which signs you out. The build now
+seeds `/etc/skel/.vscode/argv.json` with `"password-store": "gnome-libsecret"`,
+so every account starts with it. No post-install step is needed.
+
+### Fixed — VS Code and GridTracker .debs were lost on reinstall
+
+Both installed from a path in `~/Downloads` and kept no copy, so rebuilding on
+the installed system had neither (GridTracker has no download URL). Every
+installer .deb is now kept in `cache/` and embedded in the ISO; GridTracker
+falls back to the newest cached copy, and VS Code to a cached copy when the
+download fails.
+
+### Fixed — `ENABLE_AUTOLOGIN=yes` never did anything
+
+It wrote a LightDM config. ETC runs GDM and LightDM is not installed. It now
+sets `AutomaticLogin` in `/etc/gdm3/custom.conf`. Autologin leaves the GNOME
+keyring locked, so VS Code will ask to unlock it.
+
+### Fixed — a rebuild on an installed system missed the staged backups
+
+The build searched only `$HOME` and `cache/` for backups. It now also searches
+`~/.etc-backups` and `/opt/emcomm-customizer-cache/backups`.
+
 ### Added
 
 - The repo's tracked files are embedded at `/opt/emcomm-tools-customizer`
   (`git ls-files` only, so `secrets.env` cannot be included), so the installed
   system needs no clone to run `post-install.sh`.
 - `post-install.sh`: "Everything" menu option and `--everything`, which include
-  the Wine restore; `--vscode` sets `password-store` in `~/.vscode/argv.json`
-  for VS Code's "OS keyring couldn't be identified" warning.
+  the Wine restore; `--link-cache` symlinks the ISO's embedded Ubuntu ISO, ETC
+  tarball and installer .debs into the repo's `cache/` for the next build.
 - Verification reports VS Code, gh, CHIRP, gnome-keyring, the embedded cache
   and staged backups, and warns on two WiFi profiles for one SSID.
 - Build verification warns when gh, the embedded scripts or the staged backups

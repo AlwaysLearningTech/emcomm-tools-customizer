@@ -20,13 +20,13 @@ and nothing in this repo may write to a block device.
 ## Versioning
 
 This project tracks ETC rather than numbering itself independently. The version
-is `<ETC semver we target>-<our revision>`, set at the top of
-`build-etc-iso.sh`:
+is `<ETC semver we target>-<our revision>`, set in
+`lib/common.sh`:
 
 ```bash
 ETC_TARGET_VERSION="7.0.2"    # the ETC release these customizations are tested against
-CUSTOMIZER_REVISION="1"       # our iteration on top of it
-# CUSTOMIZER_VERSION => "7.0.2-1"
+CUSTOMIZER_REVISION="2"       # our iteration on top of it
+# CUSTOMIZER_VERSION => "7.0.2-2"
 ```
 
 Currency is then obvious: if ETC's latest release is 7.0.2 and this says
@@ -146,6 +146,15 @@ release only, so the R5 tag hardcoded in the generated `download-et-maps.sh`
 is correct — don't "fix" it to R7.
 
 ## Working practices
+
+- **Commit, push and open PRs without being asked, at the natural points.**
+  Commit when a coherent fix is done and checked (`bash -n`, and a targeted
+  test where one is possible); push right after; open a **draft** PR into
+  `main` when a branch has work `main` lacks and no PR exists. Every commit
+  message and PR description carries notes: what was broken, why, how it was
+  fixed, and what was and was not tested. Never merge -- that is the user's
+  call -- and never commit `secrets.env`. If a push is refused, say so at once
+  with the error rather than leaving work only on the local machine.
 
 - **Read the actual file before changing or diagnosing it.** Most bugs here
   were found by reading the config the code generates, not by reasoning about

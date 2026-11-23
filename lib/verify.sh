@@ -251,6 +251,21 @@ verify_system() {
     else
         _v_info "No embedded cache at $cache (minimal build, or built before it existed)"
     fi
+    if [ -f "$cache/secrets.env" ]; then
+        local mode; mode=$(stat -c '%a' "$cache/secrets.env")
+        if [ "${mode: -1}" != "0" ]; then
+            _v_fail "$cache/secrets.env is readable by every user (mode $mode) -- holds WiFi and Winlink passwords; sudo chmod 600 it"
+        else
+            _v_pass "$cache/secrets.env is not world-readable"
+        fi
+    fi
+    if command -v code >/dev/null 2>&1; then
+        if grep -q '"password-store"' "${VERIFY_USER_HOME:-$HOME}/.vscode/argv.json" 2>/dev/null; then
+            _v_pass "VS Code keyring set in ~/.vscode/argv.json"
+        else
+            _v_warn "VS Code has no password-store in ~/.vscode/argv.json -- sign-ins may not persist"
+        fi
+    fi
     local old_stage="${VERIFY_USER_HOME:-$HOME}/.etc-backups"
     if [ -d "$old_stage" ]; then
         _v_info "Backups staged by an older ISO in $old_stage ($(du -sh "$old_stage" 2>/dev/null | cut -f1)) -- post-install.sh --restore reads them"

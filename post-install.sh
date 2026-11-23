@@ -21,7 +21,7 @@
 #   ./post-install.sh --restore       # restore user backup into $HOME
 #   ./post-install.sh --restore-wine  # also restore the Wine/VARA prefix
 #   ./post-install.sh --chirp         # install CHIRP
-#   ./post-install.sh --vscode        # fix VS Code's "OS keyring" warning
+#   ./post-install.sh --link-cache    # point the repo's cache/ at the ISO's embedded cache
 #   ./post-install.sh --all           # everything except the Wine restore
 #   ./post-install.sh --everything    # everything, including the Wine restore
 #   ./post-install.sh --help
@@ -269,45 +269,43 @@ install_chirp() {
 }
 
 # ============================================================================
-# VS Code: "OS keyring couldn't be identified"
+# Build cache: reuse what the ISO embedded
 # ============================================================================
-# VS Code picks its secret store by guessing the desktop from
-# XDG_CURRENT_DESKTOP. When the guess fails it warns that the OS keyring is
-# not available and falls back to weak storage, and signing in (GitHub,
-# Copilot, Settings Sync) does not persist. The documented fix is to name the
-# store explicitly in ~/.vscode/argv.json. gnome-keyring is part of the Ubuntu
-# desktop and ETC does not remove it, but check rather than assume.
-configure_vscode_keyring() {
-    log_info "=== Configuring VS Code keyring ==="
-    if ! command -v code >/dev/null 2>&1; then
-        log_info "VS Code not installed -- nothing to do"
+# A non-minimal ISO carries the Ubuntu ISO, the ETC tarball and the installer
+# .debs (VS Code, GridTracker) in /opt/emcomm-customizer-cache, so this system
+# can build its own next ISO without downloading 4GB -- and GridTracker has no
+# download URL at all. build-etc-iso.sh reads them from the repo's cache/, so
+# symlink them there rather than copying gigabytes.
+#
+# The VS Code keyring setting is NOT here: the ISO build seeds
+# /etc/skel/.vscode/argv.json, so every installed account already has it.
+link_embedded_cache() {
+    log_info "=== Linking the embedded build cache ==="
+    local src=/opt/emcomm-customizer-cache dest="${SCRIPT_DIR}/cache"
+    if [ ! -d "$src" ]; then
+        log_info "No embedded cache at $src (minimal build) -- nothing to link"
         return 0
     fi
-    if ! command -v gnome-keyring-daemon >/dev/null 2>&1; then
-        log_error "gnome-keyring is not installed, so there is no keyring to use."
-        log_error "  sudo apt-get install gnome-keyring libsecret-1-0   -- then re-run this"
-        return 1
+    if [ ! -w "$SCRIPT_DIR" ]; then
+        log_warn "${SCRIPT_DIR} is not writable (the copy under /opt is read-only)."
+        log_warn "  Clone the repo and run this from the clone to set up a build cache."
+        return 0
     fi
-
-    local argv="$HOME/.vscode/argv.json"
-    mkdir -p "$HOME/.vscode"
-    if [ ! -f "$argv" ]; then
-        printf '{\n    "password-store": "gnome-libsecret"\n}\n' > "$argv"
-        log_success "Created $argv with password-store=gnome-libsecret"
-    elif grep -q '"password-store"' "$argv"; then
-        log_success "$argv already sets password-store: $(grep '"password-store"' "$argv" | tr -s ' ')"
-    else
-        # argv.json is JSONC (comments allowed), so a JSON parser would choke
-        # on VS Code's own file. Insert the key after the first opening brace.
-        cp "$argv" "${argv}.bak"
-        if sed -i '0,/{/s//{\n    "password-store": "gnome-libsecret",/' "$argv"; then
-            log_success "Added password-store=gnome-libsecret to $argv (backup: argv.json.bak)"
+    mkdir -p "$dest"
+    local f n=0
+    for f in "$src"/*.iso "$src"/*.tar.gz "$src"/*.deb; do
+        [ -f "$f" ] || continue
+        if [ -e "$dest/$(basename "$f")" ]; then
+            log_info "  already present: $(basename "$f")"
         else
-            log_error "Could not edit $argv"; return 1
+            ln -s "$f" "$dest/" && n=$((n + 1)) && log_info "  linked $(basename "$f")"
         fi
+    done
+    log_success "Linked ${n} file(s) into ${dest}"
+    if [ -f "$src/secrets.env" ] && [ ! -e "${SCRIPT_DIR}/secrets.env" ]; then
+        log_info "This ISO's settings are in $src/secrets.env. To reuse them:"
+        log_info "  sudo install -o \$USER -m 600 $src/secrets.env ${SCRIPT_DIR}/secrets.env"
     fi
-    log_info "Fully quit VS Code (all windows) and start it again for this to apply."
-    log_info "If autologin is on, the keyring may ask for your login password once."
 }
 
 # ============================================================================
@@ -322,7 +320,7 @@ show_menu() {
     echo "  3) Restore user backup AND Wine/VARA prefix"
     echo "  4) Configure Python tools"
     echo "  5) Install CHIRP (skipped if the ISO already has it)"
-    echo "  6) Fix VS Code keyring warning"
+    echo "  6) Link the ISO's embedded files into cache/ (for the next build)"
     echo "  7) Everything (1-6, including the Wine/VARA restore)"
     echo "  8) Everything except the Wine/VARA restore"
     echo "  9) Exit"
@@ -335,7 +333,7 @@ show_menu() {
         3) RESTORE_WINE=1; restore_user_backup ;;
         4) install_python_tools ;;
         5) install_chirp ;;
-        6) configure_vscode_keyring ;;
+        6) link_embedded_cache ;;
         7) RESTORE_WINE=1; run_all ;;
         8) run_all ;;
         9) log_info "Exiting"; exit 0 ;;
@@ -361,7 +359,7 @@ run_all() {
     restore_user_backup; echo
     install_python_tools; echo
     install_chirp; echo
-    configure_vscode_keyring; echo
+    link_embedded_cache; echo
     verify_system || true
 }
 
@@ -376,7 +374,7 @@ while [ $# -gt 0 ]; do
         --restore-wine) MODE=restore; RESTORE_WINE=1; shift ;;
         --python-tools) MODE=python; shift ;;
         --chirp)        MODE=chirp; shift ;;
-        --vscode)       MODE=vscode; shift ;;
+        --link-cache)   MODE=linkcache; shift ;;
         --all)          MODE=all; shift ;;
         --everything)   MODE=all; RESTORE_WINE=1; shift ;;
         -d|--dir)       BACKUP_DIRS=("$2"); shift 2 ;;
@@ -392,7 +390,7 @@ case "$MODE" in
     restore) restore_user_backup; exit $? ;;
     python)  install_python_tools; exit $? ;;
     chirp)   install_chirp; exit $? ;;
-    vscode)  configure_vscode_keyring; exit $? ;;
+    linkcache) link_embedded_cache; exit $? ;;
     all)     run_all ;;
     "")      show_menu ;;
 esac

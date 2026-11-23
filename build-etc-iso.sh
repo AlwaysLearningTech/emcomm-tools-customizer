@@ -60,6 +60,8 @@ UBUNTU_ISO_URL="https://old-releases.ubuntu.com/releases/kinetic/ubuntu-22.10-de
 UBUNTU_ISO_FILE="ubuntu-22.10-desktop-amd64.iso"
 
 # Directory structure (relative to script)
+# Where backups are staged inside the image. post-install.sh searches this.
+STAGED_BACKUP_DIR_REL="/opt/emcomm-customizer-cache/backups"
 CACHE_DIR="${SCRIPT_DIR}/cache"          # Downloaded files (ISOs, tarballs) - persists across builds
 OUTPUT_DIR="${SCRIPT_DIR}/output"         # Generated ISOs
 WORK_DIR="${SCRIPT_DIR}/.work"            # Temporary build directory (cleaned each build)
@@ -1007,53 +1009,27 @@ restore_user_backup() {
     fi
     local user_backup=""
     local wine_backup=""
-    local backup_count=0
     
-    # Auto-detect user backup (etc-user-backup-*.tar.gz)
-    # Priority: 1) Home folder (et-user-backup default), 2) Cache folder
-    # Always select the most recent (newest) backup by modification time
-    if compgen -G "${home_dir}/etc-user-backup-*.tar.gz" > /dev/null 2>&1; then
-        backup_count=$(find "${home_dir}" -maxdepth 1 -name 'etc-user-backup-*.tar.gz' -type f 2>/dev/null | wc -l)
-        user_backup=$(find "${home_dir}" -maxdepth 1 -name 'etc-user-backup-*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-        if [ "$backup_count" -gt 1 ]; then
-            log "INFO" "Found ${backup_count} user backups in home folder, using newest: $(basename "$user_backup")"
-        else
-            log "INFO" "Found user backup in home folder: $(basename "$user_backup")"
-        fi
-    elif compgen -G "${cache_dir}/etc-user-backup-*.tar.gz" > /dev/null 2>&1; then
-        backup_count=$(find "${cache_dir}" -maxdepth 1 -name 'etc-user-backup-*.tar.gz' -type f 2>/dev/null | wc -l)
-        user_backup=$(find "${cache_dir}" -maxdepth 1 -name 'etc-user-backup-*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-        if [ "$backup_count" -gt 1 ]; then
-            log "INFO" "Found ${backup_count} user backups in cache folder, using newest: $(basename "$user_backup")"
-        else
-            log "INFO" "Found user backup in cache folder: $(basename "$user_backup")"
-        fi
-    fi
-    
-    # Auto-detect wine backup (etc-wine-backup-*.tar.gz)
-    # Priority: 1) Home folder, 2) Cache folder
-    # Always select the most recent (newest) backup by modification time
-    if compgen -G "${home_dir}/etc-wine-backup-*.tar.gz" > /dev/null 2>&1; then
-        backup_count=$(find "${home_dir}" -maxdepth 1 -name 'etc-wine-backup-*.tar.gz' -type f 2>/dev/null | wc -l)
-        wine_backup=$(find "${home_dir}" -maxdepth 1 -name 'etc-wine-backup-*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-        if [ "$backup_count" -gt 1 ]; then
-            log "INFO" "Found ${backup_count} Wine backups in home folder, using newest: $(basename "$wine_backup")"
-        else
-            log "INFO" "Found Wine backup in home folder: $(basename "$wine_backup")"
-        fi
-    elif compgen -G "${cache_dir}/etc-wine-backup-*.tar.gz" > /dev/null 2>&1; then
-        backup_count=$(find "${cache_dir}" -maxdepth 1 -name 'etc-wine-backup-*.tar.gz' -type f 2>/dev/null | wc -l)
-        wine_backup=$(find "${cache_dir}" -maxdepth 1 -name 'etc-wine-backup-*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-        if [ "$backup_count" -gt 1 ]; then
-            log "INFO" "Found ${backup_count} Wine backups in cache folder, using newest: $(basename "$wine_backup")"
-        else
-            log "INFO" "Found Wine backup in cache folder: $(basename "$wine_backup")"
-        fi
-    fi
-    
+    # Newest archive of each kind across every place one can be. The last two
+    # matter when rebuilding on a system that one of these ISOs installed:
+    # older ISOs left archives in ~/.etc-backups, newer ones in
+    # /opt/emcomm-customizer-cache/backups. Searching only $HOME and cache/
+    # meant a rebuild there silently shipped without the operator's config.
+    local -a search=("$home_dir" "$cache_dir" "${home_dir}/.etc-backups" "${STAGED_BACKUP_DIR_REL}")
+    _newest_backup() {
+        local d; for d in "${search[@]}"; do
+            [ -d "$d" ] && find -L "$d" -maxdepth 1 -name "$1" -type f -printf '%T@ %p\n' 2>/dev/null
+        done | sort -rn | head -1 | cut -d' ' -f2-
+    }
+    log "DEBUG" "Backup search: ${search[*]}"
+    user_backup=$(_newest_backup 'etc-user-backup-*.tar.gz')
+    wine_backup=$(_newest_backup 'etc-wine-backup-*.tar.gz')
+    [ -n "$user_backup" ] && log "INFO" "Using user backup: $user_backup"
+    [ -n "$wine_backup" ] && log "INFO" "Using Wine backup: $wine_backup"
+
     # Check if any backups were found
     if [ -z "$user_backup" ] && [ -z "$wine_backup" ]; then
-        log "DEBUG" "No backup files found in home (~/) or cache/"
+        log "DEBUG" "No backup files found in: ${search[*]}"
         log "INFO" "To use backups, run 'et-user-backup' or place etc-user-backup-*.tar.gz in ~/ or cache/"
         return 0
     fi
@@ -1178,8 +1154,6 @@ restore_user_backup() {
     fi
 }
 
-# Where backups are staged inside the image. post-install.sh searches this.
-STAGED_BACKUP_DIR_REL="/opt/emcomm-customizer-cache/backups"
 
 stage_backup_archive() {
     local src="$1"
@@ -1618,32 +1592,33 @@ customize_user_and_autologin() {
     log "DEBUG" "User config: fullname='$fullname', username='$username'"
     log "DEBUG" "Autologin: $enable_autologin"
     
-    # Only configure autologin if explicitly enabled
-    if [ "$enable_autologin" = "yes" ]; then
-        local lightdm_dir="${SQUASHFS_DIR}/etc/lightdm/lightdm.conf.d"
-        log "DEBUG" "Creating LightDM config dir: $lightdm_dir"
-        mkdir -p "$lightdm_dir"
-        
-        local autologin_conf="${lightdm_dir}/50-autologin.conf"
-        log "DEBUG" "Writing autologin config: $autologin_conf"
-        cat > "$autologin_conf" <<EOF
-[Seat:*]
-autologin-user=$username
-autologin-user-timeout=0
-user-session=ubuntu
-EOF
-        log "DEBUG" "Autologin config written successfully"
-        log "SUCCESS" "Autologin configured for: $username"
+    # Autologin goes in GDM's custom.conf. ETC runs GDM; LightDM is not
+    # installed. This used to write /etc/lightdm/lightdm.conf.d, which nothing
+    # reads, so ENABLE_AUTOLOGIN=yes has never done anything.
+    #
+    # Trade-off worth knowing: with autologin, PAM never sees your password,
+    # so the GNOME keyring stays locked until something asks for it. VS Code
+    # then prompts for the keyring password, or signs out of GitHub, Copilot
+    # and Settings Sync if the prompt is dismissed.
+    local gdm_conf="${SQUASHFS_DIR}/etc/gdm3/custom.conf"
+    if [ ! -f "$gdm_conf" ]; then
+        log "WARN" "No ${gdm_conf} -- cannot configure autologin"
     else
-        log "INFO" "Autologin disabled - user will be prompted for password"
-        # Remove any existing autologin configuration (if ETC has one)
-        local autologin_conf="${SQUASHFS_DIR}/etc/lightdm/lightdm.conf.d/50-autologin.conf"
-        if [ -f "$autologin_conf" ]; then
-            log "DEBUG" "Removing existing autologin config: $autologin_conf"
-            rm -f "$autologin_conf"
+        # Drop any active setting first, so re-runs and "no" both converge.
+        sed -i -E '/^[[:space:]]*AutomaticLogin(Enable)?[[:space:]]*=/d' "$gdm_conf"
+        if [ "$enable_autologin" = "yes" ]; then
+            if grep -q '^\[daemon\]' "$gdm_conf"; then
+                sed -i "/^\[daemon\]/a AutomaticLoginEnable=true\nAutomaticLogin=${username}" "$gdm_conf"
+            else
+                printf '[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin=%s\n' "$username" >> "$gdm_conf"
+            fi
+            log "SUCCESS" "GDM autologin configured for: $username"
+            log "WARN" "  Autologin leaves the GNOME keyring locked; VS Code will ask to unlock it"
+        else
+            log "INFO" "Autologin disabled - user will be prompted for password"
         fi
     fi
-    
+
     # USER_PASSWORD is not applied. The installer creates the account and
     # sets the password you type there. This used to write
     # /etc/profile.d/z99-set-user-password.sh to edit /etc/shadow, but
@@ -1938,6 +1913,30 @@ SERVICE_EOF
 # the application. That is the opposite of the old first-boot scripts, which
 # swallowed every error.
 
+# Keep a copy of every installer .deb in CACHE_DIR. embed_cache_files() then
+# ships cache/*.deb in the ISO, so the next build -- typically run on the
+# system this ISO installed -- has them even though ~/Downloads did not
+# survive the reinstall. GridTracker has no download URL at all, so without
+# this a reinstall silently loses it.
+cache_installer_deb() {
+    local src="$1"
+    [ -f "$src" ] || return 1
+    mkdir -p "$CACHE_DIR"
+    local dest="${CACHE_DIR}/$(basename "$src")"
+    [ "$(readlink -f "$src")" = "$(readlink -f "$dest")" ] && return 0
+    if cp "$src" "$dest"; then
+        log "DEBUG" "Cached $(basename "$src") in ${CACHE_DIR}"
+    else
+        log "WARN" "Could not cache $(basename "$src") in ${CACHE_DIR}"
+    fi
+}
+
+# Newest file in CACHE_DIR matching a glob, or nothing.
+newest_cached() {
+    find -L "$CACHE_DIR" -maxdepth 1 -name "$1" -type f -printf '%T@ %p\n' 2>/dev/null \
+        | sort -rn | head -1 | cut -d' ' -f2-
+}
+
 install_vscode() {
     if [ "${ENABLE_VSCODE:-yes}" != "yes" ]; then
         log "DEBUG" "ENABLE_VSCODE=no -- skipping VS Code"
@@ -1952,19 +1951,35 @@ install_vscode() {
     local deb_src="${VSCODE_DEB:-}"
     local staged="${SQUASHFS_DIR}/tmp/code.deb"
 
+    # Order: VSCODE_DEB, then the current download, then the newest copy in
+    # cache/ (which came from a previous build, possibly via the embedded
+    # cache) as an offline fallback.
     if [ -n "$deb_src" ] && [ -f "$deb_src" ]; then
         log "INFO" "  Using local .deb: $deb_src"
         cp "$deb_src" "$staged" || { log "ERROR" "Could not stage $deb_src"; return 1; }
+        cache_installer_deb "$deb_src"
     else
         if [ -n "$deb_src" ]; then
             log "WARN" "VSCODE_DEB set but not found: $deb_src -- falling back to download"
         fi
         local url="https://update.code.visualstudio.com/latest/linux-deb-x64/stable"
         log "INFO" "  Downloading VS Code from $url"
-        if ! wget -q --show-progress --timeout=60 --tries=3 -O "$staged" "$url"; then
-            log "ERROR" "VS Code download failed"
+        if wget -q --timeout=60 --tries=3 -O "$staged" "$url"; then
+            # Name it the way Microsoft does, so newest_cached sorts sanely.
+            local v
+            v=$(dpkg-deb -f "$staged" Version 2>/dev/null || echo latest)
+            mkdir -p "$CACHE_DIR"
+            cp "$staged" "${CACHE_DIR}/code_${v}_amd64.deb" 2>/dev/null || true
+        else
             rm -f "$staged"
-            return 1
+            local cached; cached=$(newest_cached 'code_*_amd64.deb')
+            if [ -n "$cached" ]; then
+                log "WARN" "VS Code download failed -- using cached $(basename "$cached")"
+                cp "$cached" "$staged" || { log "ERROR" "Could not stage $cached"; return 1; }
+            else
+                log "ERROR" "VS Code download failed and no cached code_*.deb in ${CACHE_DIR}"
+                return 1
+            fi
         fi
     fi
 
@@ -1995,6 +2010,21 @@ install_vscode() {
     local ver
     ver=$(chroot "${SQUASHFS_DIR}" dpkg-query -W -f='${Version}' code 2>/dev/null || echo "unknown")
     log "SUCCESS" "VS Code installed (version ${ver})"
+
+    # Name VS Code's secret store instead of letting it guess the desktop.
+    # When the guess or the keyring fails it falls back to weak storage, and
+    # when the keyring later works it cannot read what it stored before --
+    # which signs you out of GitHub, Copilot and Settings Sync. VS Code only
+    # writes argv.json when it is missing, so seeding it here is kept.
+    mkdir -p "${SQUASHFS_DIR}/etc/skel/.vscode"
+    cat > "${SQUASHFS_DIR}/etc/skel/.vscode/argv.json" <<'ARGV'
+// Seeded by emcomm-tools-customizer. VS Code reads this at startup.
+{
+	"password-store": "gnome-libsecret",
+	"enable-crash-reporter": true
+}
+ARGV
+    log "SUCCESS" "VS Code set to use the GNOME keyring (skel .vscode/argv.json)"
     return 0
 }
 
@@ -2106,17 +2136,21 @@ install_gridtracker() {
     #
     # Baking in one version is fine and expected: GridTracker will offer to
     # update itself on the installed system.
+    # GRIDTRACKER_DEB first, then the newest copy in cache/ -- which a
+    # previous build left there and the embedded cache carries across a
+    # reinstall, so ~/Downloads does not have to survive.
     local deb_src="${GRIDTRACKER_DEB:-}"
-
-    if [ -z "$deb_src" ]; then
-        log "WARN" "ENABLE_GRIDTRACKER=yes but GRIDTRACKER_DEB is not set"
-        log "WARN" "  Download it from gridtracker.org and point GRIDTRACKER_DEB at the .deb"
-        return 1
-    fi
-
-    if [ ! -f "$deb_src" ]; then
-        log "WARN" "GRIDTRACKER_DEB not found: $deb_src"
-        return 1
+    if [ -n "$deb_src" ] && [ -f "$deb_src" ]; then
+        cache_installer_deb "$deb_src"
+    else
+        [ -n "$deb_src" ] && log "WARN" "GRIDTRACKER_DEB not found: $deb_src -- trying cache/"
+        deb_src=$(newest_cached 'GridTracker2-*.deb')
+        if [ -z "$deb_src" ]; then
+            log "WARN" "No GridTracker .deb: set GRIDTRACKER_DEB, or put GridTracker2-*.deb in ${CACHE_DIR}"
+            log "WARN" "  Download it from gridtracker.org"
+            return 1
+        fi
+        log "INFO" "  Using cached $(basename "$deb_src")"
     fi
 
     local staged="${SQUASHFS_DIR}/tmp/gridtracker.deb"
@@ -3044,6 +3078,14 @@ embed_cache_files() {
         log "DEBUG" "No ETC tarball found in cache"
     fi
     
+    # Installer .debs (VS Code, GridTracker, anything cache_installer_deb
+    # kept). Small next to the Ubuntu ISO, and GridTracker cannot be fetched.
+    local deb
+    for deb in "$CACHE_DIR"/*.deb; do
+        [ -f "$deb" ] || continue
+        cp "$deb" "$target_cache/" && log "SUCCESS" "Embedded $(basename "$deb")"
+    done
+
     # The Wine backup is NOT copied here. restore_user_backup() already
     # stages it under ${STAGED_BACKUP_DIR_REL}; copying it again doubled the
     # largest file in the image.
@@ -3052,6 +3094,10 @@ embed_cache_files() {
     if [ -f "$SECRETS_FILE" ]; then
         log "DEBUG" "Copying secrets.env to embedded cache..."
         cp -v "$SECRETS_FILE" "$target_cache/"
+        # Root-only. It holds WiFi PSKs and the Winlink password; cp gave it
+        # the source's mode, which was world-readable on the installed system.
+        chown root:root "$target_cache/secrets.env"
+        chmod 600 "$target_cache/secrets.env"
         log "SUCCESS" "secrets.env embedded for future builds"
     else
         log "DEBUG" "No secrets.env found"
