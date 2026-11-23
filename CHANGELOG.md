@@ -41,19 +41,29 @@ works, what it stored before is unreadable, which signs you out. The build now
 seeds `/etc/skel/.vscode/argv.json` with `"password-store": "gnome-libsecret"`,
 so every account starts with it. No post-install step is needed.
 
-### Fixed — VS Code and GridTracker .debs were lost on reinstall
+### Changed — no file paths in `secrets.env`; build inputs go in `cache/`
 
-Both installed from a path in `~/Downloads` and kept no copy, so rebuilding on
-the installed system had neither (GridTracker has no download URL). Every
-installer .deb is now kept in `cache/` and embedded in the ISO; GridTracker
-falls back to the newest cached copy.
+`VSCODE_DEB` and `GRIDTRACKER_DEB` pointed into `~/Downloads`, and the build
+kept no copy, so a reinstall lost both (GridTracker has no download URL). Both
+settings are removed (the build warns if they are still set). GridTracker
+installs from the newest `GridTracker2-*.deb` in `cache/`; VS Code is
+downloaded and each download kept in `cache/` as the offline fallback. The
+newest of each is embedded in the ISO.
+
+### Changed — `secrets.env` and the cache come back automatically
+
+On a system installed from a non-minimal ISO, every build now links
+`/opt/emcomm-customizer-cache` (Ubuntu ISO, ETC tarball, .debs) into `cache/`,
+and copies the embedded `secrets.env` into the repo as your own file (mode
+600, editable without sudo) when there is none. A fresh clone there needs no
+setup. A symlink is used for the read-only inputs, but not for `secrets.env`,
+which would then point at a root-owned file you could not edit.
 
 ### Fixed — VS Code shipped out of date
 
 `VSCODE_DEB` took priority over the download, so a `.deb` left in
 `~/Downloads` won every build: the ISO shipped 1.132 while 1.147 was current,
-and VS Code opened asking to update. The download now comes first;
-`VSCODE_DEB` and the cache are offline fallbacks. Updates afterwards come from
+and VS Code opened asking to update. The download now comes first. Updates afterwards come from
 VS Code's own apt repo, which the build keeps (only Edge's repos are removed,
 despite a comment saying otherwise).
 
@@ -75,9 +85,6 @@ The build searched only `$HOME` and `cache/` for backups. It now also searches
   system needs no clone to run `post-install.sh`.
 - `post-install.sh`: "Everything" menu option and `--everything`, which include
   the Wine restore.
-- The build links `/opt/emcomm-customizer-cache` (Ubuntu ISO, ETC tarball,
-  .debs) into `cache/` automatically, so a rebuild on an installed system
-  downloads nothing.
 - Verification reports VS Code, gh, CHIRP, gnome-keyring, the embedded cache
   and staged backups, and warns on two WiFi profiles for one SSID.
 - Build verification warns when gh, the embedded scripts or the staged backups

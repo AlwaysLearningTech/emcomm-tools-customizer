@@ -230,8 +230,11 @@ emcomm-tools-customizer/
 ├── build-etc-iso.sh          # Main build script (fully automated)
 ├── secrets.env.template      # Configuration template
 ├── secrets.env               # Your configuration (gitignored)
-├── cache/                    # Downloaded files (persistent)
-│   └── ubuntu-22.10-desktop-amd64.iso   # ← Drop your ISO here!
+├── cache/                    # Build inputs, embedded in the ISO (persistent)
+│   ├── ubuntu-22.10-desktop-amd64.iso   # optional: skips the download
+│   ├── GridTracker2-*-amd64.deb         # required for ENABLE_GRIDTRACKER=yes
+│   ├── code_*_amd64.deb                 # kept automatically (offline fallback)
+│   └── etc-*-backup-*.tar.gz            # optional: your ETC backups
 ├── output/                   # Generated custom ISOs
 ├── logs/                     # Build logs
 └── post-install/             # Scripts for after ISO installation
@@ -243,9 +246,7 @@ Ubuntu 22.10 reached end-of-life, so you must first update apt sources:
 
 ```bash
 # Fix apt sources for EOL Ubuntu 22.10
-sudo sed -i 's/archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
-sudo sed -i 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
-sudo apt update
+sudo ./fix-apt-sources.sh
 
 # Install build dependencies
 sudo apt install -y xorriso squashfs-tools wget curl jq
@@ -264,12 +265,21 @@ cd emcomm-tools-customizer
 cp secrets.env.template secrets.env
 nano secrets.env  # Fill in your values
 
+# Put build inputs in cache/ (see the Directory Structure above)
+mkdir -p cache && cp ~/Downloads/GridTracker2-*-amd64.deb cache/
+
 # Build from the newest stable release
 sudo ./build-etc-iso.sh -r stable
 
 # Output: output/<name>.iso
 # Put it on a USB stick yourself (Ventoy / balenaEtcher / dd) and boot it.
 ```
+
+### Rebuilding on a system installed from one of these ISOs
+
+Clone and build -- the build links `/opt/emcomm-customizer-cache` into
+`cache/` and restores a missing `secrets.env` from it as your own file. See
+[QUICK_START.md](QUICK_START.md#rebuilding-on-a-system-installed-from-one-of-these-isos).
 
 ### Already running ETC? Skip the ISO entirely
 
@@ -436,8 +446,15 @@ TIMEZONE="America/Denver"       # System timezone (Linux format, see /usr/share/
 
 # === Additional System Packages ===
 # REMOVED. nodejs and npm are hardcoded build dependencies. "code" could never
-# work via apt (Ubuntu 22.10 has no such package and the build removes the
-# Microsoft repos) -- VS Code installs from a .deb. "git" comes from ETC.
+# work via apt on first install (Ubuntu 22.10 has no such package) -- VS Code
+# installs from a downloaded .deb, then updates through its own apt repo.
+# "git" comes from ETC.
+
+# === Applications ===
+ENABLE_VSCODE="yes"            # Downloads the current stable .deb
+ENABLE_CHIRP="yes"             # Built from git into /opt/chirp-venv
+ENABLE_GRIDTRACKER="no"        # Needs GridTracker2-*-amd64.deb in cache/
+# No file paths: installer files go in cache/, which the ISO embeds.
 
 # === WiFi Networks ===
 WIFI_SSID_HOME="YourHomeNetwork"

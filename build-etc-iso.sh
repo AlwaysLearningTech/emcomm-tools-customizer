@@ -187,14 +187,21 @@ OUTPUT OPTIONS:
 
 CONFIGURATION:
     Settings come from secrets.env (copy secrets.env.template to start).
+    On a system installed from one of these ISOs, a missing secrets.env is
+    restored automatically from /opt/emcomm-customizer-cache.
     APRS, radio and et-os-addons settings are shared with
     apply-to-live-system.sh via lib/, so an ISO build and a live system
     produce identical configuration.
 
 DIRECTORY STRUCTURE:
-    cache/    Downloaded ISOs and tarballs (persistent)
-              - Drop your Ubuntu ISO here to skip the download
+    cache/    Build inputs (persistent, embedded in non-minimal ISOs)
+              - Ubuntu ISO: drop it here to skip the 3.6GB download
+              - GridTracker2-*.deb: required for ENABLE_GRIDTRACKER=yes
+              - code_*.deb: kept automatically as an offline fallback
+              - etc-user-backup / etc-wine-backup archives (optional)
               - ETC tarballs and et-os-addons are cached here too
+              On an installed system, /opt/emcomm-customizer-cache is
+              linked in automatically.
     output/   Generated custom ISOs
     logs/     Build logs (DEBUG messages always written here)
 
@@ -425,6 +432,7 @@ check_prerequisites() {
     if [ -z "${CALLSIGN:-}" ] || [ "$CALLSIGN" = "N0CALL" ]; then
         log "WARN" "CALLSIGN not configured in secrets.env (using default N0CALL)"
     fi
+    warn_retired_deb_settings
     
     log "SUCCESS" "All prerequisites satisfied"
     return 0
@@ -1913,22 +1921,21 @@ SERVICE_EOF
 # the application. That is the opposite of the old first-boot scripts, which
 # swallowed every error.
 
-# Keep a copy of every installer .deb in CACHE_DIR. embed_cache_files() then
-# ships cache/*.deb in the ISO, so the next build -- typically run on the
-# system this ISO installed -- has them even though ~/Downloads did not
-# survive the reinstall. GridTracker has no download URL at all, so without
-# this a reinstall silently loses it.
-cache_installer_deb() {
-    local src="$1"
-    [ -f "$src" ] || return 1
-    mkdir -p "$CACHE_DIR"
-    local dest="${CACHE_DIR}/$(basename "$src")"
-    [ "$(readlink -f "$src")" = "$(readlink -f "$dest")" ] && return 0
-    if cp "$src" "$dest"; then
-        log "DEBUG" "Cached $(basename "$src") in ${CACHE_DIR}"
-    else
-        log "WARN" "Could not cache $(basename "$src") in ${CACHE_DIR}"
-    fi
+# Installer .debs live in cache/, which the operator fills during setup (see
+# QUICK_START.md). There are deliberately no path settings for them in
+# secrets.env: a path into ~/Downloads does not survive a reinstall, whereas
+# cache/*.deb is embedded in the ISO and comes back on the installed system.
+#
+# Retired settings, still honoured as a hint so an old secrets.env says why
+# nothing happened instead of silently changing behaviour.
+warn_retired_deb_settings() {
+    local v
+    for v in VSCODE_DEB GRIDTRACKER_DEB; do
+        if [ -n "${!v:-}" ]; then
+            log "WARN" "${v} is no longer used (ignored: ${!v})."
+            log "WARN" "  Put the .deb in ${CACHE_DIR}/ instead; delete ${v} from secrets.env."
+        fi
+    done
 }
 
 # Newest file in CACHE_DIR matching a glob, or nothing.
@@ -1950,11 +1957,11 @@ install_vscode() {
     # Microsoft's VS Code repo (/etc/apt/sources.list.d/vscode.sources), and
     # customize_additional_packages() removes only the EDGE repos, not this.
     #
-    # Order: download the current stable, then VSCODE_DEB, then the newest
-    # copy in cache/ (which can come from the ISO's embedded cache). The
-    # download used to come LAST, after VSCODE_DEB: a .deb left in ~/Downloads
-    # months ago won every time, and the installed system opened with VS
-    # Code asking to update itself.
+    # Download the current stable; only if that fails, use the newest
+    # code_*_amd64.deb in cache/ (each successful download is kept there).
+    # This used to prefer a VSCODE_DEB path, so a .deb left in ~/Downloads
+    # months earlier won every build and the installed system opened with VS
+    # Code asking to update.
     local staged="${SQUASHFS_DIR}/tmp/code.deb"
     local url="https://update.code.visualstudio.com/latest/linux-deb-x64/stable"
     local deb_src=""
@@ -1967,18 +1974,13 @@ install_vscode() {
         cp "$staged" "${CACHE_DIR}/code_${v}_amd64.deb" 2>/dev/null || true
     else
         rm -f "$staged"
-        if [ -n "${VSCODE_DEB:-}" ] && [ -f "${VSCODE_DEB}" ]; then
-            deb_src="$VSCODE_DEB"
-        else
-            deb_src=$(newest_cached 'code_*_amd64.deb')
-        fi
+        deb_src=$(newest_cached 'code_*_amd64.deb')
         if [ -z "$deb_src" ]; then
-            log "ERROR" "VS Code download failed, and no VSCODE_DEB or cached code_*.deb"
+            log "ERROR" "VS Code download failed, and no code_*_amd64.deb in ${CACHE_DIR}"
             return 1
         fi
-        log "WARN" "VS Code download failed -- using $(basename "$deb_src"); it will offer to update"
+        log "WARN" "VS Code download failed -- using cached $(basename "$deb_src"); it will offer to update"
         cp "$deb_src" "$staged" || { log "ERROR" "Could not stage $deb_src"; return 1; }
-        cache_installer_deb "$deb_src"
     fi
 
     setup_chroot_mounts
@@ -2130,26 +2132,20 @@ install_gridtracker() {
     # That is why et-os-addons' install-gridtracker.sh fails -- it pins
     # GridTracker2-2.260416.1-amd64.deb, which now 404s. Any URL we substituted
     # would rot the same way, so ENABLE_ETOSADDONS_GRIDTRACKER stays off and we
-    # install the file the operator downloaded instead.
+    # install the file the operator put in cache/ instead.
     #
     # Baking in one version is fine and expected: GridTracker will offer to
     # update itself on the installed system.
-    # GRIDTRACKER_DEB first, then the newest copy in cache/ -- which a
-    # previous build left there and the embedded cache carries across a
-    # reinstall, so ~/Downloads does not have to survive.
-    local deb_src="${GRIDTRACKER_DEB:-}"
-    if [ -n "$deb_src" ] && [ -f "$deb_src" ]; then
-        cache_installer_deb "$deb_src"
-    else
-        [ -n "$deb_src" ] && log "WARN" "GRIDTRACKER_DEB not found: $deb_src -- trying cache/"
-        deb_src=$(newest_cached 'GridTracker2-*.deb')
-        if [ -z "$deb_src" ]; then
-            log "WARN" "No GridTracker .deb: set GRIDTRACKER_DEB, or put GridTracker2-*.deb in ${CACHE_DIR}"
-            log "WARN" "  Download it from gridtracker.org"
-            return 1
-        fi
-        log "INFO" "  Using cached $(basename "$deb_src")"
+    # From cache/ only: the newest GridTracker2-*.deb there. Put it there
+    # during setup; the ISO embeds it, so it is back after a reinstall.
+    local deb_src
+    deb_src=$(newest_cached 'GridTracker2-*.deb')
+    if [ -z "$deb_src" ]; then
+        log "WARN" "ENABLE_GRIDTRACKER=yes but no GridTracker2-*.deb in ${CACHE_DIR}"
+        log "WARN" "  Download it from gridtracker.org into ${CACHE_DIR}/"
+        return 1
     fi
+    log "INFO" "  Using $(basename "$deb_src")"
 
     local staged="${SQUASHFS_DIR}/tmp/gridtracker.deb"
     cp "$deb_src" "$staged" || { log "WARN" "Could not stage $deb_src"; return 1; }
@@ -3076,11 +3072,13 @@ embed_cache_files() {
         log "DEBUG" "No ETC tarball found in cache"
     fi
     
-    # Installer .debs (VS Code, GridTracker, anything cache_installer_deb
-    # kept). Small next to the Ubuntu ISO, and GridTracker cannot be fetched.
-    local deb
-    for deb in "$CACHE_DIR"/*.deb; do
-        [ -f "$deb" ] || continue
+    # Installer .debs: only the NEWEST of each, or every build's VS Code
+    # download (~100MB apiece) would pile up in the image. GridTracker has no
+    # download URL, so this copy is what survives a reinstall.
+    local deb pat
+    for pat in 'code_*_amd64.deb' 'GridTracker2-*.deb'; do
+        deb=$(newest_cached "$pat")
+        [ -n "$deb" ] || continue
         cp "$deb" "$target_cache/" && log "SUCCESS" "Embedded $(basename "$deb")"
     done
 
@@ -3816,21 +3814,44 @@ cleanup_work_dir() {
 # Main
 # ============================================================================
 
-# A system installed from a non-minimal ISO carries the Ubuntu ISO, the ETC
-# tarball and the installer .debs in /opt/emcomm-customizer-cache. Link them
-# into cache/ so a rebuild there downloads nothing -- GridTracker in
-# particular has no URL to download from. Automatic, not a post-install step:
-# a build with an empty cache/ on such a system should just work.
+# A system installed from a non-minimal ISO carries everything the next build
+# needs in /opt/emcomm-customizer-cache. Reuse it automatically, so a build on
+# that system with a fresh clone downloads nothing and needs no setup:
+#
+#   *.iso *.tar.gz *.deb   symlinked into cache/. They are read-only inputs,
+#                          so a link to the root-owned copy is enough.
+#   secrets.env            COPIED to the repo, owned by you, mode 600. A
+#                          symlink would point at a root-owned file you could
+#                          not edit without sudo. As your own 600 file it is
+#                          private to you and editable with no sudo at all.
+#
+# This is what carries secrets.env forward across reinstalls even though it
+# is gitignored: repo -> ISO (/opt, root-only) -> repo on the installed
+# system -> the next ISO. Edits you make reach the next ISO you build.
 seed_cache_from_embedded() {
     local src=/opt/emcomm-customizer-cache f n=0
     [ -d "$src" ] || return 0
-    mkdir -p "$CACHE_DIR"
+    local owner="${SUDO_USER:-$(id -un)}"
+
+    if [ ! -d "$CACHE_DIR" ]; then
+        mkdir -p "$CACHE_DIR"
+        chown "$owner": "$CACHE_DIR" 2>/dev/null || true
+    fi
     for f in "$src"/*.iso "$src"/*.tar.gz "$src"/*.deb; do
         [ -f "$f" ] || continue
         [ -e "${CACHE_DIR}/$(basename "$f")" ] && continue
         ln -s "$f" "${CACHE_DIR}/" && n=$((n + 1))
     done
     [ "$n" -gt 0 ] && log "INFO" "Reusing ${n} file(s) from ${src} (linked into ${CACHE_DIR})"
+
+    if [ ! -e "$SECRETS_FILE" ] && [ -f "$src/secrets.env" ]; then
+        if install -o "$owner" -m 600 "$src/secrets.env" "$SECRETS_FILE" 2>/dev/null; then
+            log "SUCCESS" "Restored secrets.env from this system's ISO -> ${SECRETS_FILE} (yours, mode 600)"
+            log "INFO" "  Edit it there; the next ISO embeds your edited copy."
+        else
+            log "WARN" "Could not copy $src/secrets.env (needs sudo) -- run the build with sudo"
+        fi
+    fi
     return 0
 }
 
@@ -3845,12 +3866,14 @@ main() {
     log "INFO" "Build started at $(date)"
     log "INFO" "Log file: $LOG_FILE"
     
+    # Before prerequisites: on an installed system this restores secrets.env,
+    # which check_prerequisites requires.
+    seed_cache_from_embedded
+
     # Check prerequisites
     if ! check_prerequisites; then
         exit 2
     fi
-
-    seed_cache_from_embedded
     
     # Capture fresh user backup from running system BEFORE build
     log "INFO" "Capturing fresh user backup from running system..."

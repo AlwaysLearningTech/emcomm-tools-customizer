@@ -78,7 +78,9 @@ cp secrets.env.template secrets.env
 $EDITOR secrets.env
 ```
 
-`secrets.env` is gitignored. Note that `APRS_PASSCODE` should be left empty — it
+`secrets.env` is gitignored, so it is never pushed. A system installed from a
+non-minimal ISO has a root-only copy at `/opt/emcomm-customizer-cache/secrets.env`;
+the next ISO build copies it into the repo as your own file. Note that `APRS_PASSCODE` should be left empty — it
 is computed from your callsign, and the algorithm is public, so it was never a
 secret worth storing.
 
@@ -240,6 +242,9 @@ Worth revisiting:
 - `APRS_BEACON_INTERVAL` — v1's `300` meant 300 **seconds**. The default is now
   `30:00` (30 minutes). Bare numbers are seconds in Dire Wolf's time format.
 - `APRS_SYMBOL` — now a Dire Wolf symbol name (`digi`) or a 2-character code.
+- `VSCODE_DEB`, `GRIDTRACKER_DEB` — **removed** in 7.0.2-2. Put the files in
+  `cache/` instead; it is embedded in the ISO, where a path into `~/Downloads`
+  did not survive a reinstall. The build warns if they are still set.
 - `ENABLE_ETOSADDONS_USERBACKUP` — **removed** in 7.0.2-1. Its purpose (a
   `BACKUP_ITEMS.lst` manifest) is now `ENABLE_MANIFEST_BACKUP`, which keeps
   R7's behaviour of skipping paths that do not exist — the et-os-addons fork

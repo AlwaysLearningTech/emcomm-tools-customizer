@@ -107,8 +107,10 @@ non-browsers. Install CHIRP from `git+https://github.com/kk7ds/chirp.git` into
 a venv with `--system-site-packages` (the distro `python3-wxgtk4.0` must be
 visible).
 
-**`apt-get install code` can never work.** Ubuntu 22.10 has no `code` package
-and the build removes the Microsoft repos. VS Code comes from a `.deb`.
+**`apt-get install code` can never work on a fresh image.** Ubuntu 22.10
+has no `code` package, so the first install is a downloaded `.deb`; its
+postinst adds Microsoft's VS Code repo, which handles updates afterwards. The
+build removes only the *Edge* repos.
 
 **No `tee` in build commands run under sudo.** It has hung this build. Append
 to `$LOG_FILE` with `>>` instead.
@@ -163,8 +165,14 @@ is correct — don't "fix" it to R7.
   minutes; squashfs compression dominates. Never say "it should work."
 - **`secrets.env` is gitignored and must never be committed.** It holds a
   Winlink password and WiFi PSKs. `embed_cache_files()` copies it into the
-  ISO on purpose (so the installed system can rebuild itself), which means
-  **a non-minimal ISO is not shareable**. Use `-m` for one that is.
+  ISO on purpose, root-only (600), and `seed_cache_from_embedded()` copies it
+  back into the repo as the user's own 600 file on the next build -- that is
+  how it survives reinstalls. So **a non-minimal ISO is not shareable**. Use
+  `-m` for one that is.
+- **No file paths in `secrets.env`.** Build inputs (Ubuntu ISO, installer
+  .debs, backup archives) go in `cache/`, which is embedded in the ISO and
+  linked back automatically. A path into `~/Downloads` does not survive a
+  reinstall; that is how the VS Code and GridTracker .debs were lost.
 - **Never delete ISOs, build artifacts or user files without asking.**
 - **Stop and tell the user when a command needs a sudo password** — they often
   miss the terminal prompt.

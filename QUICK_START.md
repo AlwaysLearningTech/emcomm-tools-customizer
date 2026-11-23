@@ -118,12 +118,22 @@ nano secrets.env
 sudo ./build-etc-iso.sh -r stable
 ```
 
-### Skip the 3.6GB Ubuntu download
+### Put build inputs in `cache/`
+
+Files the build installs go in `cache/`; `secrets.env` holds no file paths.
+`cache/` is embedded in the ISO, so after a reinstall everything is already
+there.
 
 ```bash
 mkdir -p cache
-cp ~/Downloads/ubuntu-22.10-desktop-amd64.iso cache/
+cp ~/Downloads/ubuntu-22.10-desktop-amd64.iso cache/   # optional: skips a 3.6GB download
+cp ~/Downloads/GridTracker2-*-amd64.deb cache/        # required for ENABLE_GRIDTRACKER=yes
+cp ~/etc-*-backup-*.tar.gz cache/                     # optional: your ETC backups
 ```
+
+VS Code needs nothing: the build downloads the current version and keeps a
+copy in `cache/` as an offline fallback. After install, VS Code's own apt repo
+keeps it updated.
 
 ### Getting the ISO onto USB, and installing
 
@@ -143,16 +153,19 @@ boot, run `sudo ./apply-to-live-system.sh`.
 
 ---
 
-### Skip re-downloading VS Code
+### Rebuilding on a system installed from one of these ISOs
 
-Ubuntu 22.10 has no `code` package and the build removes the Microsoft apt
-repos, so VS Code can only come from a `.deb`. Point at one you already have:
+Clone the repo and build. Nothing else to set up:
 
 ```bash
-VSCODE_DEB="/home/you/Downloads/code_1.132.0-1785860022_amd64.deb"
+git clone https://github.com/AlwaysLearningTech/emcomm-tools-customizer.git ~/Github/emcomm-tools-customizer
+cd ~/Github/emcomm-tools-customizer
+sudo ./build-etc-iso.sh -r stable
 ```
 
-Leave it empty to download the current stable build instead.
+The build links the ISO's embedded files (`/opt/emcomm-customizer-cache`) into
+`cache/`, and if there is no `secrets.env` it copies the embedded one into the
+repo as yours (mode 600) -- edit it there before building if anything changed.
 
 ---
 
@@ -170,12 +183,12 @@ WIFI_PASSWORD_HOME="password"
 
 Leave `APRS_PASSCODE` empty — it's computed from your callsign.
 
-`secrets.env` is gitignored, so it does **not** travel with a `git clone` and
-is **not** part of `et-user-backup`. The build copies it into the ISO at
-`/opt/emcomm-customizer-cache/secrets.env`, which means it reappears only on a
-machine installed *from* one of your custom ISOs — and that a non-minimal ISO
-contains your WiFi PSK and Winlink password. Keep a copy off-machine, and build
-with `-m` if you intend to share the ISO.
+`secrets.env` is gitignored, so it is never pushed and does not come with a
+`git clone`. It travels with the ISO instead: the build embeds it (root-only)
+at `/opt/emcomm-customizer-cache/secrets.env`, and the next build on the
+installed system copies it back into the repo as your own file. That also
+means a non-minimal ISO contains your WiFi PSK and Winlink password. Keep a
+copy off-machine, and build with `-m` if you intend to share the ISO.
 
 ## Release Modes
 
