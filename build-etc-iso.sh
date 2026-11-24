@@ -196,6 +196,7 @@ CONFIGURATION:
 DIRECTORY STRUCTURE:
     cache/    Build inputs (persistent, embedded in non-minimal ISOs)
               - Ubuntu ISO: drop it here to skip the 3.6GB download
+                (embedded only with EMBED_UBUNTU_ISO=yes)
               - GridTracker2-*.deb: required for ENABLE_GRIDTRACKER=yes
               - code_*.deb: kept automatically as an offline fallback
               - etc-user-backup / etc-wine-backup archives (optional)
@@ -206,9 +207,10 @@ DIRECTORY STRUCTURE:
     logs/     Build logs (DEBUG messages always written here)
 
 BUILD SIZE:
-    By default, cache files (Ubuntu ISO, ETC tarballs) are embedded in the
-    output ISO so they are available for the next build on the installed
-    system. Use -m for a minimal build that excludes these (saves ~4GB).
+    By default, cache/ (ETC tarball, .debs, backups) and secrets.env are
+    embedded in the output ISO for the next build on the installed system.
+    The 3.8GB Ubuntu ISO is not, unless EMBED_UBUNTU_ISO=yes in secrets.env.
+    Use -m for a minimal build that embeds nothing (and is shareable).
 
 PREREQUISITES:
     sudo apt install xorriso squashfs-tools wget curl jq git
@@ -3071,14 +3073,24 @@ embed_cache_files() {
     log "DEBUG" "Creating target cache dir: $target_cache"
     mkdir -p "$target_cache"
     
-    # Copy Ubuntu ISO if present
+    # The Ubuntu ISO is opt-in (EMBED_UBUNTU_ISO=yes). At 3.8GB it was the
+    # largest single thing in a 16GB image -- too big for a 16GB stick -- and
+    # it only saves a download the next time you build. Without it, a rebuild
+    # on the installed system fetches it from old-releases.ubuntu.com.
+    local embed_iso="no"
+    if [ -f "$SECRETS_FILE" ]; then
+        # shellcheck source=/dev/null
+        embed_iso="$(set +u; source "$SECRETS_FILE" >/dev/null 2>&1; echo "${EMBED_UBUNTU_ISO:-no}")"
+    fi
     local ubuntu_iso="${CACHE_DIR}/${UBUNTU_ISO_FILE}"
-    if [ -f "$ubuntu_iso" ]; then
+    if [ "$embed_iso" != "yes" ]; then
+        log "INFO" "Ubuntu ISO not embedded (EMBED_UBUNTU_ISO=${embed_iso}; saves ~3.8GB)"
+    elif [ -f "$ubuntu_iso" ]; then
         log "DEBUG" "Copying Ubuntu ISO to embedded cache..."
-        cp -v "$ubuntu_iso" "$target_cache/"
-        log "SUCCESS" "Ubuntu ISO embedded (~4GB)"
+        cp -vL "$ubuntu_iso" "$target_cache/"
+        log "SUCCESS" "Ubuntu ISO embedded (~4GB, EMBED_UBUNTU_ISO=yes)"
     else
-        log "DEBUG" "No Ubuntu ISO found in cache"
+        log "WARN" "EMBED_UBUNTU_ISO=yes but no Ubuntu ISO in cache/ to embed"
     fi
     
     # Copy ETC tarball if present (find most recent)

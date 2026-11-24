@@ -376,11 +376,15 @@ to a block device any more.** Use whichever tool you trust:
 
 ### Build Size
 
-By default, cache files (Ubuntu ISO, ETC tarballs) are embedded in `/opt/emcomm-customizer-cache/`
-so they're available for the next build on the installed system. This is useful when building
-on the same machine you install to.
+By default, `cache/` (ETC tarball, VS Code and GridTracker .debs, your backups) and
+`secrets.env` are embedded in `/opt/emcomm-customizer-cache/`, so the next build on the
+installed system has them. This is useful when building on the same machine you install to.
 
-Use `-m` for a minimal build that excludes these files (saves ~4GB).
+The 3.8GB Ubuntu ISO is **not** embedded unless you set `EMBED_UBUNTU_ISO="yes"` in
+`secrets.env`; without it, a rebuild on the installed system downloads it again
+(it is still reused from `cache/` on the machine that has it).
+
+Use `-m` for a minimal build that embeds nothing — the only kind safe to share.
 
 ### Customizing et-os-addons Features
 

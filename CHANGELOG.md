@@ -105,6 +105,15 @@ binary is now installed explicitly. Tested against upstream `80489b1` on
 Qt 6.3.1: it compiles and starts. `ENABLE_ANYTONE_CPS` now defaults to `yes`
 in the template.
 
+### Changed — the Ubuntu ISO is no longer embedded by default
+
+At 3.8GB it was the largest single item in a 16.0GB image, which no longer
+fit a 16GB USB stick, and all it saved was one download on the next rebuild.
+Set `EMBED_UBUNTU_ISO="yes"` in `secrets.env` to keep embedding it. Without
+it, a rebuild on the installed system downloads the ISO from
+old-releases.ubuntu.com; the machine that already has it in `cache/` still
+reuses it.
+
 ### Fixed — the ETC tarball was dropped from the embedded cache
 
 On a system installed from one of these ISOs, `cache/` holds a symlink to the
