@@ -25,6 +25,7 @@
 # ---------------------------------------------------------------------------
 ETC_TARGET_VERSION="7.0.2"
 CUSTOMIZER_REVISION="2"
+# shellcheck disable=SC2034  # read by the scripts that source this file
 CUSTOMIZER_VERSION="${ETC_TARGET_VERSION}-${CUSTOMIZER_REVISION}"
 
 ET_ROOT="${ET_ROOT:-/}"

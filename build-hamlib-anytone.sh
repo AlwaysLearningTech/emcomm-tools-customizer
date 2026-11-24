@@ -170,7 +170,7 @@ if [ -n "$missing" ]; then
   warn "Missing build deps:$missing"
   echo "Installing..."
   apt-get update -qq 2>/dev/null || { warn "apt-get update failed"; check_eol_apt_sources || exit 1; }
-  # shellcheck disable=SC2086 -- $missing is an intentional word-split list
+  # shellcheck disable=SC2086  # $missing is an intentional word-split list
   apt-get install -y $missing || {
     check_eol_apt_sources || exit 1
     err "apt install failed"; exit 1; }

@@ -19,7 +19,13 @@
 set -euo pipefail
 
 # Error trap to help diagnose where script fails
-trap 'echo "[ERROR] Script failed at line $LINENO with exit code $?. Command: $BASH_COMMAND" | tee -a "${LOG_FILE:-/tmp/build-etc-iso-error.log}"' ERR
+# No tee here or anywhere in this script: it has hung this build under sudo.
+_on_err() {
+    local msg="[ERROR] Script failed at line $1 with exit code $2. Command: $3"
+    echo "$msg" >&2
+    echo "$msg" >> "${LOG_FILE:-/tmp/build-etc-iso-error.log}"
+}
+trap '_on_err "$LINENO" "$?" "$BASH_COMMAND"' ERR
 
 # ============================================================================
 # Configuration
@@ -831,8 +837,8 @@ WIKIPEDIASCRIPT
                 export ET_EXPERT='${et_expert_val}'
                 cd /tmp/etc-installer/scripts
                 ./install.sh
-            " 2>&1 | tee -a "${LOG_FILE}" | while IFS= read -r line; do
-                echo "[ETC] $line"
+            " 2>&1 | while IFS= read -r line; do
+                log "ETC" "$line"
             done
             echo "${PIPESTATUS[0]}" > "$exit_code_file"
         )
@@ -846,7 +852,7 @@ WIKIPEDIASCRIPT
                 export ET_EXPERT='${et_expert_val}'
                 cd /tmp/etc-installer/scripts
                 ./install.sh
-            " </dev/null 2>&1 | tee -a "${LOG_FILE}" | while IFS= read -r line; do
+            " </dev/null 2>&1 | while IFS= read -r line; do
                 log "ETC" "$line"
             done
             echo "${PIPESTATUS[0]}" > "$exit_code_file"
@@ -980,7 +986,7 @@ create_fresh_user_backup() {
     fi
     
     # Use timeout to prevent infinite hangs
-    if timeout 60 bash -c "yes y | head -1; yes n | head -1" | $run_cmd 2>&1 | grep -v "^$" | tee -a "$LOG_FILE"; then
+    if timeout 60 bash -c "yes y | head -1; yes n | head -1" | $run_cmd 2>&1 | grep -v "^$" >> "$LOG_FILE"; then
         log "DEBUG" "et-user-backup command completed"
     else
         local exit_code=$?
@@ -1170,7 +1176,8 @@ stage_backup_archive() {
     STAGED_BACKUP_DIR="${SQUASHFS_DIR}${STAGED_BACKUP_DIR_REL}"
     mkdir -p "$STAGED_BACKUP_DIR"
     chmod 755 "$STAGED_BACKUP_DIR"
-    local dest="${STAGED_BACKUP_DIR}/$(basename "$src")"
+    local dest
+    dest="${STAGED_BACKUP_DIR}/$(basename "$src")"
     if cp "$src" "$dest"; then
         # Readable by the installed user, who is created later by the
         # installer and so cannot own it here. See CLAUDE.md: a non-minimal
@@ -1561,7 +1568,7 @@ EOF
     if chroot "${SQUASHFS_DIR}" command -v dconf &>/dev/null; then
         # Try to compile dconf database with timeout to prevent hangs
         if timeout 15 chroot "${SQUASHFS_DIR}" \
-            sh -c 'dconf update 2>&1 || true' | tee -a "$LOG_FILE"; then
+            sh -c 'dconf update 2>&1 || true' >> "$LOG_FILE"; then
             log "DEBUG" "dconf database update completed"
         else
             log "DEBUG" "dconf update timed out (expected in chroot without full dbus)"
@@ -1778,7 +1785,7 @@ customize_additional_packages() {
     
     # Update apt cache first (before any repos are added)
     log "INFO" "Updating package cache..."
-    chroot "${SQUASHFS_DIR}" apt-get update 2>&1 | tail -5 | tee -a "$LOG_FILE"
+    chroot "${SQUASHFS_DIR}" apt-get update 2>&1 | tail -5 >> "$LOG_FILE"
     
     # Install packages from standard repos.
     # Guarded: with core_packages now empty and ADDITIONAL_PACKAGES unset, an
@@ -1788,7 +1795,8 @@ customize_additional_packages() {
         log "INFO" "Installing packages: $all_packages"
         # Use -y to auto-confirm, -qq for less output
         # Note: DO NOT quote $all_packages - we need word splitting for separate package names
-        if chroot "${SQUASHFS_DIR}" apt-get install -y -qq $all_packages 2>&1 | tail -10 | tee -a "$LOG_FILE"; then
+        # shellcheck disable=SC2086
+        if chroot "${SQUASHFS_DIR}" apt-get install -y -qq $all_packages 2>&1 | tail -10 >> "$LOG_FILE"; then
             log "SUCCESS" "Packages installed successfully"
         else
             log "WARN" "Some packages may have failed to install - see log for details"
@@ -3638,7 +3646,7 @@ rebuild_iso() {
         -append_partition 2 0xef "$efi_boot_img" \
         -partition_offset 16 \
         -o "$OUTPUT_ISO" \
-        "$ISO_EXTRACT_DIR" 2>&1 | tee -a "$LOG_FILE"
+        "$ISO_EXTRACT_DIR" >> "$LOG_FILE" 2>&1
     
     # Strict check - UEFI-only ISO creation must succeed
     if [ ! -f "$OUTPUT_ISO" ] || [ ! -s "$OUTPUT_ISO" ]; then
@@ -3648,8 +3656,6 @@ rebuild_iso() {
     
     local iso_size
     iso_size=$(du -h "$OUTPUT_ISO" | cut -f1)
-    local iso_size_bytes
-    iso_size_bytes=$(stat -f%z "$OUTPUT_ISO" 2>/dev/null || stat -c%s "$OUTPUT_ISO" 2>/dev/null)
     
     # Estimate final size with component breakdown
     log "INFO" "=== ISO Size Breakdown ==="
@@ -3772,9 +3778,6 @@ copy_to_ventoy() {
         log "ERROR" "This should have been generated during build"
         return 1
     fi
-    
-    # Check for ventoy.json (indicates this is a Ventoy USB)
-    local existing_ventoy="${ventoy_mount}/ventoy"
     
     log "INFO" "Copying ISO to Ventoy USB..."
     echo ""
