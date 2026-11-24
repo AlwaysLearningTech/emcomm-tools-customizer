@@ -4,7 +4,7 @@ Customizes EmComm Tools Community (ETC) images using xorriso/squashfs — no Cub
 no GUI. Applies the same customizations to an **already-installed** system too.
 
 > **Versioning tracks ETC**: `<ETC semver targeted>-<our revision>`. This is
-> `7.0.2-1`, built and tested against ETC R7 (7.0.2). The build warns if the
+> `7.0.2-2`, built and tested against ETC R7 (7.0.2). The build warns if the
 > ETC release it resolves differs from that.
 >
 > **v2.0.0 was a breaking release.** Installer automation is gone: a built ISO now
@@ -23,7 +23,7 @@ no GUI. Applies the same customizations to an **already-installed** system too.
 | `build-etc-iso.sh` | Builds a customized ISO. Boots to the normal installer. | No |
 | `build-hamlib-anytone.sh` | Builds the CowboyPilot Hamlib fork for AnyTone D578UVIII CAT (model 37001). `--revert` restores ETC's Hamlib. | No |
 | `build-direwolf-gpsd.sh` | Rebuilds Dire Wolf with `ENABLE_GPSD` for GPS-tracked beaconing. `--revert` supported. | No |
-| `fix-apt-sources.sh` | Repoints apt at `old-releases.ubuntu.com` for EOL Ubuntu (ETC v6 is 22.10 "kinetic", EOL since 2023). Needed before installing anything. `--check`, `--dry-run`, `--revert`. | No |
+| `fix-apt-sources.sh` | Repoints apt at `old-releases.ubuntu.com` for EOL Ubuntu (ETC through R7 is 22.10 "kinetic", EOL since 2023). Needed before installing anything. `--check`, `--dry-run`, `--revert`. | No |
 
 Customizations live in `lib/` and operate on `$ET_ROOT`, so the ISO build and the
 live-system path run **the same code** and cannot drift apart.
@@ -66,7 +66,7 @@ This customizer **respects upstream ETC architecture**. We:
 - Don't change package selections or install additional software
 - Don't pre-install VARA or Wine prefix (these require a desktop session post-install)
 
-## Release Status: 7.0.2-1 (targets ETC R7)
+## Release Status: 7.0.2-2 (targets ETC R7)
 
 **Breaking release.** Installer automation and the `dd` USB writer were removed,
 and the Anytone D578UV CAT control was rewritten because it never worked. Read
@@ -171,9 +171,10 @@ it did and why it was removed.
      sudo dd if=output/<iso> of=/dev/sdX bs=4M status=progress conv=fsync
      ```
 2. **Boot it** and run the installer as normal.
-3. **Apply customizations** after first boot:
+3. **Restore and verify** after first boot. The scripts ship in the ISO and the
+   customizations are already applied, so there is nothing to clone:
    ```bash
-   sudo ./apply-to-live-system.sh
+   /opt/emcomm-tools-customizer/post-install.sh   # no sudo; menu
    ```
 
 See [UPGRADING.md](UPGRADING.md) for the full upgrade path, including tracking

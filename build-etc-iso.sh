@@ -2270,8 +2270,24 @@ install_anytone_cps() {
     # Note the Qt6 serial port dev package is libqt6serialport6-dev, NOT
     # qt6-serialport-dev, which does not exist in this release.
     #
-    # Residual risk: kinetic's Qt6 is 6.3.1 from 2022. If upstream moves to a
-    # newer Qt6 API this will fail again -- hence still best-effort.
+    # kinetic's Qt6 is 6.3.1 (2022), and upstream uses newer Qt API, so the
+    # 7.0.2-2 build failed to compile. The source is patched for 6.3 before
+    # building. Each rewrite is behaviour-preserving:
+    #   xml.name() == "X"            QStringView vs const char* is Qt 6.4+
+    #                                -> == QLatin1String("X")
+    #   foo_str.removeFirst()        QString::removeFirst/removeAt are 6.5+
+    #   x = x.removeAt(0)            -> .remove(0, 1)
+    #   &QCheckBox::checkStateChanged  Qt 6.7+ -> stateChanged (both slots
+    #                                connected to it take no arguments)
+    #   for (auto [k, v] : m.asKeyValueRange())  Qt 6.4+
+    #                                -> for (k : m.keys()) { v = m.value(k);
+    # Tested against upstream 80489b1 (2026-11-15) on Qt 6.3.1: compiles, and
+    # the binary starts. The patterns are anchored to the shapes upstream
+    # uses, so a new incompatibility still fails the build (best-effort).
+    #
+    # Upstream's `cmake --install` exits 0 but installs nothing, so the old
+    # "install, else copy the binary" fallback never ran and the final check
+    # would have failed even on a good compile. Copy the binary explicitly.
 
     setup_chroot_mounts
     trap 'cleanup_chroot_mounts' EXIT
@@ -2287,18 +2303,22 @@ install_anytone_cps() {
         git clone --depth 1 https://github.com/xbenkozx/anytone-cps.git \
             /usr/local/src/anytone-cps
         cd /usr/local/src/anytone-cps
+        find . \( -name "*.cpp" -o -name "*.h" \) -not -path "./build/*" -print0 \
+          | xargs -0 sed -i -E \
+            -e "s/\.name\(\)( *)(==|!=)( *)\"([^\"]*)\"/.name()\1\2\3QLatin1String(\"\4\")/g" \
+            -e "s/\b([A-Za-z_]+_str)\.removeFirst\(\)/\1.remove(0, 1)/g" \
+            -e "s/\b([A-Za-z_]+) = \1\.removeAt\(0\)/\1 = \1.remove(0, 1)/g" \
+            -e "s/\breturn ([A-Za-z_]+_list)\.removeAt\(0\);/return \1.remove(0, 1);/g" \
+            -e "s/&QCheckBox::checkStateChanged\b/\&QCheckBox::stateChanged/g" \
+            -e "s/for \(auto \[([A-Za-z_]+), ([A-Za-z_]+)\] : ([A-Za-z_]+)\.asKeyValueRange\(\)\) \{/for (const auto \&\1 : \3.keys()) { const auto \2 = \3.value(\1);/g"
+        echo "Patched $(git diff --stat | tail -1) for Qt 6.3"
         cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
         cmake --build build -j"$(nproc)"
-        # Upstream has no install target defined at all stages of development,
-        # so fall back to copying whatever executable the build produced.
-        cmake --install build 2>/dev/null || {
-            bin=$(find build -maxdepth 2 -type f -executable \
-                    -name "*anytone*" -o -maxdepth 2 -type f -executable -name "*cps*" \
-                  | head -1)
-            [ -n "$bin" ] || { echo "no executable produced"; exit 1; }
-            install -m 755 "$bin" /usr/local/bin/anytone-cps
-        }
-        command -v anytone-cps >/dev/null || [ -x /usr/local/bin/anytone-cps ]
+        bin=build/desktop/anytone-cps
+        [ -x "$bin" ] || bin=$(find build -maxdepth 3 -type f -executable -name "anytone-cps*" | head -1)
+        [ -n "$bin" ] && [ -x "$bin" ] || { echo "no executable produced"; exit 1; }
+        install -m 755 "$bin" /usr/local/bin/anytone-cps
+        [ -x /usr/local/bin/anytone-cps ]
     ' 2>&1 | tail -25 >> "$LOG_FILE" || rc=$?
 
     cleanup_chroot_mounts
@@ -3063,10 +3083,13 @@ embed_cache_files() {
     
     # Copy ETC tarball if present (find most recent)
     local etc_tarball
-    etc_tarball=$(find "$CACHE_DIR" -maxdepth 1 -name "emcomm-tools-os-community*.tar.gz" -type f | sort -r | head -1)
+    # newest_cached follows symlinks: on a system installed from one of these
+    # ISOs, cache/ holds a symlink to the embedded tarball, and a plain
+    # `find -type f` skipped it, so the next ISO silently lost it.
+    etc_tarball=$(newest_cached 'emcomm-tools-os-community*.tar.gz')
     if [ -n "$etc_tarball" ] && [ -f "$etc_tarball" ]; then
         log "DEBUG" "Copying ETC tarball to embedded cache..."
-        cp -v "$etc_tarball" "$target_cache/"
+        cp -vL "$etc_tarball" "$target_cache/"
         log "SUCCESS" "ETC tarball embedded"
     else
         log "DEBUG" "No ETC tarball found in cache"
@@ -3619,25 +3642,18 @@ rebuild_iso() {
     # Estimate final size with component breakdown
     log "INFO" "=== ISO Size Breakdown ==="
     
-    local ubuntu_size=0
-    local ubuntu_iso="${CACHE_DIR}/${UBUNTU_ISO_FILE}"
-    if [ -f "$ubuntu_iso" ]; then
-        ubuntu_size=$(stat -c%s "$ubuntu_iso" 2>/dev/null || stat -f%z "$ubuntu_iso" 2>/dev/null)
-        log "INFO" "  Ubuntu ISO embedded: $(numfmt --to=iec-i --suffix=B $ubuntu_size 2>/dev/null || echo "~4GB")"
-    fi
-    
-    local wine_size=0
-    local wine_backup
-    wine_backup=$(find "$CACHE_DIR" -maxdepth 1 -name "etc-wine-backup*.tar.gz" -type f | sort -r | head -1)
-    if [ -n "$wine_backup" ] && [ -f "$wine_backup" ]; then
-        wine_size=$(stat -c%s "$wine_backup" 2>/dev/null || stat -f%z "$wine_backup" 2>/dev/null)
-        log "INFO" "  Wine backup: $(numfmt --to=iec-i --suffix=B $wine_size 2>/dev/null || du -h "$wine_backup" | cut -f1)"
-    fi
-    
-    local secrets_size=0
-    if [ -f "$SECRETS_FILE" ]; then
-        secrets_size=$(stat -c%s "$SECRETS_FILE" 2>/dev/null || stat -f%z "$SECRETS_FILE" 2>/dev/null)
-        log "INFO" "  secrets.env: $(numfmt --to=iec-i --suffix=B $secrets_size 2>/dev/null || du -h "$SECRETS_FILE" | cut -f1)"
+    # Measure what was actually embedded, not what sits in cache/: cache/
+    # entries are often symlinks into /opt/emcomm-customizer-cache, which made
+    # this report "Ubuntu ISO embedded: 59B" on a 15GB ISO.
+    local embedded="${SQUASHFS_DIR}/opt/emcomm-customizer-cache"
+    if [ -d "$embedded" ]; then
+        log "INFO" "  Embedded cache total: $(du -sh "$embedded" 2>/dev/null | cut -f1)"
+        local item
+        while IFS= read -r item; do
+            log "INFO" "    $(du -sh "$item" 2>/dev/null | cut -f1)  $(basename "$item")"
+        done < <(find "$embedded" -mindepth 1 -maxdepth 1 -size +1M -o -mindepth 1 -maxdepth 1 -type d | sort)
+    else
+        log "INFO" "  Embedded cache: none"
     fi
     
     log "INFO" "  Final ISO: $iso_size"

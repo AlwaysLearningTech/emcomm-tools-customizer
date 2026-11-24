@@ -149,7 +149,8 @@ sudo dd if=output/<iso> of=/dev/sdX bs=4M status=progress conv=fsync
 
 Boot it and run the **normal Ubuntu / ETC installer**. You choose the disk and
 partition layout — there is no preseed and no automated partitioning. After first
-boot, run `sudo ./apply-to-live-system.sh`.
+boot, run `/opt/emcomm-tools-customizer/post-install.sh` (no sudo) to restore
+your home directory and verify. The ISO already has every customization in it.
 
 ---
 
@@ -208,4 +209,4 @@ sudo ./build-etc-iso.sh -r stable -d -v    # + bash tracing
 ## More
 
 - [UPGRADING.md](UPGRADING.md) — upgrade paths, beta tracking, v1 migration
-- [CHANGELOG.md](CHANGELOG.md) — what changed in 7.0.2-1 and why
+- [CHANGELOG.md](CHANGELOG.md) — what changed in each release and why
