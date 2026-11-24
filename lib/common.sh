@@ -265,3 +265,42 @@ hamlib_has_anytone() {
     out=$(rigctl -l 2>/dev/null || true)
     grep -qi anytone <<< "$out"
 }
+
+# check_secrets_syntax <file>
+#
+# secrets.env is SOURCED as bash, so a line that is not a valid assignment is
+# run as a command. A WiFi name with a hyphen (WIFI_SSID_Home-5G=...) gave a
+# bare "command not found" a few seconds into a build. Bash names allow only
+# letters, digits and underscores.
+#
+# The WiFi scanner also matches only WIFI_SSID_[A-Z0-9_]+, so a lowercase
+# suffix (WIFI_SSID_MrBlue=...) is valid bash but would be skipped silently.
+#
+# Reports line numbers and the name only -- never a value -- and returns 1 on
+# any problem, so callers can stop before sourcing.
+check_secrets_syntax() {
+    local file="$1" n=0 bad=0 line name
+    [ -f "$file" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        n=$((n + 1))
+        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+        line="${line#"${line%%[![:space:]]*}"}"   # leading whitespace is fine
+        name="${line%%=*}"
+        if ! [[ "$line" =~ ^(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*= ]]; then
+            if [[ "$line" == *=* ]]; then
+                log "ERROR" "secrets.env line ${n}: '${name}' is not a valid name -- use only A-Z, 0-9 and _"
+            else
+                log "ERROR" "secrets.env line ${n}: not a NAME=value assignment"
+            fi
+            bad=$((bad + 1))
+        elif [[ "$name" =~ ^WIFI_(SSID|PASSWORD|AUTOCONNECT)_ ]] && ! [[ "$name" =~ ^WIFI_(SSID|PASSWORD|AUTOCONNECT)_[A-Z0-9_]+$ ]]; then
+            log "ERROR" "secrets.env line ${n}: '${name}' -- the part after WIFI_SSID_ etc. must be UPPERCASE (A-Z, 0-9, _), or the network is skipped"
+            bad=$((bad + 1))
+        fi
+    done < "$file"
+    if [ "$bad" -gt 0 ]; then
+        log "ERROR" "${bad} problem(s) in ${file}. The suffix is only a label; the network name itself goes in the value, e.g. WIFI_SSID_HOME_5G=\"My-Network-5G\""
+        return 1
+    fi
+    return 0
+}
