@@ -149,6 +149,7 @@ echo "Backup directory: ${ET_BACKUP_DIR}"
 
 # --- Settings --------------------------------------------------------------
 if [ -f "$SECRETS_FILE" ]; then
+  check_secrets_syntax "$SECRETS_FILE" || exit 1
   # shellcheck source=/dev/null
   source "$SECRETS_FILE"
   log "INFO" "Loaded settings from $SECRETS_FILE"

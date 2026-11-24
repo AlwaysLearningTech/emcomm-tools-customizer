@@ -432,6 +432,7 @@ check_prerequisites() {
         log "ERROR" "Copy secrets.env.template to secrets.env and configure it"
         return 1
     fi
+    check_secrets_syntax "$SECRETS_FILE" || return 1
     
     # Validate secrets.env has required fields
     # shellcheck source=/dev/null

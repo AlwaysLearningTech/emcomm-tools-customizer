@@ -122,6 +122,15 @@ embedded tarball, and `embed_cache_files()` looked for it with
 follows them. The build's size report had the same problem ("Ubuntu ISO
 embedded: 59B" on a 15GB ISO); it now measures what was actually embedded.
 
+### Fixed — a bad name in `secrets.env` failed with "command not found"
+
+`secrets.env` is sourced as bash, so `WIFI_SSID_MyNet-5G=...` (a hyphen in the
+name) is run as a command, and a build died seconds in with nothing pointing at
+the file. A lowercase WiFi label was worse: valid bash, but the scanner only
+matches `WIFI_SSID_[A-Z0-9_]+`, so the network was silently left out. Both
+scripts now run `check_secrets_syntax` before sourcing the file; it names the
+line and the variable (never the value) and stops.
+
 ### Added
 
 - The repo's tracked files are embedded at `/opt/emcomm-tools-customizer`
