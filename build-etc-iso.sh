@@ -19,7 +19,13 @@
 set -euo pipefail
 
 # Error trap to help diagnose where script fails
-trap 'echo "[ERROR] Script failed at line $LINENO with exit code $?. Command: $BASH_COMMAND" | tee -a "${LOG_FILE:-/tmp/build-etc-iso-error.log}"' ERR
+# No tee here or anywhere in this script: it has hung this build under sudo.
+_on_err() {
+    local msg="[ERROR] Script failed at line $1 with exit code $2. Command: $3"
+    echo "$msg" >&2
+    echo "$msg" >> "${LOG_FILE:-/tmp/build-etc-iso-error.log}"
+}
+trap '_on_err "$LINENO" "$?" "$BASH_COMMAND"' ERR
 
 # ============================================================================
 # Configuration
@@ -196,6 +202,7 @@ CONFIGURATION:
 DIRECTORY STRUCTURE:
     cache/    Build inputs (persistent, embedded in non-minimal ISOs)
               - Ubuntu ISO: drop it here to skip the 3.6GB download
+                (embedded only with EMBED_UBUNTU_ISO=yes)
               - GridTracker2-*.deb: required for ENABLE_GRIDTRACKER=yes
               - code_*.deb: kept automatically as an offline fallback
               - etc-user-backup / etc-wine-backup archives (optional)
@@ -206,9 +213,10 @@ DIRECTORY STRUCTURE:
     logs/     Build logs (DEBUG messages always written here)
 
 BUILD SIZE:
-    By default, cache files (Ubuntu ISO, ETC tarballs) are embedded in the
-    output ISO so they are available for the next build on the installed
-    system. Use -m for a minimal build that excludes these (saves ~4GB).
+    By default, cache/ (ETC tarball, .debs, backups) and secrets.env are
+    embedded in the output ISO for the next build on the installed system.
+    The 3.8GB Ubuntu ISO is not, unless EMBED_UBUNTU_ISO=yes in secrets.env.
+    Use -m for a minimal build that embeds nothing (and is shareable).
 
 PREREQUISITES:
     sudo apt install xorriso squashfs-tools wget curl jq git
@@ -829,8 +837,8 @@ WIKIPEDIASCRIPT
                 export ET_EXPERT='${et_expert_val}'
                 cd /tmp/etc-installer/scripts
                 ./install.sh
-            " 2>&1 | tee -a "${LOG_FILE}" | while IFS= read -r line; do
-                echo "[ETC] $line"
+            " 2>&1 | while IFS= read -r line; do
+                log "ETC" "$line"
             done
             echo "${PIPESTATUS[0]}" > "$exit_code_file"
         )
@@ -844,7 +852,7 @@ WIKIPEDIASCRIPT
                 export ET_EXPERT='${et_expert_val}'
                 cd /tmp/etc-installer/scripts
                 ./install.sh
-            " </dev/null 2>&1 | tee -a "${LOG_FILE}" | while IFS= read -r line; do
+            " </dev/null 2>&1 | while IFS= read -r line; do
                 log "ETC" "$line"
             done
             echo "${PIPESTATUS[0]}" > "$exit_code_file"
@@ -978,7 +986,7 @@ create_fresh_user_backup() {
     fi
     
     # Use timeout to prevent infinite hangs
-    if timeout 60 bash -c "yes y | head -1; yes n | head -1" | $run_cmd 2>&1 | grep -v "^$" | tee -a "$LOG_FILE"; then
+    if timeout 60 bash -c "yes y | head -1; yes n | head -1" | $run_cmd 2>&1 | grep -v "^$" >> "$LOG_FILE"; then
         log "DEBUG" "et-user-backup command completed"
     else
         local exit_code=$?
@@ -1168,7 +1176,8 @@ stage_backup_archive() {
     STAGED_BACKUP_DIR="${SQUASHFS_DIR}${STAGED_BACKUP_DIR_REL}"
     mkdir -p "$STAGED_BACKUP_DIR"
     chmod 755 "$STAGED_BACKUP_DIR"
-    local dest="${STAGED_BACKUP_DIR}/$(basename "$src")"
+    local dest
+    dest="${STAGED_BACKUP_DIR}/$(basename "$src")"
     if cp "$src" "$dest"; then
         # Readable by the installed user, who is created later by the
         # installer and so cannot own it here. See CLAUDE.md: a non-minimal
@@ -1559,7 +1568,7 @@ EOF
     if chroot "${SQUASHFS_DIR}" command -v dconf &>/dev/null; then
         # Try to compile dconf database with timeout to prevent hangs
         if timeout 15 chroot "${SQUASHFS_DIR}" \
-            sh -c 'dconf update 2>&1 || true' | tee -a "$LOG_FILE"; then
+            sh -c 'dconf update 2>&1 || true' >> "$LOG_FILE"; then
             log "DEBUG" "dconf database update completed"
         else
             log "DEBUG" "dconf update timed out (expected in chroot without full dbus)"
@@ -1776,7 +1785,7 @@ customize_additional_packages() {
     
     # Update apt cache first (before any repos are added)
     log "INFO" "Updating package cache..."
-    chroot "${SQUASHFS_DIR}" apt-get update 2>&1 | tail -5 | tee -a "$LOG_FILE"
+    chroot "${SQUASHFS_DIR}" apt-get update 2>&1 | tail -5 >> "$LOG_FILE"
     
     # Install packages from standard repos.
     # Guarded: with core_packages now empty and ADDITIONAL_PACKAGES unset, an
@@ -1786,7 +1795,8 @@ customize_additional_packages() {
         log "INFO" "Installing packages: $all_packages"
         # Use -y to auto-confirm, -qq for less output
         # Note: DO NOT quote $all_packages - we need word splitting for separate package names
-        if chroot "${SQUASHFS_DIR}" apt-get install -y -qq $all_packages 2>&1 | tail -10 | tee -a "$LOG_FILE"; then
+        # shellcheck disable=SC2086
+        if chroot "${SQUASHFS_DIR}" apt-get install -y -qq $all_packages 2>&1 | tail -10 >> "$LOG_FILE"; then
             log "SUCCESS" "Packages installed successfully"
         else
             log "WARN" "Some packages may have failed to install - see log for details"
@@ -2270,8 +2280,24 @@ install_anytone_cps() {
     # Note the Qt6 serial port dev package is libqt6serialport6-dev, NOT
     # qt6-serialport-dev, which does not exist in this release.
     #
-    # Residual risk: kinetic's Qt6 is 6.3.1 from 2022. If upstream moves to a
-    # newer Qt6 API this will fail again -- hence still best-effort.
+    # kinetic's Qt6 is 6.3.1 (2022), and upstream uses newer Qt API, so the
+    # 7.0.2-2 build failed to compile. The source is patched for 6.3 before
+    # building. Each rewrite is behaviour-preserving:
+    #   xml.name() == "X"            QStringView vs const char* is Qt 6.4+
+    #                                -> == QLatin1String("X")
+    #   foo_str.removeFirst()        QString::removeFirst/removeAt are 6.5+
+    #   x = x.removeAt(0)            -> .remove(0, 1)
+    #   &QCheckBox::checkStateChanged  Qt 6.7+ -> stateChanged (both slots
+    #                                connected to it take no arguments)
+    #   for (auto [k, v] : m.asKeyValueRange())  Qt 6.4+
+    #                                -> for (k : m.keys()) { v = m.value(k);
+    # Tested against upstream 80489b1 (2026-11-15) on Qt 6.3.1: compiles, and
+    # the binary starts. The patterns are anchored to the shapes upstream
+    # uses, so a new incompatibility still fails the build (best-effort).
+    #
+    # Upstream's `cmake --install` exits 0 but installs nothing, so the old
+    # "install, else copy the binary" fallback never ran and the final check
+    # would have failed even on a good compile. Copy the binary explicitly.
 
     setup_chroot_mounts
     trap 'cleanup_chroot_mounts' EXIT
@@ -2287,18 +2313,22 @@ install_anytone_cps() {
         git clone --depth 1 https://github.com/xbenkozx/anytone-cps.git \
             /usr/local/src/anytone-cps
         cd /usr/local/src/anytone-cps
+        find . \( -name "*.cpp" -o -name "*.h" \) -not -path "./build/*" -print0 \
+          | xargs -0 sed -i -E \
+            -e "s/\.name\(\)( *)(==|!=)( *)\"([^\"]*)\"/.name()\1\2\3QLatin1String(\"\4\")/g" \
+            -e "s/\b([A-Za-z_]+_str)\.removeFirst\(\)/\1.remove(0, 1)/g" \
+            -e "s/\b([A-Za-z_]+) = \1\.removeAt\(0\)/\1 = \1.remove(0, 1)/g" \
+            -e "s/\breturn ([A-Za-z_]+_list)\.removeAt\(0\);/return \1.remove(0, 1);/g" \
+            -e "s/&QCheckBox::checkStateChanged\b/\&QCheckBox::stateChanged/g" \
+            -e "s/for \(auto \[([A-Za-z_]+), ([A-Za-z_]+)\] : ([A-Za-z_]+)\.asKeyValueRange\(\)\) \{/for (const auto \&\1 : \3.keys()) { const auto \2 = \3.value(\1);/g"
+        echo "Patched $(git diff --stat | tail -1) for Qt 6.3"
         cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
         cmake --build build -j"$(nproc)"
-        # Upstream has no install target defined at all stages of development,
-        # so fall back to copying whatever executable the build produced.
-        cmake --install build 2>/dev/null || {
-            bin=$(find build -maxdepth 2 -type f -executable \
-                    -name "*anytone*" -o -maxdepth 2 -type f -executable -name "*cps*" \
-                  | head -1)
-            [ -n "$bin" ] || { echo "no executable produced"; exit 1; }
-            install -m 755 "$bin" /usr/local/bin/anytone-cps
-        }
-        command -v anytone-cps >/dev/null || [ -x /usr/local/bin/anytone-cps ]
+        bin=build/desktop/anytone-cps
+        [ -x "$bin" ] || bin=$(find build -maxdepth 3 -type f -executable -name "anytone-cps*" | head -1)
+        [ -n "$bin" ] && [ -x "$bin" ] || { echo "no executable produced"; exit 1; }
+        install -m 755 "$bin" /usr/local/bin/anytone-cps
+        [ -x /usr/local/bin/anytone-cps ]
     ' 2>&1 | tail -25 >> "$LOG_FILE" || rc=$?
 
     cleanup_chroot_mounts
@@ -3051,22 +3081,35 @@ embed_cache_files() {
     log "DEBUG" "Creating target cache dir: $target_cache"
     mkdir -p "$target_cache"
     
-    # Copy Ubuntu ISO if present
+    # The Ubuntu ISO is opt-in (EMBED_UBUNTU_ISO=yes). At 3.8GB it was the
+    # largest single thing in a 16GB image -- too big for a 16GB stick -- and
+    # it only saves a download the next time you build. Without it, a rebuild
+    # on the installed system fetches it from old-releases.ubuntu.com.
+    local embed_iso="no"
+    if [ -f "$SECRETS_FILE" ]; then
+        # shellcheck source=/dev/null
+        embed_iso="$(set +u; source "$SECRETS_FILE" >/dev/null 2>&1; echo "${EMBED_UBUNTU_ISO:-no}")"
+    fi
     local ubuntu_iso="${CACHE_DIR}/${UBUNTU_ISO_FILE}"
-    if [ -f "$ubuntu_iso" ]; then
+    if [ "$embed_iso" != "yes" ]; then
+        log "INFO" "Ubuntu ISO not embedded (EMBED_UBUNTU_ISO=${embed_iso}; saves ~3.8GB)"
+    elif [ -f "$ubuntu_iso" ]; then
         log "DEBUG" "Copying Ubuntu ISO to embedded cache..."
-        cp -v "$ubuntu_iso" "$target_cache/"
-        log "SUCCESS" "Ubuntu ISO embedded (~4GB)"
+        cp -vL "$ubuntu_iso" "$target_cache/"
+        log "SUCCESS" "Ubuntu ISO embedded (~4GB, EMBED_UBUNTU_ISO=yes)"
     else
-        log "DEBUG" "No Ubuntu ISO found in cache"
+        log "WARN" "EMBED_UBUNTU_ISO=yes but no Ubuntu ISO in cache/ to embed"
     fi
     
     # Copy ETC tarball if present (find most recent)
     local etc_tarball
-    etc_tarball=$(find "$CACHE_DIR" -maxdepth 1 -name "emcomm-tools-os-community*.tar.gz" -type f | sort -r | head -1)
+    # newest_cached follows symlinks: on a system installed from one of these
+    # ISOs, cache/ holds a symlink to the embedded tarball, and a plain
+    # `find -type f` skipped it, so the next ISO silently lost it.
+    etc_tarball=$(newest_cached 'emcomm-tools-os-community*.tar.gz')
     if [ -n "$etc_tarball" ] && [ -f "$etc_tarball" ]; then
         log "DEBUG" "Copying ETC tarball to embedded cache..."
-        cp -v "$etc_tarball" "$target_cache/"
+        cp -vL "$etc_tarball" "$target_cache/"
         log "SUCCESS" "ETC tarball embedded"
     else
         log "DEBUG" "No ETC tarball found in cache"
@@ -3603,7 +3646,7 @@ rebuild_iso() {
         -append_partition 2 0xef "$efi_boot_img" \
         -partition_offset 16 \
         -o "$OUTPUT_ISO" \
-        "$ISO_EXTRACT_DIR" 2>&1 | tee -a "$LOG_FILE"
+        "$ISO_EXTRACT_DIR" >> "$LOG_FILE" 2>&1
     
     # Strict check - UEFI-only ISO creation must succeed
     if [ ! -f "$OUTPUT_ISO" ] || [ ! -s "$OUTPUT_ISO" ]; then
@@ -3613,31 +3656,22 @@ rebuild_iso() {
     
     local iso_size
     iso_size=$(du -h "$OUTPUT_ISO" | cut -f1)
-    local iso_size_bytes
-    iso_size_bytes=$(stat -f%z "$OUTPUT_ISO" 2>/dev/null || stat -c%s "$OUTPUT_ISO" 2>/dev/null)
     
     # Estimate final size with component breakdown
     log "INFO" "=== ISO Size Breakdown ==="
     
-    local ubuntu_size=0
-    local ubuntu_iso="${CACHE_DIR}/${UBUNTU_ISO_FILE}"
-    if [ -f "$ubuntu_iso" ]; then
-        ubuntu_size=$(stat -c%s "$ubuntu_iso" 2>/dev/null || stat -f%z "$ubuntu_iso" 2>/dev/null)
-        log "INFO" "  Ubuntu ISO embedded: $(numfmt --to=iec-i --suffix=B $ubuntu_size 2>/dev/null || echo "~4GB")"
-    fi
-    
-    local wine_size=0
-    local wine_backup
-    wine_backup=$(find "$CACHE_DIR" -maxdepth 1 -name "etc-wine-backup*.tar.gz" -type f | sort -r | head -1)
-    if [ -n "$wine_backup" ] && [ -f "$wine_backup" ]; then
-        wine_size=$(stat -c%s "$wine_backup" 2>/dev/null || stat -f%z "$wine_backup" 2>/dev/null)
-        log "INFO" "  Wine backup: $(numfmt --to=iec-i --suffix=B $wine_size 2>/dev/null || du -h "$wine_backup" | cut -f1)"
-    fi
-    
-    local secrets_size=0
-    if [ -f "$SECRETS_FILE" ]; then
-        secrets_size=$(stat -c%s "$SECRETS_FILE" 2>/dev/null || stat -f%z "$SECRETS_FILE" 2>/dev/null)
-        log "INFO" "  secrets.env: $(numfmt --to=iec-i --suffix=B $secrets_size 2>/dev/null || du -h "$SECRETS_FILE" | cut -f1)"
+    # Measure what was actually embedded, not what sits in cache/: cache/
+    # entries are often symlinks into /opt/emcomm-customizer-cache, which made
+    # this report "Ubuntu ISO embedded: 59B" on a 15GB ISO.
+    local embedded="${SQUASHFS_DIR}/opt/emcomm-customizer-cache"
+    if [ -d "$embedded" ]; then
+        log "INFO" "  Embedded cache total: $(du -sh "$embedded" 2>/dev/null | cut -f1)"
+        local item
+        while IFS= read -r item; do
+            log "INFO" "    $(du -sh "$item" 2>/dev/null | cut -f1)  $(basename "$item")"
+        done < <(find "$embedded" -mindepth 1 -maxdepth 1 -size +1M -o -mindepth 1 -maxdepth 1 -type d | sort)
+    else
+        log "INFO" "  Embedded cache: none"
     fi
     
     log "INFO" "  Final ISO: $iso_size"
@@ -3744,9 +3778,6 @@ copy_to_ventoy() {
         log "ERROR" "This should have been generated during build"
         return 1
     fi
-    
-    # Check for ventoy.json (indicates this is a Ventoy USB)
-    local existing_ventoy="${ventoy_mount}/ventoy"
     
     log "INFO" "Copying ISO to Ventoy USB..."
     echo ""

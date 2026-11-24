@@ -174,7 +174,7 @@ install_python_tools() {
             log_info "Added ~/.local/bin to ~/.bashrc"
         fi
     else
-        log_success "~/.local/bin already on PATH"
+        log_success "${HOME}/.local/bin already on PATH"
     fi
 
     # Append pip completion only once -- v1 appended on every run.

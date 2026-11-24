@@ -34,7 +34,7 @@ sudo ./apply-to-live-system.sh --verify   # or
 | | **Apply to a live system** | **Build a new ISO** |
 | --- | --- | --- |
 | Command | `sudo ./apply-to-live-system.sh` | `sudo ./build-etc-iso.sh` |
-| Time | seconds | ~30–60 min |
+| Time | seconds | ~90–120 min (squashfs compression dominates) |
 | Keeps your data | yes | no — it's a fresh install |
 | Touches disks | never | never (writes an `.iso` file) |
 | Good for | config changes, trying a beta feature, fixing drift | new hardware, a clean rebuild, ETC version jumps |
@@ -49,8 +49,12 @@ This is what you want most of the time. It rewrites the APRS template, the radio
 profiles and the addon launchers in place. It does not touch partitions, the
 bootloader, or your home directory.
 
+On a system installed from one of these ISOs the scripts are already at
+`/opt/emcomm-tools-customizer/` (a snapshot from build time); use a clone when
+you want newer code than the ISO shipped with.
+
 ```bash
-cd ~/github/emcomm-tools-customizer
+cd ~/Github/emcomm-tools-customizer
 git pull
 
 sudo ./apply-to-live-system.sh --dry-run     # see what would change
@@ -88,7 +92,7 @@ secret worth storing.
 
 ## Prerequisite: working apt
 
-ETC v6 is Ubuntu 22.10 "kinetic", end-of-life since July 2023. Its packages were
+ETC (through R7) is Ubuntu 22.10 "kinetic", end-of-life since July 2023. Its packages were
 moved to `old-releases.ubuntu.com`, so a stock `sources.list` yields "does not
 have a Release file" and then "Unable to locate package" for everything.
 
@@ -163,12 +167,12 @@ rigctl -m 2 -r localhost:4532 T 0   # unkey
 
 ### GPS-tracked APRS beaconing
 
-ETC v6's Dire Wolf is built without gpsd, so `GPSD`/`TBEACON` are a hard config
+ETC's Dire Wolf (v6 and R7 alike) is built without gpsd, so `GPSD`/`TBEACON` are a hard config
 error. Check yours:
 
 ```bash
 direwolf | grep 'optional support'
-# stock v6: "hamlib cm108-ptt"  -> no gpsd
+# stock ETC: "hamlib cm108-ptt"  -> no gpsd
 ```
 
 `APRS_BEACON_MODE="gps"` detects this and falls back to a fixed beacon rather
@@ -218,11 +222,13 @@ disk unattended; v2 does not, and neither does the Ventoy path.
      ```
 2. Boot it and run the normal Ubuntu / EmComm Tools installer. **You choose the
    disk and the partition layout**, every time.
-3. After first boot, apply customizations:
+3. After first boot, restore your home directory and check the install. The
+   scripts are already on the system; nothing to clone:
    ```bash
-   git clone <this repo> && cd emcomm-tools-customizer
-   sudo ./apply-to-live-system.sh
+   /opt/emcomm-tools-customizer/post-install.sh            # menu: restore, Wine, verify
    ```
+   The ISO already carries every customization, so `apply-to-live-system.sh`
+   is only needed later, to pick up changes made after the ISO was built.
 
 ---
 

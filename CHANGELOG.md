@@ -78,6 +78,50 @@ keyring locked, so VS Code will ask to unlock it.
 The build searched only `$HOME` and `cache/` for backups. It now also searches
 `~/.etc-backups` and `/opt/emcomm-customizer-cache/backups`.
 
+### Fixed — the user backup carried a second copy of the Wine prefix
+
+et-os-addons' overlay ships its own `/etc/skel/BACKUP_ITEMS.lst`, which lists
+`.wine32`, `.navit/maps` and `my-maps` -- the three paths this manifest leaves
+out on purpose. The addons step copied it into skel, and
+`customize_user_backup_manifest()` "preserved" it as if it were the operator's,
+so every backup from an installed system included them. The first 7.0.2-2
+build's user backup was 1.3GB against 642MB the day before, and that archive
+was then embedded in the ISO next to the separate Wine backup.
+
+The operator's restored manifest is now snapshotted before the addons run.
+Only a manifest carrying our header is merged, and a merge can never re-add
+those three paths -- `BACKUP_EXTRA_ITEMS` is the one way to include them. On a
+system from an earlier ISO, remove the three lines from `~/BACKUP_ITEMS.lst`.
+
+### Fixed — anytone-cps never compiled
+
+Upstream uses Qt 6.4–6.7 API (`QStringView == "literal"`,
+`QString::removeFirst`, `QCheckBox::checkStateChanged`,
+`QMap::asKeyValueRange`); kinetic has Qt 6.3.1. The source is now rewritten to
+the 6.3 equivalents before building -- no `-fpermissive`, which would compile
+the original as undefined behaviour. Upstream's `cmake --install` also exits 0
+while installing nothing, so the old copy-the-binary fallback never ran; the
+binary is now installed explicitly. Tested against upstream `80489b1` on
+Qt 6.3.1: it compiles and starts. `ENABLE_ANYTONE_CPS` now defaults to `yes`
+in the template.
+
+### Changed — the Ubuntu ISO is no longer embedded by default
+
+At 3.8GB it was the largest single item in a 16.0GB image, which no longer
+fit a 16GB USB stick, and all it saved was one download on the next rebuild.
+Set `EMBED_UBUNTU_ISO="yes"` in `secrets.env` to keep embedding it. Without
+it, a rebuild on the installed system downloads the ISO from
+old-releases.ubuntu.com; the machine that already has it in `cache/` still
+reuses it.
+
+### Fixed — the ETC tarball was dropped from the embedded cache
+
+On a system installed from one of these ISOs, `cache/` holds a symlink to the
+embedded tarball, and `embed_cache_files()` looked for it with
+`find -type f`, which skips symlinks. It now uses `newest_cached`, which
+follows them. The build's size report had the same problem ("Ubuntu ISO
+embedded: 59B" on a 15GB ISO); it now measures what was actually embedded.
+
 ### Added
 
 - The repo's tracked files are embedded at `/opt/emcomm-tools-customizer`
