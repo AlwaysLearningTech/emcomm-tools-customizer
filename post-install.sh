@@ -83,18 +83,17 @@ check_not_root() {
 # ============================================================================
 # Find the newest backup of a given kind across all search dirs
 # ============================================================================
+# Skips archives that fail `gzip -t`: an interrupted et-user-backup leaves a
+# truncated file that is newer than every intact one.
 find_backup() {
-    local pattern="$1" d newest=""
+    local pattern="$1" d f
     for d in "${BACKUP_DIRS[@]}"; do
         [ -d "$d" ] || continue
-        local hit
-        hit=$(find "$d" -maxdepth 1 -name "$pattern" -type f -printf '%T@ %p\n' 2>/dev/null \
-              | sort -rn | head -1 | cut -d' ' -f2-)
-        if [ -n "$hit" ]; then
-            if [ -z "$newest" ] || [ "$hit" -nt "$newest" ]; then newest="$hit"; fi
-        fi
+        find "$d" -maxdepth 1 -name "$pattern" -type f -printf '%T@ %p\n' 2>/dev/null
+    done | sort -rn | cut -d' ' -f2- | while IFS= read -r f; do
+        if gzip -t "$f" 2>/dev/null; then printf '%s\n' "$f"; break; fi
+        log_warn "Skipping incomplete archive: $f (gzip -t failed)" >&2
     done
-    printf '%s\n' "$newest"
 }
 
 restore_user_backup() {

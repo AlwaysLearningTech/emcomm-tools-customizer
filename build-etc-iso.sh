@@ -956,6 +956,23 @@ WIKIPEDIASCRIPT
 # ============================================================================
 
 
+# True if a .tar.gz is a complete gzip stream. Catches the truncated archive
+# an interrupted et-user-backup leaves behind.
+backup_archive_ok() {
+    gzip -t "$1" 2>/dev/null
+}
+
+# Rename a broken archive out of the backup globs rather than delete it:
+# it is the user's file, and the decision to remove it is theirs.
+set_aside_bad_archive() {
+    local f="$1"
+    if mv -f "$f" "${f}.partial" 2>/dev/null; then
+        log "WARN" "Incomplete backup archive renamed to $(basename "$f").partial (gzip -t failed)"
+    else
+        log "WARN" "Incomplete backup archive $f could not be renamed; it will be skipped"
+    fi
+}
+
 create_fresh_user_backup() {
     log "INFO" "Creating fresh user backup from running ETC system..."
     
@@ -987,9 +1004,15 @@ create_fresh_user_backup() {
     existing_backup=$(find "$real_home" -maxdepth 1 -name "etc-user-backup-*-${today_date}.tar.gz" -type f 2>/dev/null | head -1)
     
     if [ -n "$existing_backup" ] && [ -f "$existing_backup" ]; then
-        log "INFO" "Found existing backup from today: $(basename "$existing_backup")"
-        log "INFO" "Skipping backup creation (delete file to force new backup)"
-        return 0
+        # A build interrupted while et-user-backup was writing leaves a
+        # truncated archive with today's name. Trusting it shipped an ISO
+        # with no user backup at all (7.0.2-2 build of 2026-11-24).
+        if backup_archive_ok "$existing_backup"; then
+            log "INFO" "Found existing backup from today: $(basename "$existing_backup")"
+            log "INFO" "Skipping backup creation (delete file to force new backup)"
+            return 0
+        fi
+        set_aside_bad_archive "$existing_backup"
     fi
     
     log "INFO" "Running et-user-backup (answering prompts automatically)..."
@@ -1020,6 +1043,11 @@ create_fresh_user_backup() {
     local user_backup_file
     user_backup_file=$(find "$real_home" -maxdepth 1 -name "etc-user-backup-*.tar.gz" -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
     
+    if [ -n "$user_backup_file" ] && [ -f "$user_backup_file" ] && ! backup_archive_ok "$user_backup_file"; then
+        set_aside_bad_archive "$user_backup_file"
+        return 1
+    fi
+
     if [ -n "$user_backup_file" ] && [ -f "$user_backup_file" ]; then
         local backup_size
         backup_size=$(du -h "$user_backup_file" | cut -f1)
@@ -1051,10 +1079,17 @@ restore_user_backup() {
     # /opt/emcomm-customizer-cache/backups. Searching only $HOME and cache/
     # meant a rebuild there silently shipped without the operator's config.
     local -a search=("$home_dir" "$cache_dir" "${home_dir}/.etc-backups" "${STAGED_BACKUP_DIR_REL}")
+    # Newest archive that is actually complete. A truncated one (an
+    # interrupted et-user-backup) used to win on mtime and fail the restore,
+    # with intact older archives right beside it.
     _newest_backup() {
-        local d; for d in "${search[@]}"; do
+        local d f
+        for d in "${search[@]}"; do
             [ -d "$d" ] && find -L "$d" -maxdepth 1 -name "$1" -type f -printf '%T@ %p\n' 2>/dev/null
-        done | sort -rn | head -1 | cut -d' ' -f2-
+        done | sort -rn | cut -d' ' -f2- | while IFS= read -r f; do
+            if backup_archive_ok "$f"; then echo "$f"; break; fi
+            log "WARN" "Skipping incomplete archive: $f (gzip -t failed)"
+        done
     }
     log "DEBUG" "Backup search: ${search[*]}"
     user_backup=$(_newest_backup 'etc-user-backup-*.tar.gz')

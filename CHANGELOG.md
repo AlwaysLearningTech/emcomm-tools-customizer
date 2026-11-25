@@ -2,6 +2,23 @@
 
 ## 7.0.2-2 (ETC R7) — Backups that actually restore; scripts ship in the ISO
 
+### Fixed — an interrupted backup shipped an ISO with no user backup
+
+Stopping a build while `et-user-backup` was writing left a truncated
+`etc-user-backup-*-<today>.tar.gz` in `$HOME`. The next build saw "a backup
+from today exists" and skipped making a new one; the restore step then picked
+that archive as newest, failed with "Invalid tarball", and the ISO shipped
+with nothing staged for `post-install.sh --restore`, though intact older
+archives sat beside it. Every archive is now checked with `gzip -t`: a broken
+one from today is renamed to `.partial` (not deleted) and a fresh backup is
+made, and both the build and `post-install.sh` skip broken archives and use
+the newest complete one.
+
+### Fixed — the Wikipedia example named a section that does not exist
+
+`secrets.env.template` suggested `WIKIPEDIA_SECTIONS="medicine,survival"`.
+Kiwix has no `survival` subset; the template now lists the real ones.
+
 ### Fixed — `ET_EXPERT=1` hung the build forever at the Wine step
 
 With `ET_EXPERT` set, ETC's `install-wine.sh` runs `dialog --textbox wine.txt`:
