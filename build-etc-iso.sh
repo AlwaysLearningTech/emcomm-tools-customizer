@@ -788,7 +788,25 @@ WIKIPEDIASCRIPT
     else
         log "INFO" "WIKIPEDIA_SECTIONS not set - original dialog will be shown (if ET_EXPERT is set)"
     fi
-    
+
+    # ET_EXPERT also makes install-wine.sh show `dialog --textbox wine.txt`:
+    # Cubic-only instructions for hand-copying a Wine backup into /etc/skel.
+    # Nothing in this build can press OK, so it blocked the build forever
+    # (dialog reads /dev/tty, so </dev/null does not stop it). Our Wine
+    # backup is restored by post-install.sh --restore-wine instead.
+    local wine_script="${etc_install_dir}/scripts/install-wine.sh"
+    if [[ -f "$wine_script" ]] && grep -q 'dialog --textbox wine.txt' "$wine_script"; then
+        sed -i 's|^\([[:space:]]*\)dialog --textbox wine.txt.*|\1et-log "Skipping wine.txt dialog (EmComm Tools Customizer build)"|' "$wine_script"
+        sed -i 's|^\([[:space:]]*\)tput sgr 0 && clear|\1:|' "$wine_script"
+        if grep -q 'dialog --textbox' "$wine_script"; then
+            log "ERROR" "Could not remove the wine.txt dialog from install-wine.sh; the build would hang on it"
+            cleanup_chroot_mounts
+            trap - EXIT
+            return 1
+        fi
+        log "INFO" "Removed the ET_EXPERT wine.txt dialog from install-wine.sh"
+    fi
+
     # Verify the ETC installer was extracted correctly
     if [ ! -f "${etc_install_dir}/scripts/install.sh" ]; then
         log "ERROR" "ETC install.sh not found at expected location!"
@@ -809,7 +827,7 @@ WIKIPEDIASCRIPT
     log "INFO" "NOTE: If map variables are not configured, dialog prompts will appear."
     log "INFO" "      Configure OSM_MAP_STATE, ET_MAP_REGION in secrets.env for automated builds."
     if [[ -n "${ET_EXPERT:-}" ]]; then
-        log "INFO" "      ET_EXPERT is set - Wikipedia download dialog will be shown (or auto if WIKIPEDIA_SECTIONS set)."
+        log "INFO" "      ET_EXPERT is set - Wikipedia download runs (automatically if WIKIPEDIA_SECTIONS is set); its wine.txt dialog is removed."
     fi
     
     # Determine if we need interactive mode (any unconfigured dialogs)
