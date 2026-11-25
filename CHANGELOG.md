@@ -2,6 +2,16 @@
 
 ## 7.0.2-2 (ETC R7) — Backups that actually restore; scripts ship in the ISO
 
+### Fixed — `ET_EXPERT=1` hung the build forever at the Wine step
+
+With `ET_EXPERT` set, ETC's `install-wine.sh` runs `dialog --textbox wine.txt`:
+Cubic-only instructions for hand-copying a Wine backup into `/etc/skel`.
+`dialog` reads `/dev/tty`, so the build's `</dev/null` did not stop it, and its
+screen went into the log pipe rather than the terminal. The build sat there
+with no output, looking like a network stall. The build now removes that
+dialog from the extracted installer, and stops with an error if it can't. This
+release's Wine restore is `post-install.sh --restore-wine` anyway.
+
 ### Fixed — `post-install.sh --restore` never found the staged backups
 
 The build staged both full archives in `/etc/skel/.etc-backups`, so they landed
