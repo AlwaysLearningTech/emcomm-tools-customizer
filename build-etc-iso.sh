@@ -973,25 +973,16 @@ create_fresh_user_backup() {
         return 0
     fi
     
-    # Check for existing backup from today in home folder (et-user-backup default location)
-    # Use SUDO_USER's home if running as root via sudo
+    # Always make a fresh backup. This used to skip when a backup dated today
+    # already existed, so a build interrupted mid-backup left a truncated
+    # archive that the next build reused and failed to restore.
+    # et-user-backup writes to the real user's home, not /root.
     local real_home="${HOME}"
     if [ -n "${SUDO_USER:-}" ] && [ "$EUID" -eq 0 ]; then
         real_home=$(getent passwd "$SUDO_USER" | cut -d: -f6)
         log "DEBUG" "Running as sudo, using real user home: $real_home"
     fi
-    
-    local today_date
-    today_date=$(date +'%Y%m%d')
-    local existing_backup
-    existing_backup=$(find "$real_home" -maxdepth 1 -name "etc-user-backup-*-${today_date}.tar.gz" -type f 2>/dev/null | head -1)
-    
-    if [ -n "$existing_backup" ] && [ -f "$existing_backup" ]; then
-        log "INFO" "Found existing backup from today: $(basename "$existing_backup")"
-        log "INFO" "Skipping backup creation (delete file to force new backup)"
-        return 0
-    fi
-    
+
     log "INFO" "Running et-user-backup (answering prompts automatically)..."
     
     # et-user-backup has interactive prompts:
