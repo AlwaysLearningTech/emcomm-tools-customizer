@@ -4,15 +4,12 @@
 
 ### Fixed — an interrupted backup shipped an ISO with no user backup
 
-Stopping a build while `et-user-backup` was writing left a truncated
-`etc-user-backup-*-<today>.tar.gz` in `$HOME`. The next build saw "a backup
-from today exists" and skipped making a new one; the restore step then picked
-that archive as newest, failed with "Invalid tarball", and the ISO shipped
-with nothing staged for `post-install.sh --restore`, though intact older
-archives sat beside it. Every archive is now checked with `gzip -t`: a broken
-one from today is renamed to `.partial` (not deleted) and a fresh backup is
-made, and both the build and `post-install.sh` skip broken archives and use
-the newest complete one.
+The build is meant to take a fresh `et-user-backup` every run, but skipped it
+whenever a backup dated today already existed. Stopping a build mid-backup
+left a truncated archive with today's date; the next build reused it, the
+restore failed with "Invalid tarball", and the ISO shipped with no user
+backup. The skip is gone: every build makes its own backup, overwriting any
+earlier one from the same day.
 
 ### Fixed — the Wikipedia example named a section that does not exist
 
